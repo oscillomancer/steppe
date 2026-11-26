@@ -1291,6 +1291,29 @@ TEST_CASE("a vertical meter draws its scale's levels as lines, on the well and o
     }
 }
 
+TEST_CASE("a button too narrow for its text draws its narrow text, else the text") {
+    REQUIRE_GL();
+    // The button alone in a row, `width` wide; the frame read back.
+    auto draw = [](float width, const char* text, const char* narrow) {
+        Root root(*fixture().window, fixture().fonts, Theme::dark());
+        auto content = std::make_unique<Node>("root");
+        content->layout.dir = Layout::Dir::Row;
+        content->layout.padding = Insets::all(16);
+        auto& button = content->emplace<Button>("b", text);
+        button.setNarrowText(narrow);
+        button.layout.width = SizeRule::fixed(width);
+        button.layout.height = SizeRule::fixed(14);
+        root.setContent(std::move(content));
+        root.frame(false);
+        return root.readBack();
+    };
+    // Narrow: "2" in place of an elided "Group 2", as a button saying "2".
+    CHECK(pixelDistance(draw(24, "Group 2", "2"), draw(24, "2", "")) == 0);
+    CHECK(pixelDistance(draw(24, "Group 2", "2"), draw(24, "Group 2", "")) > 0);
+    // Wide enough: the text, the narrow text unused.
+    CHECK(pixelDistance(draw(120, "Group 2", "2"), draw(120, "Group 2", "")) == 0);
+}
+
 TEST_CASE("a disabled text field lies flat and its text is faint; it takes no click or text") {
     REQUIRE_GL();
     const Theme theme = Theme::dark();

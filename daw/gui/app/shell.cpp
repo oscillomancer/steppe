@@ -31,6 +31,7 @@
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 #include "transport_bar.h"
 
 namespace supple::gui {
@@ -64,9 +65,10 @@ void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>&
 }
 
 void Shell::setStatus(const std::string& text) {
-    editStatus_ = text;
+    // No id reaches the user: each is said by name (views::objectNames).
+    editStatus_ = views::objectNames(app_.head(), text);
     ++noteSerial_;
-    if (counts_) counts_->setText(text);
+    if (counts_) counts_->setText(editStatus_);
 }
 namespace {
 
@@ -439,11 +441,16 @@ void Shell::sync(bool event) {
     // What each track with clips plays (ADR-0097): the launcher's playing,
     // queued and held cells, its Arr dots and the held tracks' lanes.
     arrange_->setLaunchState(launchViews(app_.launchState()));
-    // Capture (L4): a capture the transport ended is committed, and the
-    // toggle shows whether it is armed.
+    // What a press on each clip and scene would be refused for (step E): the
+    // engine's own answer, asked again only when it can have changed.
+    refusals_.update(app_, *arrange_);
+    // Capture (L4): a capture the transport or the engine ended is
+    // committed, and the toggle shows whether it is armed, ending, or a take
+    // is kept uncommitted.
     capture_.service();
     arrange_->setCaptureArmed(capture_.lit());
     arrange_->setCaptureEnding(capture_.ending());
+    arrange_->setCaptureKept(capture_.keptLine());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
@@ -483,6 +490,22 @@ views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& s
         out[t.track] = v;
     }
     return out;
+}
+
+views::LaunchRefusals launchRefusalViews(const engine::EngineApp::LaunchRefusals& refusals) {
+    views::LaunchRefusals out;
+    for (const auto& [clip, error] : refusals.clips) out.clips.emplace(clip, error.code);
+    for (const auto& [scene, error] : refusals.scenes) out.scenes.emplace(scene, error.code);
+    return out;
+}
+
+void RefusalWatch::update(const engine::EngineApp& app, views::ArrangeView& view) {
+    if (!view.launcherShown()) return;  // asked again when it shows
+    const std::uint64_t generation = app.launchRefusalGeneration();
+    if (generation == seen_) return;
+    seen_ = generation;
+    ++asked_;
+    view.setLaunchRefusals(launchRefusalViews(source_ ? source_(app) : app.launchRefusals()));
 }
 
 std::optional<std::chrono::steady_clock::time_point> Shell::nextDeadline() const {

@@ -21,6 +21,7 @@
 #include "supple/views/arrange.h"
 #include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 
 namespace supple::views {
 namespace {
@@ -91,6 +92,48 @@ constexpr float kHandle = 9;             // the fade handles' square at the top 
 constexpr double kMinLength = 1.0 / 64;  // beats
 
 const model::Item* itemOf(const model::Session& s, model::Id id) { return s.items.find(id); }
+
+// The items a drop on the launcher pane makes clips of: the pressed one and
+// each other selected item, each with its cell from the cell dropped on: its
+// track row's offset from the pressed item's (a move's offset), and its
+// place in its track's run, in time order (the first item on a track takes
+// the dropped scene, the next the scene after, each track's run its own).
+// Ordered by row, then time. `hidden`: the first selected item on a track
+// without a row (a collapsed folder's child, a hidden track), which refuses
+// the drop as it refuses a move.
+struct LauncherDrop {
+    struct Entry {
+        model::Id item;
+        LauncherPane::DropCell cell;
+    };
+    std::vector<Entry> entries;
+    std::optional<model::Id> hidden;
+};
+LauncherDrop launcherDropItems(const model::Session& s, const TrackLayout& layout, model::Id anchor,
+                               const std::vector<model::Id>& selection) {
+    LauncherDrop out;
+    const model::Item* pressed = itemOf(s, anchor);
+    const auto from = pressed ? layout.indexOf(pressed->track) : std::nullopt;
+    if (!from) return out;
+    std::vector<std::tuple<std::size_t, double, model::Id>> all{{*from, pressed->position, anchor}};
+    for (model::Id id : selection) {
+        const model::Item* it = id == anchor ? nullptr : itemOf(s, id);
+        if (!it) continue;
+        if (const auto row = layout.indexOf(it->track))
+            all.emplace_back(*row, it->position, id);
+        else if (!out.hidden)
+            out.hidden = id;
+    }
+    std::sort(all.begin(), all.end());
+    std::ptrdiff_t place = 0;
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        const auto& [row, position, id] = all[i];
+        place = i > 0 && std::get<0>(all[i - 1]) == row ? place + 1 : 0;
+        out.entries.push_back(
+            {id, {static_cast<std::ptrdiff_t>(row) - static_cast<std::ptrdiff_t>(*from), place}});
+    }
+    return out;
+}
 const model::Take* activeTake(const model::Session& s, const model::Item& it) {
     return it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
 }
@@ -1099,11 +1142,17 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                                    it);
                 }
                 state_.deltaRows = ok ? dr : 0;
-                // Over the clip launcher: the cell it would become a clip in.
+                // Over the clip launcher: the cells they would become clips
+                // in, each selected item's at its row offset from the pressed one.
                 if (view_.launcherShown()) {
                     LauncherPane& pane = view_.launcherPane();
-                    pane.showDrop(pane.bounds().contains(e.pos) ? std::optional(e.pos)
-                                                                : std::nullopt);
+                    const LauncherDrop drop =
+                        launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
+                    std::vector<LauncherPane::DropCell> cells;
+                    for (const auto& entry : drop.entries) cells.push_back(entry.cell);
+                    pane.showDrop(
+                        pane.bounds().contains(e.pos) ? std::optional(e.pos) : std::nullopt,
+                        std::move(cells), drop.hidden.has_value());
                 }
                 break;
             }
@@ -1652,8 +1701,7 @@ std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bo
     }
     if (!pointed) return items;
     const model::Id take = *pointed;
-    const model::Take* tk = s.takes.find(take);
-    const std::string name = tk && !tk->name.empty() ? tk->name : take.str();
+    const std::string name = objectName(s, take);
     // Every selected item with several takes keeps only its heard one.
     std::vector<EditStep> crop;
     for (model::Id id : selection_)
@@ -2037,23 +2085,111 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             changed();
             return;
         case Drag::Move: {
-            // Dropped in an empty launcher cell: a clip from a copy of the
-            // pressed item's takes (clip.add {item}); an occupied cell refuses
-            // it and the item stays.
+            // Dropped in a launcher cell: a clip from a copy of the pressed
+            // item's takes (clip.add {item}); an occupied cell is refused by
+            // clip.add, whose message goes to the status line, and the item
+            // stays. With other items selected, one clip each, each at its
+            // row offset from the pressed item's cell, items on one track in
+            // the scenes from the dropped one in time order, in one
+            // transaction (one undo step): a refusal of any (a taken cell, a
+            // track that holds no clips) refuses them all with clip.add's
+            // message; an offset past the rows or onto an automation lane, a
+            // run past the last scene, or an item on a hidden track refuses
+            // the drop before anything is sent.
             if (view_.launcherShown()) {
                 LauncherPane& pane = view_.launcherPane();
                 pane.showDrop(std::nullopt);
                 if (pane.bounds().contains(e.pos)) {
+                    // Any cell of a scene column, taken or not: clip.add
+                    // says when it is taken.
                     const LauncherPane::Hit over = pane.hitAt(e.pos);
-                    if (over.kind != LauncherPane::Hit::Kind::Cell) return;
-                    json::Value args = json::Value::object();
-                    args["track"] = over.track.str();
-                    args["scene"] = over.scene->str();
-                    args["item"] = state_.anchor.str();
-                    if (auto r = view_.runLauncher("clip.add", std::move(args)))
-                        if (const json::Value* made = r->find("clip"); made && made->isString())
-                            if (auto id = model::Id::parse(made->asString()))
-                                view_.selectClips({*id});
+                    if (!over.scene || over.kind == LauncherPane::Hit::Kind::None ||
+                        over.kind == LauncherPane::Hit::Kind::Arr)
+                        return;
+                    const LauncherDrop drop =
+                        launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
+                    auto refuse = [&](std::string message, std::string hint) {
+                        const Error refused = objectNames(
+                            s, Error("gui.launcher.drop", std::move(message), {}, std::move(hint)));
+                        if (const auto& onRefused = view_.launcherCallbacks().onError)
+                            onRefused(refused);
+                        else if (onError)
+                            onError(refused);
+                    };
+                    auto nameOf = [&](model::Id id) {
+                        const model::Item* it = itemOf(s, id);
+                        std::string name = it ? Lanes::itemLabel(s, *it) : std::string();
+                        return name.empty() ? std::string("An item") : name;
+                    };
+                    if (drop.hidden) {
+                        refuse(nameOf(*drop.hidden) + " is on a hidden track",
+                               "show its track (open its folder) or leave it out of the selection");
+                        return;
+                    }
+                    if (drop.entries.size() <= 1 || !run) {
+                        json::Value args = json::Value::object();
+                        args["track"] = over.track.str();
+                        args["scene"] = over.scene->str();
+                        args["item"] = state_.anchor.str();
+                        if (auto r = view_.runLauncher("clip.add", std::move(args)))
+                            if (const json::Value* made = r->find("clip"); made && made->isString())
+                                if (auto id = model::Id::parse(made->asString()))
+                                    view_.selectClips({*id});
+                        return;
+                    }
+                    const TrackLayout& layout = view_.trackLayout();
+                    const std::vector<model::Id> scenes = pane.columns().scenes;
+                    const auto column = static_cast<std::ptrdiff_t>(
+                        std::find(scenes.begin(), scenes.end(), *over.scene) - scenes.begin());
+                    std::vector<EditStep> steps;
+                    std::vector<ArrangeView::Cell> cells;
+                    for (const auto& [id, at] : drop.entries) {
+                        const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over.row) + at.row;
+                        if (row < 0 || static_cast<std::size_t>(row) >= layout.rowCount() ||
+                            layout.rows()[static_cast<std::size_t>(row)].lane()) {
+                            refuse(nameOf(id) + " would land " +
+                                       (row < 0 ? std::string("above the first track")
+                                        : static_cast<std::size_t>(row) >= layout.rowCount()
+                                            ? std::string("below the last track")
+                                            : std::string("on an automation lane")),
+                                   "drop the items where each one's row offset lands on a track");
+                            return;
+                        }
+                        const model::Id track = layout.rows()[static_cast<std::size_t>(row)].track;
+                        if (column + at.scene >= static_cast<std::ptrdiff_t>(scenes.size())) {
+                            // The track's whole run, against the scenes from the dropped one.
+                            std::ptrdiff_t length = 0;
+                            for (const auto& other : drop.entries)
+                                if (other.cell.row == at.row) ++length;
+                            const auto left = static_cast<std::ptrdiff_t>(scenes.size()) - column;
+                            refuse(track.str() + "'s " + std::to_string(length) + " items need " +
+                                       std::to_string(length) + " scenes from " +
+                                       over.scene->str() + ", and there " +
+                                       (left == 1 ? std::string("is 1")
+                                                  : "are " + std::to_string(left)),
+                                   "add " + std::to_string(length - left) +
+                                       (length - left == 1 ? " scene" : " scenes") +
+                                       " after the last, or drop further left");
+                            return;
+                        }
+                        const model::Id scene = scenes[static_cast<std::size_t>(column + at.scene)];
+                        json::Value args = json::Value::object();
+                        args["track"] = track.str();
+                        args["scene"] = scene.str();
+                        args["item"] = id.str();
+                        steps.push_back({"clip.add", std::move(args)});
+                        cells.push_back({track, scene});
+                    }
+                    auto r = run("Clips from items", steps);
+                    if (!r) {
+                        const Error refused = objectNames(s, r.error());
+                        if (const auto& onRefused = view_.launcherCallbacks().onError)
+                            onRefused(refused);
+                        else if (onError)
+                            onError(refused);
+                        return;
+                    }
+                    view_.selectClipsIn(std::move(cells));
                     return;
                 }
             }

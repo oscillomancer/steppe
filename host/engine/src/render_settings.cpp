@@ -70,6 +70,14 @@ Result<rs::Settings> readPreset(const fs::path& path) {
     }
     return presetSettings(std::move(decoded->settings));
 }
+
+// Puts an error from reading a preset file under the argument that named
+// it, /default or /name: the file's own codes (file.*, json.parse.*) at
+// that path, a member's at <path>/settings/....
+void markRead(Error& error, std::string_view argument) {
+    error.path = std::string(argument) + error.path;
+    for (auto& detail : error.details) markRead(detail, argument);
+}
 }  // namespace
 
 rs::Settings projectRenderSettings(const model::Project& project) {
@@ -212,14 +220,20 @@ Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app) {
     std::error_code ec;
     if (!fs::exists(path, ec)) return std::optional<rs::Settings>{};
     auto settings = readPreset(path);
-    if (!settings) return std::move(settings).error();
+    if (!settings) {
+        // file.open is the readers' and the writers' code alike: the path
+        // tells a caller this one came from reading the default (round 184).
+        auto error = std::move(settings).error();
+        markRead(error, "/default");
+        return error;
+    }
     return std::optional<rs::Settings>(std::move(*settings));
 }
 
 std::vector<RenderPreset> factoryRenderPresets() {
     std::vector<RenderPreset> list;
     auto add = [&](std::string name, rs::Settings s) {
-        list.push_back({std::move(name), true, std::move(s)});
+        list.push_back({std::move(name), true, std::move(s), std::nullopt});
     };
     {
         rs::Settings s;
@@ -318,8 +332,16 @@ Result<std::vector<RenderPreset>> listRenderPresets(const EngineApp& app) {
         const std::string name = entry.path().stem().string();
         if (!validPresetName(name) || isFactory(name)) continue;
         auto settings = readPreset(entry.path());
-        if (!settings) continue;  // a damaged file is left out, not fatal
-        user.push_back({name, false, std::move(*settings)});
+        if (!settings) {
+            // Listed with its error, so a client can show it and delete it
+            // (render.preset.delete never reads the file). The path is the
+            // one render.preset.load {name} answers, after the bus's /args.
+            auto error = std::move(settings).error();
+            markRead(error, "/args/name");
+            user.push_back({name, false, {}, std::move(error)});  // factory: false
+            continue;
+        }
+        user.push_back({name, false, std::move(*settings), std::nullopt});
     }
     std::sort(user.begin(), user.end(),
               [](const RenderPreset& a, const RenderPreset& b) { return a.name < b.name; });
@@ -352,13 +374,19 @@ Status deleteRenderPreset(const EngineApp& app, const std::optional<std::string>
                          "delete one of your own presets (render.preset.list)");
         SUPPLE_TRY(validPresetName(*name));
     }
+    // The file is never read, so a damaged preset is removed as any other
+    // (round 186 F1); a link is removed itself, never its target.
     const fs::path path = presetPath(app, name);
     std::error_code ec;
-    if (!fs::remove(path, ec))
-        return Error("render.preset_unknown",
-                     name ? "no preset \"" + *name + "\"" : std::string("no user default saved"),
-                     name ? "/name" : "/default", "render.preset.list shows the presets");
-    return okStatus();
+    if (fs::remove(path, ec)) return okStatus();
+    // A file there that cannot be removed (a read-only folder, a file in
+    // use on Windows) is a write failure, not a missing preset (round 183).
+    if (ec)
+        return Error("render.preset_write", "cannot delete " + path.string() + ": " + ec.message(),
+                     name ? "/name" : "/default", "check that the user data folder is writable");
+    return Error("render.preset_unknown",
+                 name ? "no preset \"" + *name + "\"" : std::string("no user default saved"),
+                 name ? "/name" : "/default", "render.preset.list shows the presets");
 }
 
 Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& name) {
@@ -367,10 +395,18 @@ Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& n
     SUPPLE_TRY(validPresetName(name));
     const fs::path path = presetPath(app, name);
     std::error_code ec;
-    if (!fs::exists(path, ec))
+    // The entry itself, not what it links to: a link to nothing is listed
+    // as damaged, so load reads it and answers the same (round 190 F1).
+    if (!fs::exists(fs::symlink_status(path, ec)))
         return Error("render.preset_unknown", "no preset \"" + name + "\"", "/name",
                      "render.preset.list shows the presets");
-    return readPreset(path);
+    auto settings = readPreset(path);
+    if (!settings) {
+        auto error = std::move(settings).error();
+        markRead(error, "/name");  // as the default's (round 184 F2)
+        return error;
+    }
+    return settings;
 }
 
 }  // namespace supple::engine

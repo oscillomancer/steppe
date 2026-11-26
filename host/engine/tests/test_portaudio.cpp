@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <mutex>
 #include "../../../tests/file_platform.h"
+#include "../../../tests/precise_sleep.h"
 #include "midi_input.h"
 #include "midi_output.h"
 #include "portaudio_api.h"
@@ -279,6 +280,59 @@ TEST_CASE("PortAudio failed selection and stream startup release resources") {
     driver.formatError = paNoError;
     CHECK_FALSE(backend.start({.inputs = 3}, [](auto, auto, auto) {}));
     CHECK(driver.initialized == 0);
+}
+TEST_CASE("PortAudio start failures carry their cause as the code") {
+    // Callers (the GUI's audio device dialog, daw/gui/app/audio_device.cpp)
+    // choose their words by these codes, never by the message.
+    auto code = [](PortAudioOptions options, BackendConfig config = {}) {
+        PortAudioBackend backend(std::move(options), Driver::api);
+        auto st = backend.start(config, [](auto, auto, auto) {});
+        REQUIRE_FALSE(st);
+        CHECK_FALSE(st.error().hint.empty());
+        return std::pair{st.error().code, st.error().path};
+    };
+    {
+        Driver driver;
+        CHECK(code({.hostApi = "unknown"}) ==
+              std::pair<std::string, std::string>{"backend.host_api.not_found", "/host_api"});
+        CHECK(code({.outputDevice = "Gone"}) ==
+              std::pair<std::string, std::string>{"backend.device.not_found", "/output_device"});
+        CHECK(code({.inputDevice = "Gone"}, {.inputs = 2}) ==
+              std::pair<std::string, std::string>{"backend.device.not_found", "/input_device"});
+        // Listed, but with no inputs: an output-only device asked to record.
+        CHECK(code({.inputDevice = "Playback"}, {.inputs = 2}) ==
+              std::pair<std::string, std::string>{"backend.device.no_inputs", "/input_device"});
+        CHECK(code({}, {.inputs = 3}) ==
+              std::pair<std::string, std::string>{"backend.device.channels", "/inputs"});
+        // Only PortAudio's invalid sample rate is the rate refused.
+        driver.formatError = paInvalidSampleRate;
+        CHECK(code({}) == std::pair<std::string, std::string>{"backend.rate", "/rate"});
+        // Any other format refusal off ASIO is not classified.
+        driver.formatError = paUnanticipatedHostError;
+        CHECK(code({}) == std::pair<std::string, std::string>{"backend.open", "/backend"});
+        driver.formatError = paFormatIsSupported;
+        driver.openError = paInvalidDevice;  // WASAPI: held exclusively, or gone
+        CHECK(code({}) ==
+              std::pair<std::string, std::string>{"backend.device.invalid", "/backend"});
+        driver.openError = paNoError;
+        driver.startError = paDeviceUnavailable;
+        CHECK(code({}) == std::pair<std::string, std::string>{"backend.busy", "/backend"});
+        driver.startError = paNoError;
+        CHECK(driver.initialized == 0);
+    }
+    {
+        Driver driver;  // two devices sharing a name that can play
+        driver.devices[0].name = driver.devices[1].name = "Twin";
+        driver.devices[0].maxOutputChannels = 2;
+        CHECK(code({.outputDevice = "Twin"}) ==
+              std::pair<std::string, std::string>{"backend.device.ambiguous", "/output_device"});
+    }
+    {
+        Driver driver;  // ASIO: a driver that does not load or initialise
+        driver.host.type = paASIO;
+        driver.formatError = paUnanticipatedHostError;
+        CHECK(code({}) == std::pair<std::string, std::string>{"backend.driver", "/backend"});
+    }
 }
 TEST_CASE("host-specific stream settings follow the host API and an explicit device rate") {
     Driver driver;
@@ -1095,7 +1149,12 @@ struct FakeSink : detail::MidiSink {
     void releaseThread() override { released.fetch_add(1, std::memory_order_release); }
     void waitUntil(double seconds) override {
         waits.fetch_add(1, std::memory_order_release);
-        detail::MidiSink::waitUntil(seconds);
+        // The base class's pause, on the high-resolution timer on Windows:
+        // a 1 ms sleep there ends a timer tick (15.6 ms) late, and this sink
+        // stands in for the production sender's wait, which uses that timer.
+        // The fake clock, not this pause, decides what the tests observe.
+        const double delay = std::clamp(seconds - now(), 0.0, .001);
+        if (delay > 0) supple::test::sleepFor(std::chrono::duration<double>(delay));
     }
 };
 }  // namespace

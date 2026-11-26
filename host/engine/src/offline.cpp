@@ -794,6 +794,54 @@ Error renderCancelled() {
 
 void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
 
+namespace {
+
+// The rows OfflineSettings::songClock gets for a block that has just been processed: its first
+// frame and its last, and, between them, the frames where the clock bends. A step in a playrate
+// envelope falls at any frame, not at a block start, and the song position is straight between
+// two rows. So every frame of a stretch is read and compared with the straight line between its
+// ends (at most 62 reads), and the stretch is split at the frame that is furthest off while that
+// is more than kClockTolerance song seconds: far above float noise and a fiftieth of the slack a
+// note's place has at 120 bpm. Splitting at the worst frame, not at the middle, finds two
+// opposite bends in one stretch too. The block's frames are still in the timeline's history.
+// Unity is straight by construction (no reads), and a constant rate adds nothing.
+constexpr double kClockTolerance = 1e-8;
+template <class At>
+void refineClock(std::vector<std::pair<std::int64_t, double>>& rows, const At& at, std::int64_t lo,
+                 double from, std::int64_t hi, double to) {
+    std::int64_t worst = lo;
+    double worstSeconds = 0, worstOff = 0;
+    for (std::int64_t frame = lo + 1; frame < hi; ++frame) {
+        const double heard = at(frame);
+        const double straight =
+            from + (to - from) * static_cast<double>(frame - lo) / static_cast<double>(hi - lo);
+        if (std::abs(heard - straight) > worstOff) {
+            worst = frame;
+            worstSeconds = heard;
+            worstOff = std::abs(heard - straight);
+        }
+    }
+    if (worstOff > kClockTolerance) {
+        refineClock(rows, at, lo, from, worst, worstSeconds);
+        refineClock(rows, at, worst, worstSeconds, hi, to);
+        return;
+    }
+    rows.emplace_back(hi, to);
+}
+void appendSongClock(std::vector<std::pair<std::int64_t, double>>& rows, const detail::Plan& p,
+                     std::int64_t pos, std::int64_t song, std::uint32_t n) {
+    const auto at = [&](std::int64_t frame) { return p.rateSeconds(song + (frame - pos)); };
+    const double first = at(pos);
+    rows.emplace_back(pos, first);
+    if (n < 2) return;
+    if (p.rateEnabled)
+        refineClock(rows, at, pos, first, pos + n - 1, at(pos + n - 1));
+    else
+        rows.emplace_back(pos + n - 1, at(pos + n - 1));
+}
+
+}  // namespace
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -941,6 +989,20 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         return Error("track.strip_type", "mix output must be a master", "/master",
                      "choose a master id from track.list");
     const Node* selected = &*master;
+    // A performance's clip whose audio the plan could not prepare (engine.md
+    // §3.1): the one refusal a dry run cannot see, by the launch's index.
+    if (opt.launchesInSong && p.preparedSources)
+        for (std::size_t i = 0; i < opt.launches.size(); ++i) {
+            const LaunchLogEntry& e = opt.launches[i];
+            const auto& skipped = p.preparedSources->clipsSkipped;
+            if (e.action == LaunchLogEntry::Action::Clip &&
+                std::find(skipped.begin(), skipped.end(), e.clip) != skipped.end())
+                return Error("launch.memory",
+                             e.clip.str() + "'s audio did not fit the prepared-audio budget",
+                             "/performance/launches/" + std::to_string(i) + "/clip",
+                             "launch.commit the performance and render the timeline, or use "
+                             "shorter audio or fewer distinct files in clips");
+        }
     const auto selectedTrack = opt.freezeTrack ? opt.freezeTrack : opt.track;
     if (selectedTrack) {
         auto it = std::find_if(p.nodes.begin(), p.nodes.end(),
@@ -1009,17 +1071,40 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                        : opt.tailSeconds,
                         p.rate);
     std::int64_t contentFrames = timelineLength;
+    // The launches in stream frames: song frames converted on the way below.
+    std::vector<LaunchLogEntry> launches = opt.launches;
     if (p.rateEnabled) {
         // Count inverse-clock boundaries using bounded scratch/history. This
         // prepass never renders audio and never allocates an expanded timeline.
         auto& timeline = *p.timelines[0];
         std::int64_t device = 0;
+        // Launches in song frames (in frame order): each takes the first
+        // stream frame whose song position reaches it, found in the chunk
+        // ensured while it is there.
+        std::size_t unplaced = opt.launchesInSong ? 0 : launches.size();
+        const auto placeLaunches = [&](std::int64_t from, std::int64_t to) {
+            while (unplaced < launches.size() &&
+                   timeline.phase(to) >= double(launches[unplaced].runningFrame)) {
+                const double reach = double(launches[unplaced].runningFrame);
+                std::int64_t lo = from, hi = to;
+                while (lo < hi) {
+                    const auto mid = lo + (hi - lo) / 2;
+                    if (timeline.phase(mid) < reach)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                launches[unplaced++].runningFrame = lo;
+            }
+        };
+        placeLaunches(0, 0);  // those at the start
         while (timeline.phase(device) < double(timelineLength)) {
             if (device + tailFrames + outputLatency > (std::int64_t(1) << 28))
                 return Error("engine.too_long", "playrate-expanded render exceeds the frame budget",
                              {}, "shorten the timeline range or increase the master playrate");
             const auto end = device + 4096;
             timeline.ensure(end);
+            placeLaunches(device, end);
             if (timeline.phase(end) >= double(timelineLength)) {
                 auto lo = device, hi = end;
                 while (lo < hi) {
@@ -1062,6 +1147,15 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     const std::vector<host::Instance*> instances = p.instances;
     detail::Workers workers(opt.threads == 0 ? detail::Workers::defaultHelpers()
                                              : std::min(opt.threads, 64u) - 1);
+    if (opt.songClock) {
+        // Offline only: the rows are appended by this render's own block loop below (never by
+        // processBlock, which the live executors share). Room for a first and a last row per
+        // block up front; a bend inside a block adds rows, which is a reallocation on this
+        // thread, harmless.
+        opt.songClock->clear();
+        opt.songClock->reserve(
+            2 * static_cast<std::size_t>(total / std::min<std::int64_t>(p.block, 64)) + 16);
+    }
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
         nameThread("audio-offline");
@@ -1090,13 +1184,14 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             int feed = -1;
             Id clip;
             bool early = false;  // its clip chains' input side (Node::launchLead)
+            bool warm = false;   // its converter's warm-up (Node::launchWarm, S3 step D)
         };
         std::vector<Switch> switches;
         // The log's anchors are timeline samples (the live plan counts from
         // 0); this plan counts from the render's start (round 74 F1). Beats
         // are absolute in both.
         const std::int64_t launchOrigin = time::samplesAt(opt.startSeconds, p.rate);
-        for (const LaunchLogEntry& e : opt.launches)
+        for (const LaunchLogEntry& e : launches)
             for (std::size_t k = 0; k < p.nodes.size(); ++k) {
                 detail::Node& node = p.nodes[k];
                 if (node.rack)
@@ -1137,6 +1232,14 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                         -1,
                                         {},
                                         true});
+                if (detail::launchWarms(node, a.kind, a.player))
+                    switches.push_back({e.runningFrame + node.timelineShift - node.launchWarm,
+                                        k,
+                                        a,
+                                        -1,
+                                        {},
+                                        false,
+                                        true});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1158,6 +1261,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                                 sw.action.anchorBeat);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
+                    else if (sw.warm)  // its running frame, a launchWarm later, unshifted
+                        detail::prewarm(node, sw.action,
+                                        sw.at + node.launchWarm - node.timelineShift);
                     else
                         detail::applyLaunch(node, sw.action);
                 }
@@ -1176,6 +1282,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                 // A failed plug-in's output went silent (ADR-0013 §6): the
                 // render fails below.
                 if (failing()) break;
+                if (opt.songClock) appendSongClock(*opt.songClock, p, pos, song, n);
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;

@@ -20,12 +20,14 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "supple/engine/app.h"
 #include "supple/ui/node.h"
 
 namespace supple::ui {
+struct Choice;
 class Root;
 class Button;
 class Label;
@@ -54,6 +56,9 @@ class RenderDialog {
     // Frame pass: debounced preview refresh and job polling (also while closed,
     // for File → Mix).
     void tick();
+    // Last capture follows the capture: tick() runs this once a second (it
+    // walks the history); a test calls it directly.
+    void followCapture();
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     // For tests: 0 runs the preview on the next tick without a wait.
     void setDebounceMs(int ms) { debounceMs_ = std::max(0, ms); }
@@ -62,6 +67,22 @@ class RenderDialog {
     enum class Source { Master, Stems, Regions };
     void setSource(Source source);
     Source source() const;
+    // What a mix or stems render plays (gui.md §4.8, engine.md §3.1): the
+    // arrangement; the launcher's last capture, as it was heard, on the
+    // version it played on ("captured"); or the launcher as it plays now,
+    // over Start and End ({from: "launcher"}). A one-off selector, never
+    // written to the project or a preset; kept while the app runs, and
+    // Arrangement again when the capture it chose is gone. Regions always
+    // play the arrangement.
+    enum class Plays { Arrangement, Capture, Launcher };
+    void setPlays(Plays plays);
+    Plays plays() const { return plays_; }
+    // Why Last capture cannot be chosen now ("" when it can): no capture
+    // with running time, or one made at another sample rate.
+    std::string captureUnavailable();
+    // Last capture's line from the dry run: "As heard", or "Not as heard:
+    // <reasons>" in the dialog's words ("" for the other sources).
+    const std::string& asHeardText() const { return asHeardText_; }
     // add_to_project: the rendered files become items on new tracks (engine).
     void setAddToProject(bool on);
     bool addToProject() const;
@@ -69,6 +90,9 @@ class RenderDialog {
     std::string pattern() const;
     const std::string& preview() const { return previewText_; }
     const std::string& statusText() const { return statusText_; }
+    // The red line: a refusal (the engine's, in the dialog's words, or a
+    // field's), shown there only; "" when there is none.
+    const std::string& refusal() const { return refusalText_; }
     // Start a render as a job; the id is empty when the command failed.
     const std::string& job() const { return job_; }
     void run();
@@ -79,8 +103,8 @@ class RenderDialog {
     void runQueue();
     std::vector<std::string> resultFiles() const { return resultFiles_; }
     // Edits a field as typing would (tests, scripts). Ids: render.pattern,
-    // .start, .end, .tail, .sample_rate, .bit_depth, .format, .secondary,
-    // .channels, .normalize, .target, .limit, .mode, .tap, .handles,
+    // .start, .end, .perf.start, .perf.end (the launcher's range), .tail, .sample_rate, .bit_depth,
+    // .format, .secondary, .channels, .normalize, .target, .limit, .mode, .tap, .handles,
     // .threshold, .meta.<member>; other ids are ignored.
     void setField(const std::string& id, const std::string& text);
     // The settings the dialog would render with (complete) and the members it
@@ -95,11 +119,17 @@ class RenderDialog {
     json::Value projectSettings() const;
 
     // Presets (render.preset.*): load one into the dialog (not the project),
-    // save the dialog's settings under a name or as the user default.
+    // save the dialog's settings under a name or as the user default. Each
+    // says what it did on the status line and returns its own refusal
+    // unshown.
     Status loadPreset(const std::string& name);
     Status savePreset(const std::string& name);
     Status saveAsDefault();
-    Status deletePreset(const std::string& name);
+    Status deletePreset(std::string name);
+    // The Preset dropdown as the presets are now, showing the one in use
+    // (cleared when it is no longer listed): what it shows is what Delete
+    // preset deletes.
+    void refreshPresets();
 
     // File → Mix: render.mix with no other arguments, as a job, reported by
     // onStatus.
@@ -116,6 +146,27 @@ class RenderDialog {
     std::function<void(const std::filesystem::path&)> openFolder;
     // The status bar (File → Mix progress and result).
     std::function<void(const std::string&)> onStatus;
+    // The app's log: a refusal the dialog has no words for, in full (code,
+    // path, message and hint), while the dialog shows its plain sentence.
+    std::function<void(const std::string&)> onLog;
+    // An engine refusal in the dialog's words, from its code and path: never
+    // its message, hint or a command name. One the dialog does not know
+    // reads `fallback` and goes to onLog in full. The dialog's own errors
+    // (gui.*) are already its words.
+    // What the refused call was for: the same code (a file that cannot be
+    // read or written) means a different file and folder for each.
+    enum class Action : std::uint8_t {
+        Render,        // the preview, Render, the queue, a job: the renders folder
+        Preset,        // a preset saved, loaded or deleted: your presets
+        AddToProject,  // a rendered file added as an item: the project's media
+    };
+    std::string refusalWords(const Error& e,
+                             std::string_view fallback = "The render could not be made.",
+                             Action action = Action::Render) const;
+    // A not-as-heard reason (engine.md §3.1) in the as-heard line's words;
+    // "" for given and from_launcher; an unknown one as its code in words.
+    static std::string reasonWords(const std::string& reason,
+                                   engine::EngineApp::CaptureEnd endedBy);
     // The "Open folder when done" preference.
     std::function<bool()> openFolderWhenDone;
     std::function<void(bool)> setOpenFolderWhenDone;
@@ -126,7 +177,9 @@ class RenderDialog {
     struct Diagnostic {
         std::string field, message;
     };
-    void load(const json::Value& args);  // render.settings with `args` into the dialog
+    // render.settings with `args` into the dialog; a refusal shows on the
+    // red line unless `show` is false (the caller words it).
+    Status load(const json::Value& args, bool show = true);
     void rebuild();
     std::unique_ptr<ui::Node> buildPage();
     void buildHeader(ui::Node& page);
@@ -147,7 +200,18 @@ class RenderDialog {
     void numberField(const std::string& id, const std::string& text,
                      std::function<Status(double)> apply);
     void markDirty();
-    void setStatus(std::string text);
+    void setStatus(std::string text);  // what an action did, or a job's progress
+    // An action that succeeded: its status, and an action's refusal is over.
+    void actionDone(std::string text);
+    // The red line ("" clears it); `ofPreview`: the render the files
+    // describe was refused, so they go too.
+    void showRefusal(std::string words, bool ofPreview = false);
+    // "—" and render.preset.list's presets; a refused list gives "—" only and
+    // its error in `refused`.
+    std::vector<ui::Choice> presetChoices(std::optional<Error>& refused) const;
+    // A damaged preset render.preset.list reports, as render.preset.load
+    // {name} refuses it.
+    static Error damagedPreset(const json::Value& damaged);
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;
@@ -162,6 +226,33 @@ class RenderDialog {
     void chooseVersion();
     void openResultMenu(std::size_t index, const ui::Rect& anchor);
     bool clipsHeld() const;  // a track plays a clip, held or stopped: not the arrangement
+    // A performance applies: Last capture or Launcher, and not Regions.
+    bool performance() const;
+    // The performance selector for the commands (engine.md §3.1).
+    json::Value performanceArg() const;
+    // The launcher's default range: from the playhead's bar for the longest
+    // clip playing, in whole bars (four when none plays).
+    void defaultLauncherRange();
+    void buildPerformanceRange(ui::Node& body);
+    // The file name a performance renders under: the one typed, or the
+    // current source's pattern plus " performance".
+    std::string perfPattern() const;
+    // The launcher's range again from its default when it is incomplete or
+    // out of order (after a Plays switch or a preset).
+    void settleLauncherRange();
+    // What Last capture shows of a capture: its start and version, whether it
+    // runs or is kept, and once it stopped its length, launches and facts. Two
+    // captures alike in all of it render alike (there is no capture serial).
+    struct CaptureKey {
+        std::int64_t start = 0;
+        std::uint64_t version = 0;
+        bool running = false, kept = false;
+        std::int64_t frames = -1;  // stopped only: a running one grows
+        std::size_t launches = 0;
+        engine::Engine::CaptureFacts facts;  // stopped only
+        bool operator==(const CaptureKey&) const = default;
+    };
+    std::optional<CaptureKey> captureKey() const;
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
@@ -175,11 +266,29 @@ class RenderDialog {
     bool ask_ = false;                       // if_exists "Ask" (never written)
     std::string versionChoice_ = "current";  // "current", "branch:<name>", "version:<n>"
     bool clipsHeld_ = false;                 // what the Source section's clips line says
+    Plays plays_ = Plays::Arrangement;
+    std::optional<double> launcherStart_, launcherEnd_;  // beats
+    // The file name typed for a performance, one-off (never written); unset,
+    // the name follows the source (perfPattern()).
+    std::optional<std::string> perfPattern_;
+    // The capture Last capture showed at the last build (tick() follows it).
+    std::optional<CaptureKey> captureKey_;
+    std::string asHeardText_;
+    std::optional<std::pair<double, double>> perfRange_;  // the dry run's range, beats
+    // The dry run's running length in seconds, and whether it wrapped a loop.
+    std::optional<std::pair<double, bool>> perfRun_;
+    bool captureRunning_ = false;    // what the capture's range line says ("so far")
+    std::uint64_t lastPerfMs_ = 0;   // the last dry run for a running capture
+    bool captureOffered_ = false;    // Last capture could be chosen at the last build
+    std::uint64_t lastOfferMs_ = 0;  // when tick() last asked
     // The checked regions when not all are (a one-off selector, never written).
     std::optional<std::vector<std::string>> regions_;
     std::string presetName_;
-    std::string previewText_, statusText_, job_, folderText_;
-    bool mixJob_ = false;  // the job is File → Mix
+    std::string previewText_, statusText_, refusalText_, job_, folderText_;
+    bool refusalOfPreview_ = false;  // the red line refuses the render the files describe
+    std::string previewRefusal_;     // the preview's refusal, kept under an action's
+    bool previewOfDefault_ = false;  // the preview refused: the default cannot be read
+    bool mixJob_ = false;            // the job is File → Mix
     std::vector<std::string> resultFiles_;
     json::Value results_ = json::Value::array();
     bool dirty_ = true;
@@ -191,6 +300,7 @@ class RenderDialog {
     ui::ScrollView* scroll_ = nullptr;
     ui::Label* status_ = nullptr;
     ui::Label* diagnostic_ = nullptr;
+    ui::Label* asHeard_ = nullptr;
     ui::TextBlock* previewBlock_ = nullptr;
     ui::TextBlock* resultsBlock_ = nullptr;
     ui::Node* resultsRow_ = nullptr;

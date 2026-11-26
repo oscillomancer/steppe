@@ -16,7 +16,8 @@ std::string lower(std::string_view s) {
     return out;
 }
 
-// Middle C (60) is C4.
+// Middle C (60) is C4. A control is a key on a device, not a pitch in the song: its label uses the
+// default table whatever the key or chord (ADR-0100; specs/harmony.md §3.2).
 std::string noteName(int key) { return harmony::spell(key); }
 
 }  // namespace

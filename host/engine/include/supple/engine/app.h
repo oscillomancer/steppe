@@ -525,6 +525,34 @@ class EngineApp : public cmd::Host {
     std::vector<Engine::TrackLaunch> launchState() const {
         return engine_ ? engine_->launchState() : std::vector<Engine::TrackLaunch>{};
     }
+    // What launch.clip on `clip` would refuse it for now, for the clip itself
+    // (step E): track.frozen (the command's own check, engine or not), else
+    // the engine's (launch.playrate, launch.memory, launch.clip;
+    // Engine::launchRefusal). nullopt when it would not; transport-state
+    // refusals (engine.stopped, launch.later, launch.queue) are not
+    // reported. Model thread.
+    std::optional<Error> launchRefusal(model::Id clip) const;
+    // Why launch.scene on `scene` would be refused now: its selection (frozen
+    // tracks' and memory-skipped clips left out, as the command warns) empty
+    // gives launch.scene's error, else the first clip of it the engine
+    // refuses; nullopt when it would launch, or with no engine (the command
+    // answers engine.stopped then). Model thread.
+    std::optional<Error> sceneLaunchRefusal(model::Id scene) const;
+    // Every answer launchRefusal(clip) and sceneLaunchRefusal(scene) would
+    // give now, for every clip and scene of the session the commands read,
+    // in one pass (the launcher pane's recompute, round 147 F1): equal,
+    // entry for entry, to the per-id calls; nullopt answers are left out.
+    // O(C log C + T) plus each clip's plan check. Model thread.
+    struct LaunchRefusals {
+        std::map<model::Id, Error> clips, scenes;
+    };
+    LaunchRefusals launchRefusals() const;
+    // Moves whenever the two refusals above can change, read outside a
+    // transaction: a plan the engine publishes, an engine starting or
+    // stopping, a version of the session (an edit such as track.freeze, an
+    // undo) and a project opened. Never repeats a value. The launcher pane
+    // compares it each frame and asks again when it moves. Model thread.
+    std::uint64_t launchRefusalGeneration() const;
     // Whether launch.capture is on (L4).
     bool launchCapturing() const { return engine_ && engine_->launchCapturing(); }
     bool launchCaptureEnding() const { return engine_ && engine_->launchCaptureEnding(); }
@@ -771,6 +799,64 @@ class EngineApp : public cmd::Host {
     std::uint64_t midiPreferencesRevision() const { return midiPreferencesRevision_; }
     void stopEngine();
     Engine* engine() { return engine_.get(); }
+    // --- the clip launcher's capture, kept (ADR-0097, revision 2026-11-24) ---
+    // The engine holds the capture it runs; the app keeps the last one across
+    // an engine stop, a device restart or failure (dropEngine), and while a
+    // newer capture has captured nothing (no frame heard). Nothing
+    // of it is lost until a newer capture runs, the project is replaced, or
+    // the app quits.
+    enum class CaptureEnd : std::uint8_t { None, EngineStop, Device };
+    // Its commit as the history stands: never written; written, the head
+    // descending from that version; or written and taken back (an undo, or
+    // an undo and an edit), which the user declined.
+    enum class CaptureCommit : std::uint8_t { None, Committed, Undone };
+    // Everything the warnings say, as fields, so a client words its own line
+    // (the GUI's pane) instead of reading captureKeptWarning's text.
+    struct CaptureView {
+        Engine::LaunchCapture capture;          // its span: startSample and frames; launches
+        double sampleRate = 0;                  // the engine's as it ran
+        bool kept = false;                      // the app's, not the running engine's
+        CaptureEnd endedBy = CaptureEnd::None;  // running when that ended it
+        CaptureCommit commit = CaptureCommit::None;
+        // Its span in beats on the current time map (as the warnings say it).
+        double startBeat = 0, endBeat = 0;
+        // Kept while the engine has a newer capture armed: that one replaces
+        // it once it hears a frame (launch.capture's warning).
+        bool replacedOnBegin = false;
+    };
+    // The engine's once it has begun (or when none is kept), else the kept
+    // one; what launch.commit and launch.state read (the GUI's Capture
+    // commits whichever is uncommitted, and words its line from the view).
+    std::optional<CaptureView> launchCapture();
+    // A capture with launches that launch.commit has not written, or whose
+    // commit an undo took back (the head no longer descends from it).
+    bool captureUncommitted();
+    // launch.commit wrote launchCapture()'s, in `version` (its transaction's):
+    // marked once that transaction commits, with the version pinned so that
+    // no history squash or collection loses it; a rollback drops the mark.
+    void markCaptureCommitted(std::uint64_t version);
+    // What the history says of launchCapture()'s commit (CaptureView::commit).
+    CaptureCommit captureCommit(const Engine::LaunchCapture& c) const;
+    // A capture is kept beside the engine's (from before an engine stop or a
+    // device restart, or one a newer capture replaces once it hears a frame).
+    bool captureKept();
+    // The warnings engine.stop, the device events and launch.capture give,
+    // for a client in-process (the GUI): an uncommitted kept capture, said
+    // by what ended it; and what launch.capture {on: true} would replace.
+    std::optional<std::string> captureKeptWarning();
+    std::optional<std::string> captureReplaceWarning();
+    // Keeps the engine's capture (one that has begun) before a newer one
+    // replaces it in the engine (launch.capture {on: true}).
+    void keepEngineCapture();
+    // Forgets the kept capture: the GUI dropped it (a refused take, Capture
+    // clicked again to drop it and arm).
+    void dropKeptCapture() {
+        keptCapture_.reset();
+        pruneCommitPins();
+    }
+    // A line naming launchCapture() for a warning: its span, launches and
+    // version, then `then`.
+    std::string captureLine(const CaptureView& c, std::string_view then) const;
     const Backend* backend() const { return backend_; }  // null while stopped
     EngineStatus engineStatus();
     bool preparingAudio() const { return !pendingSourceKey_.empty(); }
@@ -1042,7 +1128,25 @@ class EngineApp : public cmd::Host {
     void headChanged();         // reload the real-time engine
     void noteUnplayedEdit();    // a deferred edit failed to compile: engine.error
     void endMasterRecording();  // masters' items play everywhere again (ADR-0057)
-    void haltEngine();          // tears the engine down (stopEngine also cancels a restart)
+    // Tears the engine down (stopEngine also cancels a restart), keeping its
+    // capture: one running is ended at the heard position, `why` its cause.
+    void haltEngine(CaptureEnd why = CaptureEnd::EngineStop);
+    std::optional<CaptureView> keptCapture_;
+    CaptureView described(CaptureView view) const;  // fills commit, the beats, replacedOnBegin
+    // launch.commit's mark, applied when its transaction commits (review
+    // round 168 re-check R3), and the versions marks name, leased (R1).
+    struct CommitMark {
+        std::uint64_t version = 0;
+        bool kept = false;  // on keptCapture_, else on the engine's
+    };
+    std::optional<CommitMark> pendingCommit_;
+    std::map<std::uint64_t, std::shared_ptr<const model::Session>> commitPins_;
+    void applyCommitMark(const CommitMark& mark, std::uint64_t version);
+    void pruneCommitPins();  // keeps the pins a capture's committedIn names
+    // Whether `at`'s first-parent line, or a line merged into it, holds `in`.
+    // `seen`: versions walked already, so shared history after merges is
+    // walked once.
+    bool reachesCommit(std::uint64_t at, std::uint64_t in, std::set<std::uint64_t>& seen) const;
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);
@@ -1163,6 +1267,23 @@ class EngineApp : public cmd::Host {
     std::optional<SourceKeyMemo> sourceKeyMemo_;
     std::shared_ptr<const model::Session> loadedHead_;
     std::unique_ptr<Engine> engine_;
+    // Plans published by every engine so far (each Engine counts from 0):
+    // raised past the engine's count when it goes.
+    std::uint64_t planBase_ = 0;
+    // launchRefusalGeneration(): what the refusals read when it last looked.
+    struct RefusalInputs {
+        std::uint64_t plans = 0, version = 0, project = 0;
+        bool engine = false;
+        bool operator==(const RefusalInputs&) const = default;
+    };
+    mutable RefusalInputs refusalInputs_;
+    // launchRefusal(clip)'s answer from `s` (the batch shares it).
+    std::optional<Error> clipRefusal(const model::Session& s, model::Id clip) const;
+    mutable std::uint64_t refusalGeneration_ = 0;
+    void dropEngine() {
+        planBase_ += engine_->planGeneration() + 1;
+        engine_.reset();
+    }
     Backend* backend_ = nullptr;
     std::unique_ptr<Backend> ownedBackend_;
     double playStart_ = 0.0;  // transport.stop returns here

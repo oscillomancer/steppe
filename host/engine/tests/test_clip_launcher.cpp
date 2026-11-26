@@ -14,6 +14,7 @@
 #include <supple/model/launcher.h>
 #include <supple/model/schemas.h>
 #include <supple/model/take_owner.h>
+#include <supple/product.h>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -633,7 +634,7 @@ TEST_CASE("clip.memory refuses clip audio that would not fit beside the arrangem
     args = j(R"({"track": "tr_1", "scene": "sc_1"})");
     args["audio_file"] = l.wav("b.wav", 1.0, .5f).string();
     l.runArgs("clip.add", args);
-    const auto path = l.root / "full.steppe";
+    const auto path = l.root / ("full." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);
@@ -1289,7 +1290,7 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
     args["audio_file"] = l.wav("c.wav", 1.0, .125f).string();
     l.runArgs("clip.add", args);                                      // cl_3
     l.run("clip.duplicate", R"({"clip": "cl_1", "scene": "sc_2"})");  // cl_4
-    const auto path = l.root / "order.steppe";
+    const auto path = l.root / ("order." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);
@@ -1320,6 +1321,19 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
         REQUIRE(l.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
                                    EngineOptions{.anticipative = false, .workers = 0}));
         CHECK(l.fails("launch.clip", R"({"clip": "cl_2"})").code == "launch.memory");
+        // The launcher's refusals (step E): cl_2 alone; sc_2 still launches cl_4.
+        const auto memory = l.app->launchRefusal(id("cl_2"));
+        CHECK((memory ? memory->code : "") == "launch.memory");
+        CHECK_FALSE(l.app->launchRefusal(id("cl_4")));
+        CHECK_FALSE(l.app->sceneLaunchRefusal(id("sc_2")));
+        // The batch (round 147 F1) gives the same: cl_2 alone.
+        const auto batch = l.app->launchRefusals();
+        REQUIRE(batch.clips.size() == 1);
+        CHECK(batch.clips.begin()->first == id("cl_2"));
+        CHECK(batch.clips.begin()->second.code == "launch.memory");
+        CHECK(batch.clips.begin()->second.message == (memory ? memory->message : ""));
+        CHECK(batch.clips.begin()->second.path == (memory ? memory->path : ""));
+        CHECK(batch.scenes.empty());
         auto scene = l.run("launch.scene", R"({"scene": "sc_2"})");
         REQUIRE(scene["tracks"].size() == 1);
         CHECK(scene["tracks"].at(0).find("clip")->asString() == "cl_4");

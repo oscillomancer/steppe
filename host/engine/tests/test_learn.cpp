@@ -405,6 +405,25 @@ TEST_CASE("MIDI learn: the last touched parameter is the window's last edit") {
     CHECK_FALSE(rig.app->lastTouched());  // gone with its effect
 }
 
+TEST_CASE("MIDI learn: a control's label names its note by the default table, never the context") {
+    // A control is a key on a device, not a pitch in the song: its label does not change with
+    // the key or chord (ADR-0100; the pitch a context spells is a different thing).
+    CHECK(describe(*controlOf(msg(0x90, 61, 100), "")) == "Note C#4 · ch 1");
+    CHECK(describe(*controlOf(msg(0x90, 63, 100), "")) == "Note Eb4 · ch 1");
+    Rig rig;
+    rig.call("track.add", R"({"name":"Bass"})");
+    rig.call("key.set", R"({"at":0,"tonic":"Ab","scale":"major"})");
+    rig.call("chord.set", R"({"at":0,"symbol":"E"})");
+    auto set = rig.call(
+        "track.learn.set",
+        R"({"track":"tr_1","param":"mute","midi":{"kind":"note","channel":1,"number":61}})");
+    CHECK(set["control"].asString() == "Note C#4 · ch 1");  // not Db4, in Ab major
+    set = rig.call(
+        "track.learn.set",
+        R"({"track":"tr_1","param":"solo","midi":{"kind":"note","channel":1,"number":68}})");
+    CHECK(set["control"].asString() == "Note Ab4 · ch 1");  // not G#4, over an E chord
+}
+
 TEST_CASE("a control action may stop the engine during event-driven service") {
     Rig rig;
     rig.start();

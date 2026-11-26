@@ -56,6 +56,11 @@ class Button : public Node {
     void setMark(std::string mark, std::string token = {});
     const std::string& mark() const { return mark_; }
     const std::string& markColor() const { return markColor_; }
+    // Drawn instead of the text when the text does not fit, rather than the
+    // text elided ("2" for a narrow "Group 2" tab); "" elides as usual. Not
+    // part of valueText().
+    void setNarrowText(std::string text);
+    const std::string& narrowText() const { return narrowText_; }
 
   protected:
     bool pressed() const { return pressed_; }
@@ -65,7 +70,7 @@ class Button : public Node {
     void paintText(Canvas& canvas, const Rect& b, Color ink) const;
     std::string text_;
     bool pressed_ = false, emphasis_ = false;
-    std::string textColor_, mark_, markColor_;
+    std::string textColor_, mark_, markColor_, narrowText_;
 };
 
 }  // namespace supple::ui

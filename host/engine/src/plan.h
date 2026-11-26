@@ -841,6 +841,23 @@ struct PlayerReader {
     const ClipPlayer* player = nullptr;
     std::int64_t anchor = 0, pass = 0;
     bool unanchored = false;
+    // A stretched reading (a pitch-keeping plan, S3 step D): a converter
+    // with history, read every quantum in order from `startQuantum`. Its
+    // source plays before the anchor only in a later loop cycle than the
+    // switch's (`launchCycle`); `primes` of the converter's warm-up are done.
+    std::int64_t startQuantum = INT64_MIN, launchCycle = 0;
+    std::uint32_t primes = 0;
+    std::uint32_t credit = 0;  // frames played since its warm-up's last prime (R1)
+    // Across a trajectory change (S3 step D4): the reading as the previous
+    // plan read it, on the old trajectory (Plan::previousTimelines), heard
+    // until rateSwitchDevice and crossfaded into this one over smoothFrames;
+    // only it when this reader holds no reading for the switch (one going
+    // out). Allocated with the reader at compile, its state handed over at
+    // adoption, released with the plan on the main thread. It rotates with
+    // its reader (applyLaunch).
+    std::unique_ptr<PlayerReader> previous;
+    bool previousLive = false;
+    bool previousOnly = false;  // no reading of its own for the switch
 };
 
 // An audio item ready to play: which source frames land on which samples.
@@ -1141,13 +1158,43 @@ struct Node {
     // plan its first frame takes the clip's notes from the anchor on, which
     // may lie behind the previous frame's song position (S3).
     bool launchFresh = false;
+    // carryLaunch returned it to the arrangement at this adoption (its clip
+    // lost): the adopting executor acks it once and clears it.
+    bool launchReturned = false;
+    // Callback-only, written when the callback skips this plan (an old-epoch
+    // rate handoff): the node is live here or in a handoff skipped before
+    // it since the callback's last adoption, so its class move was acked at
+    // that skip (Engine::ackSkipped, round 180 F1).
+    bool skipLive = false;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
     Stereo launchBuf;
-    // On the playrate path (S3): the playing player's reader, and the one
-    // for what fades out (a player, or a retiring one).
-    std::array<PlayerReader, 2> launchReaders;
+    // On the playrate path (S3): the playing player's reader, the one for
+    // what fades out (a player, or a retiring one), and on a pitch-keeping
+    // plan the one warming up for the next launch (S3 step D). A switch
+    // rotates them, so a converter's history stays with its reading.
+    std::array<PlayerReader, 3> launchReaders;
+    // A pitch-keeping plan's warm-up (S3 step D): a launch of an audio clip
+    // reaches the node `launchWarm` frames before it applies (prewarm), and
+    // its converter warms up meanwhile. `launchWarmAt`: the stream frame of
+    // its switch (the slot's target, the replay's running frame), without
+    // the node's shift, so a plan that moves the shift during the warm-up
+    // keeps it (review round 157 F1).
+    std::int64_t launchWarm = 0, launchWarmAt = 0;
+    // The device frame of the last switch, set by the first block after it
+    // (applyLaunch marks it pending): a cold reading starts from its quantum
+    // and takes its loop cycle, as a warm-up does (S3 step D).
+    std::int64_t launchSwitchAt = INT64_MIN;
+    // Its song phase on a playrate plan (absolute), taken in that block
+    // while the timeline still holds the frame: its ring keeps seconds, not
+    // a clip's whole play. NaN: none (a plan without a playrate). Its loop
+    // cycle, as the loop is now (switchCycle), is what a cold reading keeps,
+    // and one handed on from a tape reader (S3 step D4, round 152 F2).
+    double launchSwitchPhase = std::numeric_limits<double>::quiet_NaN();
+    bool launchSwitchPending = false;
+    LaunchAction launchWarmNext;
+    bool launchWarmValid = false;
     // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
     // the most clip events in a block-long window, over the players.
     std::size_t clipVoices = 0, clipWindow = 0;
@@ -1388,6 +1435,10 @@ struct Plan {
     bool gestureHolds = false;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
+    // Audio clips given no player because they read through a take chain on
+    // a pitch-keeping plan (S3 step D): launching one is refused with
+    // launch.playrate (Engine::launchRefusal).
+    std::vector<model::Id> launchRefusedPlayrate;
     MediaCache* media = nullptr;
     std::vector<host::Instance*> instances;  // every instance the plan processes, sorted
     std::unique_ptr<TaskGraph> graph;        // node dependencies, for processBlockOn
@@ -1426,6 +1477,11 @@ struct Plan {
     // it also adopts exactly at handAt, playing, in that epoch (adoptLive's
     // `continuous`); otherwise it starts them afresh.
     bool handContinuable = false;
+    // The renderer carried the live region from its previous plan into this
+    // one (its continuable carry), whatever the callback's handoff turns out
+    // to be (a stop, a seek, a late adoption): such a join keeps its launch
+    // (round 178 F1). Kept when a relocation clears handContinuable.
+    bool liveCarried = false;
     // Two executors at work (anticipative engine with live nodes): frontier
     // edges read their rings, not their sources' taps.
     bool split = false;
@@ -1656,6 +1712,46 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // A launch reaching the node Node::launchLead before it applies: its clip
 // chains' input (that much ahead) takes it from here.
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// A launch reaching the node Node::launchWarm before it applies, switching
+// at stream frame `at` (Node::launchWarmAt; S3 step D): its converter warms
+// up from here.
+void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT;
+// Whether a launch of `player` warms a converter up first: an audio clip
+// on a pitch-keeping plan (S3 step D).
+inline bool launchWarms(const Node& n, LaunchState::Kind kind, int player) SUPPLE_RT {
+    return n.launchWarm > 0 && kind == LaunchState::Kind::Clip && player >= 0 &&
+           static_cast<std::size_t>(player) < n.players.size() &&
+           !n.players[static_cast<std::size_t>(player)].midi;
+}
+// How early that launch reaches the node: its clip chains' lead, or its
+// warm-up when it has one. MIDI, stops and returns keep the lead alone.
+inline std::int64_t launchEarly(const Node& n, LaunchState::Kind kind, int player) SUPPLE_RT {
+    const std::int64_t warm = launchWarms(n, kind, player) ? n.launchWarm : 0;
+    return n.launchLead > warm ? n.launchLead : warm;
+}
+// An audio clip whose active take has FX or envelopes: it plays through a
+// take chain (plan.cpp), which a pitch-keeping plan cannot read launched yet.
+bool clipHasTakeChain(const Session& s, const model::Clip& clip);
+// Its readers' converters carried to the new plan's node by clip, when the
+// rate controls did not change (carryRateSources).
+void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT;
+// The same across a plan that changes the trajectory (S3 step D4): each
+// reading goes on as the new reader's previous, on the old trajectory, and
+// the new reader takes the reading the node has at the switch on the new
+// one; a warm-up switching later starts again there (carryRateSources).
+void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT;
+// The loop cycle of the node's last switch on `timeline`.
+std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE_RT;
+// Stretch converter primes since the process began (a relaxed count, for
+// the tests' per-block bound).
+std::uint64_t stretchPrimes() noexcept;
+// The start quantum (device frame) of the reading the `n`th prime counted by
+// stretchPrimes was for, among the last 256: where a cold start's burst
+// begins, whatever the executor's lead (a test seam, written relaxed).
+std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept;
+// Quanta a launched clip's stretch converter has run since the process
+// began (a relaxed count, for the tests' per-block bound).
+std::uint64_t stretchQuanta() noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {

@@ -3,9 +3,12 @@
 #include "audio_device.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
+#include "shell.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/widgets.h"
 
@@ -63,6 +66,17 @@ std::string hz(double rate) {
     return text;
 }
 
+// A no-break space (U+00A0): the status lines break only at plain spaces,
+// so a number keeps its unit ("48000 Hz").
+constexpr const char* kNoBreak = "\xC2\xA0";
+
+// A rate for the status lines: "48000 Hz", kept on one line.
+std::string hzKept(double rate) {
+    char text[40];
+    std::snprintf(text, sizeof text, "%.0f%sHz", rate, kNoBreak);
+    return text;
+}
+
 std::string frames(unsigned block, double rate) {
     char text[48];
     std::snprintf(text, sizeof text, "%u frames (%.1f ms)", block, 1000.0 * block / rate);
@@ -71,6 +85,140 @@ std::string frames(unsigned block, double rate) {
 
 std::string message(const Error& e) {
     return e.hint.empty() ? e.message : e.message + "; " + e.hint;
+}
+
+// What the rows say after a failed start, by the error's code and path:
+// the output and input rows' suffixes ("(not found)", "(no inputs)"). An
+// ASIO driver is one device for input and output: a missing one marks the
+// output row, the input row reading "Same device as output".
+std::pair<std::string, std::string> rowMarks(const Error& e, bool asio) {
+    if (e.code == "backend.device.not_found") {
+        if (e.path == "/output_device" || asio) return {" (not found)", ""};
+        if (e.path == "/input_device") return {"", " (not found)"};
+    }
+    if (e.code == "backend.device.no_inputs") return {"", " (no inputs)"};
+    return {};
+}
+
+// A message as a sentence: a capital first letter and a full stop.
+std::string sentence(std::string text) {
+    if (text.empty()) return text;
+    text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    const char last = text.back();
+    if (last != '.' && last != '!' && last != '?') text += '.';
+    return text;
+}
+
+// Where an engine error happened, for its words: the backend and audio
+// system it came from, and whether the Audio system menu lists another one
+// with devices (Dummy does not count).
+struct ErrorPlace {
+    std::string backend, host;
+    bool otherHost = false;
+    bool asio() const { return backend == "portaudio" && isAsio(host); }
+    bool wasapi() const {
+        return backend == "portaudio" && host.find("WASAPI") != std::string::npos;
+    }
+    bool coreAudio() const { return backend == "portaudio" && host == "Core Audio"; }
+};
+
+// An error in the dialog's own words: what went wrong, and what to do next
+// where that alone gives no step. One row per cause (the engine's error
+// code: engine.md) and audio system, as gui.md's table; the path only says
+// which device. No message text is compared: an error with no row is its
+// message as a sentence, with no step. Never a command name or the engine's
+// hint, which is written for command callers.
+struct ErrorWords {
+    std::string cause, step;
+    bool known = false;  // a row of the table
+};
+
+ErrorWords errorWords(const Error& e, const AudioDeviceSettings& s, const ErrorPlace& at) {
+    auto row = [](std::string cause, std::string step = {}) {
+        return ErrorWords{std::move(cause), std::move(step), true};
+    };
+    const ErrorWords unknown{sentence(e.message), {}, false};
+    const std::string& c = e.code;
+    if (at.backend == "jack") {
+        if (c == "backend.unavailable")
+            return row("The JACK library is missing or incomplete.",
+                       "Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart "
+                       "audio.");
+        if (c == "backend.driver")
+            return row("The JACK server did not answer.",
+                       "Start PipeWire with its JACK support (pipewire-jack), or a JACK server, "
+                       "then Restart audio.");
+        // The client connected, then a port or its activation was refused:
+        // the engine's message says which.
+        if (c == "backend.open")
+            return row(sentence(e.message),
+                       "Restart audio; if it fails again, restart PipeWire or the JACK server.");
+        return unknown;
+    }
+    if (at.backend != "portaudio") return unknown;
+    // The device asked for, by the path: an ASIO driver is one device.
+    const bool input = !at.asio() && (e.path == "/input_device" || e.path == "/inputs");
+    const std::string name = input ? s.inputDevice : s.outputDevice;
+    auto device = [&](const char* rest) {
+        if (at.asio())
+            return name.empty() ? std::string("No ASIO device") + rest
+                                : "The device \"" + name + "\"" + rest;
+        if (name.empty())
+            return std::string(input ? "The default input device" : "The default output device") +
+                   rest;
+        return std::string(input ? "The input device \"" : "The output device \"") + name + "\"" +
+               rest;
+    };
+    if (c == "backend.device.not_found")
+        return row(
+            at.asio() && name.empty() ? "No ASIO device was found." : device(" was not found."),
+            "Choose another device, or Refresh once it is connected.");
+    if (c == "backend.device.no_inputs")
+        return row(at.asio() ? "The device \"" + name + "\" has no inputs."
+                             : "The input device \"" + s.inputDevice + "\" has no inputs.",
+                   "Choose another input device, or None (playback only).");
+    if (c == "backend.device.ambiguous")
+        return row("More than one device is named \"" + name + "\".",
+                   "Rename one in the system's sound settings, or choose another device.");
+    if (c == "backend.device.channels")
+        return e.path == "/inputs" ? row("The input device has too few channels.",
+                                         "Choose another input device, or None (playback only).")
+                                   : row("The output device has too few channels.",
+                                         "Choose another output device.");
+    if (c == "backend.host_api.not_found")
+        return row("The audio system \"" + s.hostApi + "\" was not found.",
+                   at.otherHost ? "Choose another audio system." : "");
+    if (c == "backend.rate") {
+        // On ASIO an interface that is not there reads as a refused rate.
+        const std::string cause = s.rate > 0 ? "The device does not run at " + hzKept(s.rate) + "."
+                                             : std::string("The device refused the sample rate.");
+        if (at.asio())
+            return row(cause, s.rate > 0 ? "Choose another sample rate, or check that the "
+                                           "interface is connected."
+                                         : "Check that the interface is connected.");
+        return row(cause,
+                   s.rate > 0 ? "Choose another sample rate, or the device's own rate." : "");
+    }
+    if (c == "backend.driver" && at.asio())
+        return row("The ASIO driver did not start.",
+                   "If another app is using it, close that app; check that the interface is "
+                   "connected; then Restart audio.");
+    if (c == "backend.device.invalid")
+        return at.wasapi()
+                   ? row("The device could not be opened.",
+                         "Another app may be using it in exclusive mode, or it was disconnected: "
+                         "close that app or reconnect it, then Restart audio.")
+                   : row("The device could not be opened.",
+                         "It may have been disconnected: reconnect it or choose another device, "
+                         "then Restart audio.");
+    // WASAPI never reports a busy device (an exclusive holder is
+    // backend.device.invalid), so it has no row.
+    if (c == "backend.busy" && at.coreAudio())
+        return row("The device is in use.",
+                   "Another app has taken it over: close that app, then Restart audio.");
+    if (c == "backend.busy" && at.asio())
+        return row("The ASIO driver is already open in this app.", "Restart audio.");
+    return unknown;
 }
 
 ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
@@ -239,21 +387,55 @@ AudioDeviceDialog::AudioDeviceDialog(ui::Root& root, cmd::Dispatcher& dispatcher
     stopEngine = [this] {
         (void)dispatcher_.execute({"engine.stop", json::Value::object(), kOrigin});
     };
+    captureHeld = [this] { return app_.launchCapturing(); };
 }
 
 std::vector<engine::AudioDevice> AudioDeviceDialog::devices(bool reload) {
     if (reload || (devices_.empty() && enumerateError_.empty())) {
         auto listed = enumerate();
         devices_ = listed ? std::move(*listed) : std::vector<engine::AudioDevice>{};
-        enumerateError_ = listed ? std::string() : message(listed.error());
+        enumerateError_ = listed ? std::string() : explain(listed.error(), false, false);
     }
     return devices_;
 }
 
 std::string AudioDeviceDialog::hostApiName() const { return resolvedHost(settings_, devices_); }
 
+bool AudioDeviceDialog::asio() const {
+    return effectiveBackend(settings_) == "portaudio" && isAsio(hostApiName());
+}
+
+std::string AudioDeviceDialog::explain(const Error& e, bool fallback, bool step) {
+    // The hint stays in the log, once until a start succeeds.
+    if (onLog && !e.hint.empty() && message(e) != logged_) {
+        logged_ = message(e);
+        onLog("audio device: " + logged_);
+    }
+    ErrorPlace at;
+    at.backend = effectiveBackend(settings_);
+    at.host = hostApiName();
+    for (const auto& d : devices_)
+        if (d.hostApi != at.host) at.otherHost = true;
+    const ErrorWords words = errorWords(e, settings_, at);
+    // Before "Audio is running on the default device": a case of the table
+    // says its cause; any other refusal says so with the message.
+    if (fallback)
+        return words.known ? words.cause : "The saved choice was refused: " + e.message + ".";
+    return step && !words.step.empty() ? words.cause + " " + words.step : words.cause;
+}
+
 Status AudioDeviceDialog::start(bool fallback) {
     wanted_ = true;
+    // The row a missing device's error points at says "(not found)"; the
+    // rows are rebuilt when that changes.
+    const auto before = std::exchange(marks_, {});
+    auto show = [&] {
+        if (marks_ != before && isOpen())
+            build(false);
+        else
+            refresh();
+    };
+    startedWithFallback_ = fallback;
     auto attempt = [&](const AudioDeviceSettings& s) -> Status {
         const auto listed =
             effectiveBackend(s) == "portaudio" ? devices(true) : std::vector<engine::AudioDevice>{};
@@ -268,43 +450,66 @@ Status AudioDeviceDialog::start(bool fallback) {
         defaults.backend = settings_.backend;
         defaults.block = settings_.block;
         if (!(defaults == settings_) && attempt(defaults)) {
-            lastError_ = message(st.error()) + " (using the default device)";
+            // Said as sentences. The defaults leave the rate to the device;
+            // when it runs at another rate than the one chosen, the engine's
+            // rate is named. The missing device's row says so too.
+            std::string note =
+                explain(st.error(), true) + " Audio is running on the default device";
+            const double rate = app_.engineStatus().sampleRate;
+            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate)
+                note += " at " + hzKept(rate);
+            lastError_ = note + ". The choice is kept for when it returns.";
             if (onError) onError("audio device: " + lastError_);
-            refresh();
+            marks_ = rowMarks(st.error(), asio());
+            show();
             return {};
         }
     }
-    lastError_ = st ? std::string() : message(st.error());
-    refresh();
+    if (st) logged_.clear();  // a later failure is logged again
+    lastError_ = st ? std::string() : explain(st.error());
+    marks_ = st ? std::pair<std::string, std::string>{} : rowMarks(st.error(), asio());
+    show();
     return st;
 }
 
 Status AudioDeviceDialog::restart() {
     if (app_.backend()) stopEngine();
-    return start(false);
+    // With the fallback its last start had: an engine on the defaults because
+    // the saved device is missing keeps running when the rate or buffer
+    // changes. A fallback is said in the dialog and the status line (start).
+    return start(startedWithFallback_);
 }
 
 void AudioDeviceDialog::stop() {
     wanted_ = false;
     lastError_.clear();
+    marks_ = {};
     stopEngine();
     refresh();
 }
 
 Status AudioDeviceDialog::apply(AudioDeviceSettings next) {
     SUPPLE_TRY(validate(next));
-    if (save_) SUPPLE_TRY(save_(next));
+    if (save_)
+        if (Status saved = save_(next); !saved) {
+            Error e = std::move(saved).error();
+            e.message = "the choice could not be saved: " + e.message;
+            return e;
+        }
     settings_ = std::move(next);
     Status st;
     if (wanted_ || app_.backend()) st = restart();
-    refresh();
+    if (isOpen())
+        build(false);  // the rows show the saved choice
+    else
+        refresh();
     return st;
 }
 
 void AudioDeviceDialog::choose(AudioDeviceSettings next) {
     // The status lines show a failure too: stderr is not seen from Finder.
     if (auto st = apply(std::move(next)); !st) {
-        lastError_ = message(st.error());
+        lastError_ = explain(st.error());
         if (onError) onError("audio device: " + lastError_);
     }
     if (isOpen()) build(false);  // rows depend on the audio system
@@ -334,6 +539,61 @@ void AudioDeviceDialog::openMenu(const std::string& id, std::vector<ui::MenuItem
 
 void AudioDeviceDialog::open() { build(true); }
 
+void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell) {
+    dialog.onError = [&shell](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+        shell.setStatus(message);
+    };
+    // The engine's full error, its hint included, goes to stderr only.
+    dialog.onLog = [](const std::string& detail) { std::fprintf(stderr, "%s\n", detail.c_str()); };
+    dialog.captureHeld = refreshHeldBy(shell.capture());
+}
+
+std::function<bool()> refreshHeldBy(CaptureControl& capture) {
+    // An engine stop would cut a capture short while it is armed or runs
+    // (lit: the toggle's own or another caller's). A kept take is not held:
+    // the stop keeps it, and the pane commits it (ADR-0097).
+    return [&capture] { return capture.lit(); };
+}
+
+bool AudioDeviceDialog::engineCapturing() const { return app_.launchCapturing(); }
+
+bool AudioDeviceDialog::recording() const {
+    const auto transport = app_.transport("get");
+    return transport && transport->recording;
+}
+
+std::string AudioDeviceDialog::refreshBlocked() const {
+    if (recording()) return "Refresh is off while recording";
+    if (captureHeld && captureHeld()) return "Refresh is off while the launcher captures";
+    return {};
+}
+
+Status AudioDeviceDialog::rescan() {
+    if (const std::string blocked = refreshBlocked(); !blocked.empty()) {
+        const bool rec = recording();
+        Error refused(rec ? "audio.recording" : "audio.capture", blocked,
+                      rec ? "stop recording first: Refresh stops audio for a moment"
+                          : "end the capture first (Capture in the launcher): an engine stop "
+                            "discards it");
+        if (onError) onError("audio device: " + refused.message);
+        return refused;
+    }
+    const bool running = app_.backend() != nullptr;
+    if (running) stopEngine();  // PortAudio rescans only when nothing holds it
+    Status st;
+    // Started again as it last was: an engine on the defaults because the
+    // saved device was refused at app start falls back again (and runs on
+    // the saved device if it is back). start() lists the devices itself.
+    if (running)
+        st = start(startedWithFallback_);  // says a refusal in lastError_
+    else
+        devices(true);
+    if (!st && onError) onError("audio device: " + lastError_);
+    if (isOpen()) build(false);  // the fresh list, and the status
+    return st;
+}
+
 void AudioDeviceDialog::build(bool reload) {
     if (root_.popupOpen()) root_.closePopups();
     const std::string backend = effectiveBackend(settings_);
@@ -351,6 +611,9 @@ void AudioDeviceDialog::build(bool reload) {
     header.layout.align = ui::Layout::Align::Center;
     header.emplace<ui::Label>("audio.title", "Audio device", ui::Font::UiBold, "body")
         .layout.width = ui::SizeRule::fraction();
+    // The native devices only: JACK and the dummy list none here.
+    if (backend == "portaudio")
+        header.emplace<ui::Button>("audio.refresh", "Refresh", [this] { (void)rescan(); });
     header.emplace<ui::Button>("audio.close", "Close", [this] { root_.closePopups(); });
 
     auto button = [&](const std::string& id, const std::string& label, const std::string& text,
@@ -409,8 +672,14 @@ void AudioDeviceDialog::build(bool reload) {
     });
 
     if (backend == "portaudio") {
+        // The row a failed start's error points at says why ("(not found)",
+        // "(no inputs)": rowMarks).
+        const bool asio = isAsio(host);
         button("audio.output", "Output device",
-               settings_.outputDevice.empty() ? "System default" : settings_.outputDevice, [this] {
+               (settings_.outputDevice.empty() ? std::string("System default")
+                                               : settings_.outputDevice) +
+                   marks_.first,
+               [this] {
                    std::vector<ui::MenuItem> items;
                    auto add = [&](std::string label, const std::string& name) {
                        ui::MenuItem item;
@@ -429,11 +698,12 @@ void AudioDeviceDialog::build(bool reload) {
                            add(d.name + " (" + std::to_string(d.outputs) + " out)", d.name);
                    openMenu("audio.output", std::move(items));
                });
-        const bool asio = isAsio(host);
-        const std::string inputText = !settings_.record               ? "None (playback only)"
-                                      : asio                          ? "Same device as output"
-                                      : settings_.inputDevice.empty() ? "System default"
-                                                                      : settings_.inputDevice;
+        const std::string inputText =
+            (!settings_.record               ? std::string("None (playback only)")
+             : asio                          ? std::string("Same device as output")
+             : settings_.inputDevice.empty() ? std::string("System default")
+                                             : settings_.inputDevice) +
+            marks_.second;
         button("audio.input", "Input device", inputText, [this, asio] {
             std::vector<ui::MenuItem> items;
             auto add = [&](std::string label, bool record, const std::string& name) {
@@ -542,7 +812,8 @@ void AudioDeviceDialog::build(bool reload) {
     actions.layout.align = ui::Layout::Align::Center;
     actions.emplace<ui::Node>("audio.actions.space").layout.width = ui::SizeRule::fraction();
     actions.emplace<ui::Button>("audio.restart", "Restart audio", [this] {
-        if (auto st = restart(); !st && onError) onError("audio device: " + message(st.error()));
+        // restart() says the failure in lastError_, in the dialog's words.
+        if (auto st = restart(); !st && onError) onError("audio device: " + lastError_);
     });
     actions.emplace<ui::Button>("audio.stop", "Stop audio", [this] { stop(); });
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
@@ -550,6 +821,19 @@ void AudioDeviceDialog::build(bool reload) {
 }
 
 void AudioDeviceDialog::refresh() {
+    // Refresh stops audio for a moment: off while recording or while a
+    // capture is held, its hint (said in the status line) says why.
+    if (ui::Node* again = root_.find("audio.refresh")) {
+        const std::string blocked = refreshBlocked();
+        const bool off = !blocked.empty();
+        ui::Hint said{
+            off ? blocked : "Refresh: list the audio devices again (audio stops for a moment)", ""};
+        if (again->enabled == off || again->hint != said) {
+            again->enabled = !off;
+            again->hint = said;
+            again->invalidate();
+        }
+    }
     auto* first = dynamic_cast<ui::Label*>(root_.find("audio.status.0"));
     if (!first) return;
     std::string text;
@@ -558,14 +842,14 @@ void AudioDeviceDialog::refresh() {
         const std::string name = status.backend == "jack"        ? "JACK"
                                  : status.backend == "portaudio" ? resolvedHost(running_, devices_)
                                                                  : status.backend;
-        char line[160];
-        std::snprintf(line, sizeof line,
-                      "Running: %s at %.0f Hz, block %lld, device period %lld, output %.1f ms.",
-                      name.c_str(), status.sampleRate, static_cast<long long>(status.block),
-                      static_cast<long long>(status.period),
-                      status.sampleRate > 0
-                          ? 1000.0 * double(status.deviceLatency) / status.sampleRate
-                          : 0.0);
+        char line[192];
+        std::snprintf(
+            line, sizeof line,
+            "Running: %s at %.0f%sHz, block %lld, device period %lld, output %.1f%sms.",
+            name.c_str(), status.sampleRate, kNoBreak, static_cast<long long>(status.block),
+            static_cast<long long>(status.period),
+            status.sampleRate > 0 ? 1000.0 * double(status.deviceLatency) / status.sampleRate : 0.0,
+            kNoBreak);
         text = line;
         if (status.restartNeeded) text += " The device changed or went away: Restart audio.";
         if (!lastError_.empty()) text += " " + lastError_;

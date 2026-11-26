@@ -14,9 +14,11 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -42,6 +44,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/control_names.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -2456,6 +2459,178 @@ std::vector<engine::AudioDevice> fakeDevices() {
 }
 }  // namespace
 
+TEST_CASE("audio device: each start error reads as gui.md's table says, per audio system") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::vector<engine::AudioDevice> mac{
+        {"Core Audio", "MacBook Pro Speakers", 0, 2, 48000, false, true},
+        {"Core Audio", "MacBook Pro Microphone", 1, 0, 48000, true, false}};
+    struct Case {
+        const char* what;
+        gui::AudioDeviceSettings settings;
+        std::vector<engine::AudioDevice> devices;
+        Error error;
+        std::string words;
+        std::string output = {}, input = {};  // the rows, where they matter
+    };
+    auto settings = [](const char* backend, const char* host = "", const char* output = "",
+                       const char* input = "", double rate = 0) {
+        gui::AudioDeviceSettings s;
+        s.backend = backend;
+        s.hostApi = host;
+        s.outputDevice = output;
+        s.inputDevice = input;
+        s.rate = rate;
+        return s;
+    };
+    const char* hint = "a hint for command callers";
+    // The words key on the code and the audio system only: every message
+    // here is the same text, which no row reads.
+    const char* text = "driver text";
+    auto error = [&](const char* code, const char* path = "") {
+        return Error(code, text, path, hint);
+    };
+    const std::string unknown = "Driver text.";
+    const std::vector<Case> cases{
+        // JACK (Linux): the server, the library; never another device or system.
+        {"jack library",
+         settings("jack"),
+         {},
+         error("backend.unavailable"),
+         "The JACK library is missing or incomplete. Install PipeWire's JACK support "
+         "(pipewire-jack) or JACK, then Restart audio."},
+        {"jack server",
+         settings("jack"),
+         {},
+         error("backend.driver"),
+         "The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), "
+         "or a JACK server, then Restart audio."},
+        {"jack ports",
+         settings("jack"),
+         {},
+         error("backend.open"),
+         "Driver text. Restart audio; if it fails again, restart PipeWire or the JACK server."},
+        {"jack other", settings("jack"), {}, error("backend.config"), unknown},
+        // Windows WASAPI (shared mode).
+        {"wasapi invalid", settings("portaudio"), fakeDevices(),
+         error("backend.device.invalid", "/backend"),
+         "The device could not be opened. Another app may be using it in exclusive mode, or it "
+         "was disconnected: close that app or reconnect it, then Restart audio."},
+        {"wasapi rate", settings("portaudio", "", "", "", 96000), fakeDevices(),
+         error("backend.rate", "/rate"),
+         "The device does not run at 96000\xC2\xA0Hz. Choose another sample rate, or the "
+         "device's own rate."},
+        {"wasapi input", settings("portaudio", "", "", "Microphone 2"), fakeDevices(),
+         error("backend.device.not_found", "/input_device"),
+         "The input device \"Microphone 2\" was not found. Choose another device, or Refresh "
+         "once it is connected.",
+         "System default", "Microphone 2 (not found)"},
+        {"wasapi host", settings("portaudio", "Windows DirectSound"), fakeDevices(),
+         error("backend.host_api.not_found", "/host_api"),
+         "The audio system \"Windows DirectSound\" was not found. Choose another audio system."},
+        // WASAPI never reports a busy device: no row.
+        {"wasapi busy", settings("portaudio"), fakeDevices(), error("backend.busy", "/backend"),
+         unknown},
+        {"wasapi other", settings("portaudio"), fakeDevices(), error("backend.open", "/backend"),
+         unknown},
+        // Windows ASIO: one device for input and output.
+        {"asio missing", settings("portaudio", "ASIO", "Focusrite USB ASIO"), fakeDevices(),
+         error("backend.device.not_found", "/input_device"),
+         "The device \"Focusrite USB ASIO\" was not found. Choose another device, or Refresh "
+         "once it is connected.",
+         "Focusrite USB ASIO (not found)", "Same device as output"},
+        {"asio unnamed", settings("portaudio", "ASIO"), fakeDevices(),
+         error("backend.device.not_found", "/output_device"),
+         "No ASIO device was found. Choose another device, or Refresh once it is connected.",
+         "System default (not found)", "Same device as output"},
+        {"asio no inputs", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         error("backend.device.no_inputs", "/input_device"),
+         "The device \"Interface ASIO\" has no inputs. Choose another input device, or None "
+         "(playback only).",
+         "Interface ASIO", "Same device as output (no inputs)"},
+        // An absent ASIO interface also reads as a refused rate.
+        {"asio rate", settings("portaudio", "ASIO", "Interface ASIO", "", 96000), fakeDevices(),
+         error("backend.rate", "/rate"),
+         "The device does not run at 96000\xC2\xA0Hz. Choose another sample rate, or check that "
+         "the interface is connected."},
+        {"asio driver", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         error("backend.driver", "/backend"),
+         "The ASIO driver did not start. If another app is using it, close that app; check that "
+         "the interface is connected; then Restart audio."},
+        {"asio busy", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         error("backend.busy", "/backend"),
+         "The ASIO driver is already open in this app. Restart audio."},
+        // macOS Core Audio: the only audio system, so never "another" one.
+        {"coreaudio busy", settings("portaudio"), mac, error("backend.busy", "/backend"),
+         "The device is in use. Another app has taken it over: close that app, then Restart "
+         "audio."},
+        {"coreaudio host", settings("portaudio", "Core Audio"), mac,
+         error("backend.host_api.not_found", "/host_api"),
+         "The audio system \"Core Audio\" was not found."},
+        {"coreaudio channels", settings("portaudio", "", "", "MacBook Pro Microphone"), mac,
+         error("backend.device.channels", "/inputs"),
+         "The input device has too few channels. Choose another input device, or None (playback "
+         "only)."},
+        {"coreaudio driver", settings("portaudio"), mac, error("backend.driver", "/backend"),
+         unknown},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.what);
+        std::vector<std::string> errors, logs;
+        gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, c.settings, {});
+        audio.enumerate = [&] { return Result<std::vector<engine::AudioDevice>>(c.devices); };
+        audio.startEngine = [&](const json::Value&) -> Result<json::Value> { return c.error; };
+        audio.stopEngine = [] {};
+        audio.onError = [&](const std::string& e) { errors.push_back(e); };
+        audio.onLog = [&](const std::string& e) { logs.push_back(e); };
+        audio.open();
+        CHECK_FALSE(audio.start());
+        CHECK(audio.lastError() == c.words);
+        // The hint is for command callers: in the log, not the dialog.
+        CHECK(audio.lastError().find(hint) == std::string::npos);
+        REQUIRE(logs.size() == 1);
+        CHECK(logs[0].find(hint) != std::string::npos);
+        if (!c.output.empty()) CHECK(f.node("audio.output.set")->valueText() == c.output);
+        if (!c.input.empty()) CHECK(f.node("audio.input.set")->valueText() == c.input);
+        f.root->closePopups();
+    }
+    // Every backend.* code engine.start registers has words for at least one
+    // audio system, or is deliberately the message alone: a new or renamed
+    // code without words fails here.
+    const std::set<std::string> messageAlone{"backend.config", "backend.unsupported"};
+    const cmd::CommandInfo* start = f.registry.find("engine.start");
+    REQUIRE(start);
+    std::size_t walked = 0;
+    for (const cmd::ErrorSpec& spec : start->errors) {
+        if (!spec.code.starts_with("backend.")) continue;
+        CAPTURE(spec.code);
+        ++walked;
+        const std::string path = spec.code == "backend.host_api.not_found"  ? "/host_api"
+                                 : spec.code == "backend.rate"              ? "/rate"
+                                 : spec.code == "backend.device.channels"   ? "/outputs"
+                                 : spec.code.starts_with("backend.device.") ? "/output_device"
+                                                                            : "/backend";
+        bool worded = false;
+        for (const auto& [s, devices] :
+             std::vector<std::pair<gui::AudioDeviceSettings, std::vector<engine::AudioDevice>>>{
+                 {settings("jack"), {}},
+                 {settings("portaudio", "", "Interface"), fakeDevices()},
+                 {settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices()},
+                 {settings("portaudio", "Core Audio", "MacBook Pro Speakers"), mac}}) {
+            gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, s, {});
+            audio.enumerate = [&] { return Result<std::vector<engine::AudioDevice>>(devices); };
+            audio.startEngine = [&](const json::Value&) -> Result<json::Value> {
+                return Error(spec.code, text, path, hint);
+            };
+            audio.stopEngine = [] {};
+            CHECK_FALSE(audio.start());
+            worded = worded || audio.lastError() != unknown;
+        }
+        CHECK(worded != messageAlone.contains(spec.code));
+    }
+    CHECK(walked >= 12);
+}
+
 TEST_CASE("audio device: settings become engine.start arguments") {
     const auto devices = fakeDevices();
     auto args = [&](const gui::AudioDeviceSettings& s) {
@@ -2519,6 +2694,248 @@ TEST_CASE("audio device: settings become engine.start arguments") {
     CHECK(gui::effectiveBackend({}) == gui::defaultAudioBackend());
 }
 
+TEST_CASE("audio device: Refresh stops the engine, lists the devices again and starts it") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::AudioDeviceSettings initial;
+    initial.backend = "portaudio";
+    gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, initial, {});
+    std::vector<std::string> calls;  // the order: stop, list, start
+    std::vector<engine::AudioDevice> present = fakeDevices();
+    bool refuse = false;
+    audio.enumerate = [&] {
+        calls.push_back("list");
+        return Result<std::vector<engine::AudioDevice>>(present);
+    };
+    const cmd::Origin test{cmd::Origin::Type::Test, "t", {}};
+    audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        calls.push_back("start");
+        if (refuse)
+            return Error("backend.device.not_found", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();  // a device-free engine stands in
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return f.dispatcher->execute({"engine.start", dummy, test});
+    };
+    audio.stopEngine = [&] {
+        calls.push_back("stop");
+        (void)f.dispatcher->execute({"engine.stop", json::Value::object(), test});
+    };
+    std::vector<std::string> errors, logs;
+    audio.onError = [&](const std::string& e) { errors.push_back(e); };
+    audio.onLog = [&](const std::string& e) { logs.push_back(e); };
+    REQUIRE(audio.start());
+    audio.open();
+    f.root->frame(false);
+    REQUIRE(f.root->find("audio.refresh"));
+    CHECK(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name.find("audio stops for a moment") != std::string::npos);
+    CHECK(f.node("audio.refresh")->valueText() == "Refresh");
+    // A device plugged in since: Refresh stops the engine, lists, starts.
+    present.push_back({"Windows WASAPI", "USB Mic", 2, 0, 48000, false, false});
+    calls.clear();
+    REQUIRE(f.root->click("audio.refresh"));
+    f.root->frame(false);
+    REQUIRE(calls.size() >= 3);
+    CHECK(calls[0] == "stop");
+    CHECK(calls[1] == "list");
+    CHECK(calls.back() == "start");
+    CHECK(f.app->backend() != nullptr);  // running again
+    CHECK(errors.empty());
+    REQUIRE(audio.isOpen());
+    REQUIRE(f.root->click("audio.input.set"));
+    bool listed = false;
+    ui::Node* inputs = f.root->find("audio.input.menu");
+    REQUIRE(inputs);
+    for (const ui::MenuItem& item : ui::menuItems(*inputs))
+        listed = listed || item.label.find("USB Mic") != std::string::npos;
+    CHECK(listed);
+    f.root->closePopups();
+    audio.open();
+    f.root->frame(false);
+    // The start refused: said in the dialog and the status line, the engine
+    // left stopped, the dialog open with the fresh list.
+    refuse = true;
+    present.push_back({"Windows WASAPI", "Headphones", 0, 2, 48000, false, false});
+    calls.clear();
+    REQUIRE(f.root->click("audio.refresh"));
+    f.root->frame(false);
+    CHECK(calls.front() == "stop");
+    CHECK(f.app->backend() == nullptr);
+    REQUIRE(errors.size() == 1);
+    // In the dialog's words, with what to do next; the hint, written for
+    // command callers, only in the log.
+    CHECK(audio.lastError() ==
+          "The default output device was not found. Choose another device, "
+          "or Refresh once it is connected.");
+    CHECK(errors[0] == "audio device: " + audio.lastError());
+    REQUIRE(logs.size() == 1);
+    CHECK(logs[0].find("choose an exact name from engine.devices") != std::string::npos);
+    REQUIRE(audio.isOpen());
+    CHECK(f.node("audio.status.0")->valueText().find("Not running: The default output") == 0);
+    // Restart audio says it the same way.
+    errors.clear();
+    REQUIRE(f.root->click("audio.restart"));
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "audio device: " + audio.lastError());
+    CHECK(errors[0].find("engine.") == std::string::npos);
+    CHECK(logs.size() == 1);  // the same detail is logged once
+    // An engine on the defaults because the saved device was refused at app
+    // start: Refresh starts it the same way, so it keeps running, and on the
+    // saved device once that is back (round 165 F1).
+    gui::AudioDeviceSettings saved = initial;
+    saved.outputDevice = "Interface";
+    gui::AudioDeviceDialog fallback(*f.root, *f.dispatcher, *f.app, saved, {});
+    bool missing = true;
+    std::vector<std::string> starts;
+    fallback.enumerate = audio.enumerate;
+    fallback.stopEngine = audio.stopEngine;
+    fallback.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        starts.push_back(json::writeCompact(args));
+        if (missing && args.find("output_device"))
+            return Error("backend.device.not_found", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return f.dispatcher->execute({"engine.start", dummy, test});
+    };
+    errors.clear();
+    fallback.onError = audio.onError;
+    REQUIRE(fallback.start(true));  // as at app start
+    REQUIRE(f.app->backend() != nullptr);
+    // Said in the dialog's own words, as sentences: no command or hint.
+    CHECK(fallback.lastError() ==
+          "The output device \"Interface\" was not found. Audio is running on the default "
+          "device. The choice is kept for when it returns.");
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "audio device: " + fallback.lastError());
+    CHECK(errors[0].find("engine.") == std::string::npos);
+    // The row says it too, so the row and the status agree.
+    fallback.open();
+    CHECK(f.node("audio.output.set")->valueText() == "Interface (not found)");
+    // A new buffer size while the saved device is still missing: the restart
+    // falls back as the start did, so audio keeps running, and says so.
+    gui::AudioDeviceSettings bigger = fallback.settings();
+    bigger.block = 512;
+    errors.clear();
+    REQUIRE(fallback.apply(bigger));
+    CHECK(f.app->backend() != nullptr);
+    CHECK(starts.back().find(R"("block":512)") != std::string::npos);
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("running on the default device.") != std::string::npos);
+    CHECK(fallback.lastError().find("running on the default device.") != std::string::npos);
+    CHECK(fallback.lastError().find("Hz") == std::string::npos);  // no rate chosen
+    CHECK(f.node("audio.output.set")->valueText() == "Interface (not found)");
+    // A chosen rate the fallback does not run at: the note names the
+    // engine's rate, not the choice, which stays saved for the device.
+    gui::AudioDeviceSettings faster = fallback.settings();
+    faster.rate = 96000;
+    errors.clear();
+    REQUIRE(fallback.apply(faster));
+    REQUIRE(f.app->backend() != nullptr);
+    const double runs = f.app->engineStatus().sampleRate;
+    REQUIRE(runs > 0);
+    REQUIRE(runs != 96000);
+    char note[80];
+    // The number keeps its unit: a no-break space between (U+00A0).
+    std::snprintf(note, sizeof note, "running on the default device at %.0f\xC2\xA0Hz.", runs);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find(note) != std::string::npos);
+    CHECK(fallback.lastError().find(note) != std::string::npos);
+    CHECK(fallback.settings().rate == 96000);
+    CHECK(f.node("audio.rate.set")->valueText() == "96000 Hz");  // the saved choice
+    // The status lines wrap at plain spaces only: no line starts with a unit.
+    for (int i = 0; i < 3; ++i) {
+        const std::string line = f.node("audio.status." + std::to_string(i))->valueText();
+        CHECK_FALSE(line.starts_with("Hz"));
+        CHECK_FALSE(line.starts_with("ms"));
+    }
+    starts.clear();
+    REQUIRE(fallback.rescan());
+    CHECK(f.app->backend() != nullptr);  // still running, on the defaults
+    REQUIRE(starts.size() == 2);         // the saved device, then the defaults
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    missing = false;  // plugged in again
+    starts.clear();
+    REQUIRE(fallback.rescan());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(starts.size() == 1);
+    CHECK(starts[0].find(R"("output_device":"Interface")") != std::string::npos);
+    CHECK(fallback.lastError().empty());
+    CHECK(f.node("audio.output.set")->valueText() == "Interface");  // found again
+    fallback.stop();
+    // Stopped, Refresh only lists: nothing is started behind the user's back.
+    refuse = false;
+    errors.clear();
+    calls.clear();
+    REQUIRE(audio.rescan());
+    CHECK(calls == std::vector<std::string>{"list"});
+    CHECK(f.app->backend() == nullptr);
+    // Recording: Refresh is off, says why, and stops nothing.
+    REQUIRE(audio.start());
+    json::Value arm = json::Value::object();  // the master records its output
+    arm["track"] = "tr_0";
+    arm["armed"] = true;
+    REQUIRE(f.dispatcher->execute({"track.set", arm, test}));
+    REQUIRE(f.dispatcher->execute({"transport.record", json::Value::object(), test}));
+    REQUIRE(audio.recording());
+    audio.open();
+    f.root->frame(false);
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name == "Refresh is off while recording");
+    calls.clear();
+    errors.clear();
+    const Status refused = audio.rescan();
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "audio.recording");
+    CHECK(calls.empty());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("off while recording") != std::string::npos);
+    (void)f.dispatcher->execute({"transport.stop", json::Value::object(), test});
+    arm["armed"] = false;
+    REQUIRE(f.dispatcher->execute({"track.set", arm, test}));
+    // A launcher capture: an engine stop would discard it, so Refresh is off
+    // the same way. The engine's own running capture, then one the app holds
+    // (the Capture toggle armed, or a refused commit kept).
+    json::Value on = json::Value::object();
+    on["on"] = true;
+    REQUIRE(f.dispatcher->execute({"launch.capture", on, test}));
+    REQUIRE(f.dispatcher->execute({"transport.play", json::Value::object(), test}));
+    REQUIRE(f.app->launchCapturing());
+    CHECK_FALSE(audio.recording());
+    audio.refresh();
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name.find("launcher captures") != std::string::npos);
+    calls.clear();
+    errors.clear();
+    const Status held = audio.rescan();
+    REQUIRE_FALSE(held);
+    CHECK(held.error().code == "audio.capture");
+    CHECK(calls.empty());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(errors.size() == 1);
+    (void)f.dispatcher->execute({"transport.stop", json::Value::object(), test});
+    on["on"] = false;
+    (void)f.dispatcher->execute({"launch.capture", on, test});
+    REQUIRE_FALSE(f.app->launchCapturing());
+    bool kept = true;  // as the app's hook says while the toggle is armed
+    audio.captureHeld = [&] { return kept; };
+    audio.refresh();
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(audio.rescan().error().code == "audio.capture");
+    kept = false;
+    audio.refresh();
+    CHECK(f.node("audio.refresh")->enabled);
+    calls.clear();
+    REQUIRE(audio.rescan());
+    CHECK(calls.front() == "stop");
+    CHECK(calls.back() == "start");
+}
+
 TEST_CASE("audio device: the dialog saves each choice and restarts the engine with it") {
     Fixture f;
     if (!f.ok) return;
@@ -2539,7 +2956,7 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
         starts.push_back(json::writeCompact(args));
         if (refuse && args.find("output_device"))
-            return Error("backend.device", "device was not found", "/output_device",
+            return Error("backend.device.not_found", "device was not found", "/output_device",
                          "choose an exact name from engine.devices");
         // A device-free engine stands in for the device.
         json::Value dummy = json::Value::object();
@@ -2607,17 +3024,33 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->audio == audio.settings());
-    // A refused device leaves the engine stopped and says why; the choice is kept.
+    // A refused device: the engine started with the fallback (app start), so
+    // a restart runs on the defaults and says so in the dialog and through
+    // onError (the status line); the choice is kept. (A start without the
+    // fallback leaving the engine stopped: the Refresh test.)
     refuse = true;
-    REQUIRE_FALSE(audio.restart());
-    CHECK_FALSE(running);
-    CHECK(f.node("audio.status.0")->valueText().find("Not running: device was not found") == 0);
-    // At app start a refused choice falls back to the defaults, and says so.
+    errors.clear();
+    REQUIRE(audio.restart());
+    CHECK(running);
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("running on the default device") != std::string::npos);
+    std::string status;  // the running line comes first; the note wraps onto the next
+    for (int i = 0; i < 3; ++i)
+        status += f.node("audio.status." + std::to_string(i))->valueText() + " ";
+    CHECK(status.find("running on the default device") != std::string::npos);
+    CHECK(audio.settings().outputDevice == "Interface");
+    CHECK(status.find("engine.") == std::string::npos);
+    CHECK(f.node("audio.output.set")->valueText() == "Interface (not found)");
+    // At app start (the engine stopped) a refused choice falls back to the
+    // defaults, and says so.
+    audio.stopEngine();
+    errors.clear();
     REQUIRE(audio.start(true));
     CHECK(running);
     CHECK(starts.back().find("output_device") == std::string::npos);
     REQUIRE(errors.size() == 1);
-    CHECK(errors[0].find("using the default device") != std::string::npos);
+    CHECK(errors[0].find("running on the default device") != std::string::npos);
     CHECK(audio.settings().outputDevice == "Interface");
     refuse = false;
     // Stop audio: later changes are saved without starting the engine.
@@ -3448,6 +3881,46 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
     open(f.centre(f.node("mixer.vca.name.gr_1")));
     CHECK_FALSE(f.root->find("strip.param.menu"));
     CHECK(f.root->popupOpen());  // the group's menu
+}
+
+TEST_CASE("mixer: an unnamed group is drawn as \"Group N\" wherever its name shows") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "Kick");
+    f.exec("group.add", R"({"name":"Drums","members":[")" + a + R"("]})");
+    f.exec("group.add", R"({"name":"","members":[")" + a + R"("]})");
+    f.exec("vca.add", R"({"group":"gr_2"})");
+    f.refresh();
+    // The tab, the VCA strip's name and an envelope lane's title: as the
+    // track menu and messages call it (views::objectName), by its place.
+    CHECK(f.node("mixer.group.tr_1.gr_1")->valueText() == "Drums");
+    CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "Group 2");
+    // Too narrow for "Group 2", the tab says "2"; a named one elides.
+    const auto tab = [&](const char* id) { return dynamic_cast<ui::Button*>(f.node(id)); };
+    REQUIRE(tab("mixer.group.tr_1.gr_2"));
+    CHECK(tab("mixer.group.tr_1.gr_2")->narrowText() == "2");
+    CHECK(tab("mixer.group.tr_1.gr_1")->narrowText().empty());
+    CHECK(f.node("mixer.vca.name.gr_2")->valueText() == "Group 2");
+    CHECK(f.node("mixer.vca.members.gr_2")->valueText() == "1 member");
+    model::Envelope env;
+    env.target.object = *model::Id::parse("gr_2");
+    env.target.param = "volume";
+    CHECK(views::laneTitle(env, f.app->head()).owner == "Group 2");
+    f.exec("group.set", R"({"group":"gr_2","active":false})");
+    f.refresh();
+    CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "· Group 2");
+    CHECK(tab("mixer.group.tr_1.gr_2")->narrowText() == "· 2");
+    // MIDI learn on its VCA fader names it too.
+    const ui::Point fader = f.centre(f.node("mixer.vca.fader.gr_2"));
+    f.pointer(ui::PointerEvent::Type::Down, fader, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, fader, 1, 0, 3);
+    ui::Node* menu = f.node("strip.param.menu");
+    const ui::Point learn{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, learn);
+    f.pointer(ui::PointerEvent::Type::Down, learn);
+    f.pointer(ui::PointerEvent::Type::Up, learn);
+    CHECK(f.node("learn.title")->valueText() == "MIDI learn: Group 2 VCA · Volume");
+    CHECK(f.errors.empty());
 }
 
 TEST_CASE("mixer: a group's tab and a VCA's members and env buttons open their menus beside them") {

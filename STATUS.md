@@ -137,8 +137,8 @@ instructions are in `docs/guides/installing.md`.
   messages, the notation panel, the event list) spell each note by the key and
   chord at its start, at the same place (ADR-0100: a chord tone by its degree,
   doubles where a degree needs them; a place before beat 0 reads beat 0's
-  context); `midi.edit` readbacks and `rack.probe` spell by the key at the
-  item's start (`libs/harmony`).
+  context), and so does `rack.probe`, at the beat each note is heard at (ADR-0100;
+  `libs/harmony`). `midi.notes` and `midi.edit` return MIDI numbers and name nothing.
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
   unparsable chord symbol opens with a warning and keeps the point as data. The
   lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
@@ -324,24 +324,48 @@ instructions are in `docs/guides/installing.md`.
     FX, are from the clip's start, pass after pass (ADR-0097, amended
     2026-11-20). Modulation routes do not reach a clip take's FX, as
     they do not reach an item's (`modulation.target`: take FX come later).
-  - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track, following launches while it is open.
+  - Renders play the arrangement unless given a performance:
+    `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
+    take `performance` ("captured", a `captured_performance`, or the
+    launcher over a beat range) and answer what they played and whether it
+    is as heard (`as_heard`, `not_heard_because`; engine.md §3.1, ADR-0097
+    revision 2026-11-24); a capture from a play start renders bit for bit
+    as heard. The render dialog's Plays row offers the last capture, as
+    played and said as heard or why not, and the launcher over Start..End
+    (gui.md §4.8); with Arrangement it says the clips playing now are not
+    in the render. Limit: native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
-      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
-      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); a capture runs in song time under one, refused (or
-      ended, with a warning) while a launched audio clip plays and the
-      playrate keeps the pitch, and ended on its boundary by a switch that
-      cuts arrangement audio while the pitch is kept; its commit meets the
+      the replay (ADR-0097, revision 2026-11-21); while it keeps the pitch
+      a launched audio clip reads through a stretch converter warmed up
+      about 61 ms before its switch, live as the replay (S3 step D), except
+      one read through a take chain (`launch.playrate`); a launch made
+      inside a track's warm-up lands after that switch; a compiled
+      trajectory change (an envelope edit, preserve pitch toggled) switches
+      launched audio where the items switch, crossfaded from the old
+      reading (S3 step D4: the new reading is primed by the executor at
+      its first use, a warm-up's primes, 45 at 48 kHz, for each track with
+      launched audio in the block holding the switch: on the anticipative
+      renderer within its render-ahead, but inside the device callback with
+      the in-callback executor (`engine.start {"anticipative": false}`) or
+      for an armed or monitored track, a burst that can overrun a small
+      device block; a main-thread mirror was built and taken out, ADR-0097,
+      revision 2026-11-24), and
+      an audio launch pressed while it is pending, or queued before it and
+      not yet begun, can land a boundary later, after its crossfade plus a
+      warm-up; a
+      capture runs in song time under one, refused (or ended, with a
+      warning) while a launched audio clip plays and the playrate keeps
+      the pitch, and ended on its boundary by a switch that cuts
+      arrangement audio, or launches an audio clip, while the pitch is
+      kept; its commit meets the
       rate-1 standard except within 128 song samples of the capture's
       first and last samples (up to the level of the audio cut there),
       and within 128 song samples before a switch that lands on the wrap
       of a clip laid per period (up to 0.011 in the test);
       there a frozen track's print
-      cuts in without the crossfade, and launched audio does not crossfade
-      between trajectories when a plan swap changes the rate;
+      cuts in without the crossfade;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
@@ -349,6 +373,39 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
+    - a capture is kept across an engine stop, a device restart and a
+      device failure (ended there if running) and stays committable;
+      in the GUI, quitting or replacing the project commits it first, and
+      asks about a take whose commit is refused; a headless app quitting or
+      replacing the project with one uncommitted loses it; a newer capture
+      replaces it once it begins, with a warning (ADR-0097, revision
+      2026-11-24); an undo of its commit makes it uncommitted again (the
+      GUI treats that take as declined: it is not committed again, and a
+      Capture click arms over it); the GUI's pane commits a take of a
+      capture it started that the engine ended (an engine stop, Stop audio
+      then Start, a device restart) on its next pass and arms nothing
+      after it; a take of an agent's capture stays kept (the Capture cell
+      shows it; a click commits it, and Quit, New and Open finalize it);
+      the pane never arms over an uncommitted take;
+    - a clip removed (or frozen, or past the memory budget) while a capture
+      runs is kept up to its track's return to the arrangement, at the
+      frame its executor adopted the plan (the executors ack it); a
+      removal undone before any executor block is no return at all; a
+      return ack lost to a full ring (a plan dropping clips on more than
+      a thousand tracks at once) falls back to an immediate launch's
+      floor, with a warning, and the capture is not as heard; a launch
+      ack lost that way (returns share its ring, so a burst of several
+      hundred returns can do it) is counted, warned, and makes every
+      capture from then on not as heard (`launch_unlogged`) until the
+      engine restarts, and `launch.state` says `unlogged: true` (its
+      tracks may then be stale; which launch was lost is not restored);
+      with the anticipative executor a track that joins the live region
+      while stopped (a monitor change) or leaves it (only at a stop)
+      stops its launched clip, reported as a return to the arrangement
+      (a join while playing keeps it, unless under a master playrate a
+      seek or stop comes before the audio callback takes it): the
+      commit writes the clip's stretch to there (after the removal is
+      undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
@@ -371,28 +428,37 @@ instructions are in `docs/guides/installing.md`.
   (`EngineApp::launchState()`): playing with progress, queued, held, the
   playing scene, the Arr dots, and the held tracks' items dimmed. Every
   gesture in §4.15 is in: launch, select, stop, create, open, move and
-  copy, drags to and from the timeline, the clip and scene menus, rename,
+  copy, drags to and from the timeline (selected items into cells, a clip
+  each in one undo step), the clip and scene menus, rename,
   scene reordering, Delete, copy and paste (a cut moves the clips at the
   paste; the clipboard empties when another project opens), the inspector's clip fields (an audio clip's Fade in and Fade out,
   each a length and a shape) and the scene count in the status
   line. An audio clip's cell draws its fades as an item's are drawn. The piano roll opens MIDI clips. L4 adds the header's Capture
-  toggle (armed while lit; a stop, seek or loop change commits the
+  toggle (in one row with Stop all and Arrangement, the three drawn as
+  named glyph cells in a pane too narrow for their words; armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
-  keeps the performance, dark, for the next click; a commit made while
+  keeps the performance, dark with its dot in outline, for the next click;
+  a take an engine stop or device restart ended is committed, and nothing
+  arms after it; a commit made while
   stopped returns the tracks to the arrangement; the cell also lights for
   an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
-  its longest clip's whole bars, with a drop marker while dragged), and a
+  its longest clip's whole bars, with a drop marker while dragged), the
+  scene menu's Lay out scenes… (`arrangement.build`, a dialog), with two
+  remembered checks for all three (follow the song's key and chords,
+  write the clips' harmony to the context track), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. The clip menu's Take FX… opens a clip's take chain, and with
-  under a pitch-keeping master playrate the pane dims the audio clips (and
-  their scenes' ▶) the engine refuses to launch, by a mirror of the
-  engine's check until the engine reports it (a MIDI-clock chase is not
-  seen). Limits:
-  - there is no dialog for `arrangement.build`;
-  - Capture sits under Stop all, and in a pane too narrow for it (one or
-    two scenes) Arrangement is not drawn, as before;
-  - an item dragged into a cell makes a clip of the pressed item only;
+  status line. The clip menu's Take FX… opens a clip's take chain. The pane
+  dims the clips (and scenes' ▶) a press would be refused for now, as the
+  engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`, step
+  E): a frozen track's clips, an audio clip with a take chain while the plan
+  keeps the pitch (a MIDI-clock chase included), a clip whose audio did not
+  fit.
+  Limits:
+  - Lay out scenes… lays each scene once, in pane order (an agent's
+    `arrangement.build` can repeat one), and the checks send only
+    `follow: chords` (key-only or as-written laying stays with each clip's
+    own Follow);
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point selection, the marquee, moves,
     shapes, copy and paste and the lane's menu as on the timeline, one lane
@@ -400,9 +466,10 @@ instructions are in `docs/guides/installing.md`.
     clip's in its pane (a double-click opens its waveform, in seconds, with
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;
-  - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays (titled with their item
-    when two items on a track automate the same effect's parameter);
+  - an item's take FX have lanes on the timeline, across the whole
+    timeline and dimmed where they don't play (outside the item, or all of
+    it while another take is heard), titled with their item when two items
+    on a track automate the same effect's parameter;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
@@ -1604,10 +1671,10 @@ capacity reports retain their original revision/settings.
 ## Known limits
 
 Library boundaries:
-- Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
-  roll's note labels and messages, the notation panel, the event list) only. The
-  roll's keyboard labels, MIDI-control names, `midi.edit` readbacks and the rack
-  probe stay on the key's rule or the default table.
+- Chord-tone spelling (ADR-0100) reaches `midi.get`, the MIDI editor (the roll's
+  note labels and messages, the notation panel, the event list) and `rack.probe`.
+  MIDI-control labels and the roll's keyboard labels stay on the default table on
+  purpose: they name a device key or an octave, not a pitch in the song.
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
@@ -1651,7 +1718,11 @@ Engine and hosting:
     scratch folder (`test_app`), being fixed. A bridged plug-in's slow start
     on a loaded runner (`test_realtime`) is no longer failed by the late rule
     (ADR-0101), and its live waits end at the cycle's deadline, not a
-    15.6 ms timer tick past it (ADR-0102).
+    15.6 ms timer tick past it (ADR-0102). The engine's control-thread polls
+    (transport, plan and renderer waits, the record-stop spin, `Engine::stop`),
+    the paced dummy backend and the bridge client's reap poll end on the same
+    thread-owned high-resolution timer instead of the tick
+    (`supple::sleepFor`, ADR-0102 note); not yet measured on a Windows run.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
@@ -1809,8 +1880,13 @@ Engine and hosting:
   PipeWire, or the rate and quantum are forced on the graph while the engine
   runs. Whether a given PipeWire server grants a suggested rate, and how
   CoreAudio, WASAPI and ASIO devices take each rate and buffer, are untested
-  on hardware. The dialog lists the devices present when it opens; there is no
-  hotplug refresh while it stays open.
+  on hardware. The dialog lists the devices present when it opens, and its
+  Refresh lists them again by stopping the engine, listing and starting it
+  (PortAudio rescans only when nothing holds it; audio stops for a moment,
+  and Refresh is off while recording or while a launcher capture is armed or running). That a device plugged in since does
+  appear after Refresh is unverified on real macOS and Windows hardware: it
+  cannot be run here or in CI, where the sequence is tested with the dummy
+  backend.
   Refusing native MIDI inputs are skipped with structured startup warnings;
   audio and other inputs keep running. CoreMIDI/WinMM use bounded per-port queues,
   timestamp mapping, bounded per-port merging, routing/learn/recording and
@@ -1858,8 +1934,6 @@ Engine and hosting:
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
-- The render dialog's Start and End show beats and bar.beat rather than
-  the ruler's full format.
 - MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
   several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
@@ -1946,7 +2020,8 @@ Session and editing:
   off the audio executors while playback/monitoring continues. Clock windows
   reserve four additional seconds for latency changes; history exhaustion or late
   preparation recovers automatically through a prepared locate at the consumed
-  position, with the same state reset/preroll as a seek. Moving a compensated
+  position, with the same state reset/preroll as a seek; like a seek, it
+  ends a running launch capture there (ADR-0097 L4). Moving a compensated
   stretch source uses this recovery too, preserving phase alignment. Under
   read-ahead PDC, inserting track latency can move sibling sources and trigger
   this same recovery, even when the clock window itself has enough history.
@@ -1985,7 +2060,8 @@ Session and editing:
 - Squashed history steps keep large invocation arguments; actual squashing
   and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
-  with `project.save {history: true}`, which the GUI does not offer yet. A
+  with `project.save {history: true}` (File > Save with undo history in
+  the app). A
   command whose arguments change incompatibly makes a merge of an older
   file's branch stop with an `invalid` conflict. Saving serializes every kept
   version's state on the main thread. Linux is tested locally; native

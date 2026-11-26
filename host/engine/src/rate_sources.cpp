@@ -251,8 +251,24 @@ Status configureRateTransition(Plan& p, Plan* previous, PlayrateTimeline& old,
     p.rateControlsChanged = changed;
     const auto ahead = std::max(p.rateSourceAhead, previous ? previous->rateSourceAhead : 0);
     p.rateSwitchDevice = changed ? quantumAt(p, device + ahead + 63) : previous->rateSwitchDevice;
-    p.rateSafeDevice = changed ? p.rateSwitchDevice + p.smoothFrames + p.rateSourceBehind + 64
-                               : previous->rateSafeDevice;
+    // Launched audio under stretch on either side (S3 step D4, round 145 A1):
+    // an outgoing reading may still read the old trajectory through its
+    // switch crossfade, 240 song samples, at the slowest rate.
+    const auto stretchedAudio = [](const Plan& plan) {
+        if (!plan.rateStretch) return false;
+        for (const Node& node : plan.nodes)
+            for (const ClipPlayer& pl : node.players)
+                if (!pl.midi) return true;
+        return false;
+    };
+    std::int64_t keep = p.smoothFrames;
+    if (stretchedAudio(p) || (previous && stretchedAudio(*previous)))
+        for (const Node& node : p.nodes)
+            keep = std::max<std::int64_t>(
+                keep, static_cast<std::int64_t>(
+                          std::ceil(double(node.launchFadeFrames) / model::kMinPlayrate)));
+    p.rateSafeDevice =
+        changed ? p.rateSwitchDevice + keep + p.rateSourceBehind + 64 : previous->rateSafeDevice;
     const auto wait = changed ? static_cast<std::uint32_t>(p.rateSwitchDevice - device) : 0;
     const auto first = device - p.rateDeviceMargin - 64;
     const auto last = device + wait + p.rateDeviceMargin + static_cast<std::int64_t>(p.rate * .15) +
@@ -313,6 +329,11 @@ void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
         Node* const found = findNode(to, oldNode.id);
         if (!found) continue;
         Node& node = *found;
+        // Launched audio's stretch converters (S3 step D), as the items'.
+        if (!to.rateControlsChanged)
+            carryLaunchReaders(oldNode, node);
+        else
+            carryLaunchAcross(to, oldNode, node);
         for (auto& old : oldNode.clips)
             for (auto& clip : node.clips) {
                 if (old.item != clip.item || old.take != clip.take || old.data != clip.data ||

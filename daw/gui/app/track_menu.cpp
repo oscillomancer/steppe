@@ -12,6 +12,7 @@
 #include "supple/model/objects.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 
@@ -193,7 +194,7 @@ void TrackMenu::openGroups(std::vector<std::string> tracks, const ui::Rect& anch
                      }});
     for (const auto& entry : app.head().groups) {
         ui::MenuItem item;
-        item.label = entry.value->name.empty() ? entry.id.str() : entry.value->name;
+        item.label = views::objectName(app.head(), entry.id);
         item.run = [this, id = entry.id, tracks, anchor] { openGroup(id, tracks, anchor); };
         items.push_back(std::move(item));
     }

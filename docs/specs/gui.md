@@ -138,6 +138,11 @@ sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
 mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
+The arrange layout a screenset stores leaves out the scene menu's two checks
+(`arrange.clips.follow_song`, `write_context`, §4.15): they are a choice
+about what laying a scene does, not layout, so a screenset neither stores
+them nor changes them when recalled (`ArrangeView::saveScreenLayout`,
+`loadScreenLayout`).
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -422,6 +427,47 @@ never works around the bus.
 
 ### 4.1 Main window
 
+**Names, not ids.** No model id (`tr_3`, `it_4`, …) reaches the user. Where
+an object is drawn in its own place (an item on its lane, a clip in its
+cell) an unnamed one draws no name: its place says what it is. Where it is
+referred to from elsewhere (window and inspector titles, lists, menus,
+messages, the status line, a file name offered for an export) it is called
+by `views::objectName`: its name, else words that say where it is, the same
+everywhere:
+
+| Object | Unnamed |
+|---|---|
+| Track | its label (`model::trackLabel`: "Track 3", "Bus 2") |
+| Scene | "Scene *N*", by its place in the launcher pane |
+| Clip | "*track*'s clip in *scene*" |
+| Item | "*track*'s item at bar *N*", with ", beat *B*" when another item of the track starts in that bar (named by its take or file, §4.3) |
+| Take | as its item or clip |
+| Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
+| Automation item | "*envelope* item at bar *N*" |
+| Section or range | "the section (range) at bar *N*" |
+| Marker | "the marker at bar *N*" |
+| Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
+| Plug-in | its plug-in's name |
+| Send | "the send from *track* to *track*" |
+| Group | "Group *N*", by its place among the groups: also on the mixer's group tab (the number alone, "2", when the tab is too narrow for "Group 2"; a named group's tab elides), the VCA strip, a group envelope's lane title and MIDI learn ("Group 2 VCA"); the rename field starts empty |
+| Rack, module | its rack's label; its plug-in's or type's name |
+| Cable, modulation route | "the cable from *module* to *module*"; "the modulation of *parameter*" |
+| Media file | its file name |
+
+One that is gone is "a removed …". Each status line (the main window's,
+the FX window's, the event list's, the render dialog's, the rack window's)
+says each whole id in what it shows by `views::objectNames`, so a
+command's refusal names what it is about; the rest of its words are kept.
+A message that already gives the name with the id in parentheses ("Bass
+(tr_2) is frozen") says the name once ("Bass is frozen"): the name must stand
+whole, at the start, after '(', ',', ':', ';' or '"' (a space between
+allowed), or after a lower-case word ("track Bass"). A different name before
+it stays ("Old (Bass)", and "Sub Bass (Bass)", "Sub-Bass (Bass)" for a track
+now named Bass). Accepted residue: an all-lower-case name ending in the id's
+current name ("sub bass (tr_2)" with tr_2 renamed "bass") reads "sub bass".
+Commands, their errors and what agents see keep their ids; the command log
+(§4.10) shows commands as they ran.
+
 Transport bar (go to start, play/stop, record, loop, punch, metronome,
 count-in and follow as symbol buttons: |◀, ▶ or ■ while playing, a red ● (a
 ring while counting in), circling arrows, [●], a metronome, →| with the bar
@@ -479,7 +525,11 @@ Each has its own GL context, bundled fonts, retained root, focus, damage cache
 and popup stack. Resources are created on first open and retained while
 hidden. Both panels fill their client area with the theme's `raised` surface,
 matching the former popup frame. Their OS titles match their visible headers:
-"Routing", "FX: <track>", or the take FX header; switching tracks/takes or
+"Routing", "FX: <track>", or the take FX header ("Take FX: <track> / <take>",
+the take as the inspector's take list says it (`views::takeLabel`): its name,
+else "Take *N*" by its place in an item of several takes, else its file or
+clip; "Take FX: Bass's item at bar 2" when its words already say the track;
+never an id); switching tracks/takes or
 renaming the track updates the FX title in place. Close or an unhandled Escape
 hides only that panel; Escape first closes a nested popup or cancels a widget
 gesture. Events are routed by SDL window identity before the main window's
@@ -819,7 +869,8 @@ its content starts, short ("→D", "→Dm": `views::takeFollowMark`), in the
 name's ink, left of the badges; a take that does not follow, a baked one
 included, carries none. The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
-neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
+neither draws no name on its lane (`Lanes::itemLabel`; elsewhere it is
+"*track*'s item at bar *N*", §4.1). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
 item whose top is scrolled above the view has its bar out of sight, and its
 label and marks with it: they are not redrawn on the body. An
@@ -941,7 +992,12 @@ entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's ta
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. Titles that would be the same say what tells them apart: an
+another track. It plays only over the item (`model::itemSpan`), while its
+take is the active one: the lane is washed with `ground` at 0.55 elsewhere
+(all of it while another take is active), as a held track's items are
+dimmed, its title clear (`Lanes::dimmedLaneSpans`,
+`TrackLayout::takeFxOwner`). Points there are edited as anywhere; the
+engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the
@@ -1013,7 +1069,7 @@ selected one) and is greyed
 when its heard take is empty. It opens the system's save dialog (SDL3,
 asynchronous, guarded like Save As against a project change) filtered to WAV or
 MIDI, starting in the project's folder (unsaved: the media home) with the take's
-name (else the item ID) plus `.wav` or `.mid`, then runs `item.export`; the status
+name (else the item's words from `views::objectName`) plus `.wav` or `.mid`, then runs `item.export`; the status
 line reports "Exported <file>" or the error. `ui.item.export` is the key-bindable
 action (the first selected item). See engine.md for what the file holds.
 
@@ -1501,9 +1557,10 @@ dragging a row (an insertion bar; Escape cancels; Alt+Up/Down, the
 `fx` section's `ui.fx.move_up/down`, move the selected effect; no arrow
 buttons), bypass vs offline
 (distinct, `reaper-ux.md` addendum), a double click on a row opens that
-effect's own GUI; a left double click on empty chain space (including the
-"No effects yet" message or below the last row) opens Add plugin, as in the
-mixer. The input section's empty area adds input FX; a take adds take FX.
+effect's own GUI; a left double click on empty chain space (below the last
+row, or under the section's heading when the chain is empty, which says
+nothing more) opens Add plugin, as in the mixer. The input section's empty
+area adds input FX; a take adds take FX.
 Single and right clicks on empty space do not open the browser. Ctrl+click adds a row to the selection (or takes it out)
 including the active row; effects moved out of the displayed track/take chains
 leave the selection. Shift+click selects the rows from the last one clicked; on a row of a
@@ -2167,12 +2224,146 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
-  - While a clip holds any track (`EngineApp::launchState()` says a track
-    plays something other than the arrangement), a quiet caption under it
-    says "Renders play the arrangement: the clips playing now are not in
-    them." (ADR-0097; `render.clips.note`). The dialog's frame pass reads
-    the launch state, so the caption comes and goes with launches while
-    the dialog is open.
+  - **Plays** (engine.md §3.1, ADR-0097): Arrangement | Last capture |
+    Launcher (`RenderDialog::Plays`), for Master mix and Stems. It is a
+    one-off selector: never written to the project's settings or a preset,
+    kept while the app runs, and back on Arrangement when the capture it
+    chose is gone, also while the dialog is open. Under Regions,
+    Arrangement is what is lit (the choice comes back with Master mix or
+    Stems). File > Mix always plays the arrangement.
+    - **Last capture** renders `performance: "captured"`, the capture
+      `EngineApp::launchCapture()` returns (also after an engine stop), on
+      the version it played on: the Version dropdown gives way to "As
+      played (vN)", and no `version` is sent. It is off while there is no
+      capture with running time (hint "No capture") or the capture ran at
+      another device rate than the project's (hint "Captured at 44100 Hz;
+      the project runs at 48000 Hz. Commit it in the launcher, then render
+      the arrangement.").
+    - **Launcher** renders `{from: "launcher", start_beat, end_beat}`:
+      Start and End fields in bars, typed as the transport writes them,
+      checked as one range on every edit (an End not after Start is an error
+      on the field just typed, gone from both once the pair is in order; a
+      pair out of order after a Plays switch or a preset starts again from
+      the default, so it never reaches the engine);
+      Start defaults to the playhead's bar, End to Start plus the longest
+      clip playing, in whole bars (four bars when none plays, which renders
+      the arrangement over that range).
+    - Under either, the Range row gives way to the performance's own range
+      (Last capture: a read-only line, "Bars 1.1.000 – 3.1.000 · 0:04.000",
+      the dry run's `range` once it answers, "so far" while the capture
+      runs, the preview asked again once a second meanwhile; the time is the
+      running length, the file's length in the preview, and a capture that
+      wrapped a loop (begun before the loop's end and run past it, the
+      engine's rule; one begun past it covers its own bars) says so: "Bars 1.1.000 – 2.1.000, looped · 0:03.000",
+      the bars the song span it covers, the time longer by its wraps), and no
+      `bounds` or `regions` is sent; `seamless_loop: false` is, since the
+      engine refuses a seamless loop with a performance even when only the
+      project's saved settings turn it on (a saved range is ignored). The
+      Regions toggle and the seamless loop are off, with hints saying why,
+      the loop shown unchecked, and under Regions the Plays toggles are off
+      ("Regions render the arrangement").
+    - The file name gets " performance" after the current source's pattern,
+      so it follows Master mix or Stems (stems keep their `{track}`);
+      editable and one-off (`pattern` in the call; the project's pattern
+      stays), and a name typed is kept across sources, never overwritten.
+    - Last capture follows the capture while the dialog is open: replaced,
+      begun, stopped or gone (`RenderDialog::followCapture`, once a second
+      from `tick()`), its version, range, as-heard line and file preview are
+      the capture Render would play.
+    - **As heard** (Last capture): the dry run's `as_heard` shows under the
+      range, "As heard" or "Not as heard: " and the reasons in the dialog's
+      words (the capture began while playing; the session or a clip it
+      played changed during it, an edit or a clip's return to the
+      arrangement; the playback rate changed during it; live input was heard;
+      audio dropped out during it; a plug-in failed before or during it; a
+      launch was lost from the log before or during it (a new capture after
+      Restart audio in Edit > Audio device starts clean: every engine stop
+      drops the engine that holds the loss, and a capture kept across it
+      keeps the reason), `launch_unlogged`; the engine
+      stopped, or the audio device restarted, during it, from the capture's
+      `endedBy`; an unknown reason as its code in words). After a render
+      the results start with the same line, from the render's own result,
+      and the status line adds ", as heard" or ", not as heard". The dialog
+      never sends `as_heard: true`.
+    - Every refusal the dialog shows (the preview, Render, a failed job, the
+      Ask check, Add to queue, Add to the project, presets, settings,
+      Branch from this version, a field's own error) is shown once, on the
+      red line under the sections; the status line keeps to what an action
+      did and a job's progress. The files go only when the render they
+      describe is refused (the preview, Render, the Ask check, a field's
+      error), and that refusal stays until a preview succeeds, since Render
+      is still refused. An action's refusal leaves the files as they were
+      and shows over the preview's; an action that succeeds clears it, and
+      the preview's refusal, if any, comes back. A job's progress or its end
+      never clears a refusal. Render or Run queue while a job runs is
+      refused there too: "A render is already running: wait for it to
+      finish." It reads in the dialog's words from the action refused, its
+      code and its path together (one code can have several causes; a file
+      that cannot be read or written is the render's file and the renders
+      folder for a render, the preset file and your presets folder for a
+      preset, the rendered file and the project's media for Add to the
+      project, where a file that cannot be read as audio is the reader's
+      case and any other code reads the action's own sentence; under every
+      action, the render default's file read (a file that cannot be opened
+      or read, is too large, or is not JSON or not a preset) at
+      `/args/default` is "Your saved render default cannot be read. Save
+      your settings as the default again.", and any code at
+      `/args/default/settings/…` that it "has a setting that cannot be
+      used", while a code answered at `/args/default` that is not its read
+      (a presets folder that cannot be written to, no default saved) keeps
+      its own words; a preset whose file cannot be read, chosen in the
+      dropdown, is "That preset cannot be read. Delete it, or save a preset
+      under its name to replace it.", or for a member that it "has a
+      setting that cannot be used", while a preset name refused or not
+      found keeps its own words), never the engine's
+      message, its hint, a path or a command name
+      (`RenderDialog::refusalWords`, the audio device dialog's rule), and
+      says what plays ("A clip the launcher plays …", "A clip the capture
+      played …"). For a performance: no capture; another sample rate; a
+      looped capture under a master playback rate; more than 100,000
+      launches; launches out of order; a launch that names no clip; a clip
+      not on its track; a track or clip not in this version; a frozen track;
+      a clip that cannot play at the master playback rate; a clip over the
+      memory budget; the launcher's End not after its Start; a capture with
+      no running time. Nothing to render says why: nothing in the range, no
+      loop set, no track to render as a stem, no checked region. The
+      render's own codes (the file name or the renders folder, a file that
+      exists, normalization, the format, the frame budget, presets, the
+      queue, a missing, changed or unreadable media file, a failed or
+      missing plug-in, a file that could not be written, an unsupported
+      format, a cancelled render, the sources a render prepares) have
+      theirs. A test walks the codes every
+      `render.*` command declares in the registry, each under the action it
+      serves (the preset commands as a preset, the rest as a render), a
+      family such as `json.parse.*` as one sentence for every member; the
+      dialog's other commands (item.add, branch.create, …) keep their
+      action's own sentence. A preset the settings refuse is
+      not loaded: its refusal stands, with the settings before it. The Preset
+      dropdown lists the presets as they are after a save, a load, a delete,
+      Save as default or a refused choice, and shows the preset in use, the
+      one Delete preset acts on; "—" (or a preset in use that is no longer
+      listed) means none, and Delete preset then deletes nothing. A user
+      preset whose file cannot be read (`render.preset.list`'s `damaged`)
+      is offered as "name (damaged)"; choosing it is refused with the
+      sentence above and leaves it chosen, with the settings before it, so
+      Delete preset removes it and Save preset… offers its name. When the
+      presets cannot be listed (a render default that cannot be read), it
+      offers "—" only and the red line says why; Save as default, which
+      that sentence advises, lists them again, and a preview the default
+      refused asks again.
+      One it does not know reads "The render could not be made." (or the
+      action's own sentence: the preset, the settings, the queue), and the
+      whole error goes to the log (`onLog`, stderr).
+    - Add to queue labels the entry "mix · last capture as played (v3),
+      bars 1–2" or "mix · launcher, bars 3–4", from the capture the call
+      pins (read as it is added); the engine stores the resolved
+      performance.
+  - While Arrangement plays and a clip holds any track
+    (`EngineApp::launchState()` says a track plays something other than the
+    arrangement), a quiet caption under it says "The clips playing now are
+    not in this render." (ADR-0097; `render.clips.note`). The dialog's frame
+    pass reads the launch state, so the caption comes and goes with launches
+    while the dialog is open.
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking
@@ -2189,8 +2380,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
 - **Range:** a dropdown with Entire project | Time selection | Custom.
   - Time selection is the loop range drawn on the ruler (`bounds: loop`),
     whether or not looping is on; it is disabled while there is none.
-  - Start, End and Length are shown in the ruler's format, and are editable
-    under Custom.
+  - Start, End and Length are shown in the ruler's format: Start and End
+    as bar, beat and thousandths (`inspectorBarsText`, the transport's
+    "3.1.000") with the time beside each (m:ss.mmm, the transport's), and
+    Length in beats and time. Under Custom the two fields are editable and
+    read what they show (`inspectorParseBars`: "3", "3.2" and "3.2.500"
+    too); one that is not a position says how to write one, and End must
+    be after bar 1.
   - Tail: a checkbox and an editable dropdown in seconds (0.5, 1, 2, 5, 10),
     with "Cut silence at the end" (`trim.end`).
 - **Output:**
@@ -2296,7 +2492,42 @@ save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
-Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and
+The launcher's capture is finalized the same way, before the same checks
+(`CaptureControl::finalize`, the one place a question could replace the
+commit): a running or ending capture ends now and its take is committed,
+one undo step, as turning Capture off does; so is a take the app kept
+across an engine stop or a device restart. The normal prompt then covers
+it. When that commit is refused, the take is kept and the prompt asks even
+for a clean project, naming it in the GUI's own words: "The launcher take
+(bars 1–2, 1 launch) could not be committed: the item at bar 1 on Drums is
+locked. It will be lost." With nothing else unsaved there is nothing to
+save, so the buttons are the action's own verb (the title's first word:
+Quit, Open, Start, Recover) and Cancel, Cancel focused; with unsaved changes
+too, the line ends "It will be lost; Save saves the project without it." and
+the buttons are Save / Don't save / Cancel. Cancel keeps the take, so the
+user can fix what the refusal names. The refusal is worded from its code
+and path and the model, never its message or hint
+(`CaptureControl::refusalWords`). Each refusal's path names the launch it
+met (`/performance/launches/N`): `item.locked` names the one locked item
+under the take on that launch's track; when the last launch on that track
+in the take is an audio clip with a fade-out, the search reaches one period
+of it past the take's end, the most the commit clears under a fade-out
+still sounding there (it does not check that the clip still sounds, so a
+harmless item there can only make the words general, never wrong), and
+reads "a locked item on Drums is in the way" when there are several; `launch.commit` at a launch's `/track` or
+`/clip` says the track is gone or no longer a channel, or the clip is gone
+or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
+clip and track ("a piece of Kit A on Drums would start or end inside its
+own fade"; "Kit A on Drums loops only part of its content, which an item
+cannot"); any other refusal reads "could not be written to the
+arrangement". A take whose commit the user
+undid is declined: neither committed nor counted. The decision also
+records the kept take (`CaptureControl::takeKey`), and a different one
+asks again.
+**Save with undo history** (`ui.file.save_history`, after Save as…) saves
+with `project.save {history: true}` (ADR-0076): in place, or, for a project
+without a file, where the save dialog says. A refusal shows the command's
+message in the status line. Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and
 Standard MIDI Files (`.mid`, `.midi`) through `item.add` (`audio_file` or
 `midi_file`), at the playhead in one undo step: one file onto the selected
 track, else each onto a new track named after it. Files dropped on the
@@ -2304,9 +2535,10 @@ arrange view are told apart the same way. An imported MIDI item plays through
 its channel's instrument, so a new track needs one before it is heard.
 File > Quit, its shortcut (Cmd+Q on macOS), SDL quit and main-window close
 all dispatch the same `ui.quit` action. An open popup only gates interactive
-Quit when recording or unsaved changes require a decision; a clean, idle
-project can quit immediately. Hidden/finite runs still stop recording, even
-though they suppress the prompt and ignore the popup gate.
+Quit when recording, a lit or kept capture, or unsaved changes require a
+decision; a clean, idle project can quit immediately. Hidden/finite runs
+still stop recording and commit the capture, even though they suppress the
+prompt and ignore the popup gate.
 Discard decisions belong to the project generation that opened the prompt.
 Every button, including Cancel, checks that generation before stopping recording,
 saving or continuing. If the project was replaced, the old request is cancelled
@@ -2320,7 +2552,24 @@ if an intervening save made the new revision clean.
 Native file/folder results capture the project generation and are dropped with
 a short notice if the project was replaced before delivery. Open rechecks the
 session version and branch after the dialog; changes require a fresh discard
-decision. Recording started meanwhile is stopped before that decision too.
+decision. Recording started meanwhile is stopped before that decision too,
+and so is a launcher capture: one lit when the file is chosen, or a kept take
+other than the one the first decision covered (`CaptureControl::takeKey`),
+is finalized and asked about again before `project.open`. Open is the only
+native dialog before a project is replaced; templates, recovery and the
+newer autosave ask at the click. The safe-load question for a crash-suspect
+plug-in (Open, recovery, the newer autosave, a template) is a later window
+of the same kind: when it is answered, a changed version or branch, a
+recording, a lit capture or another kept take asks the discard decision
+again (which finalizes) instead of loading (`FileActions::checked`). The
+load that did not happen sets back the overrides its answers made
+("separate process", "not loaded"), and the new decision is asked on the
+next pass, never from inside the answer, so a load after it always starts
+from the plug-in's normal load. After the new decision the load runs its
+check again: a plug-in answered "separate process" or "not loaded" is asked
+about again (by design); one answered "normally" is not, because that answer
+settled its crash reports before the load (they stay, but no longer make it
+a suspect).
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
@@ -2435,7 +2684,7 @@ a new channel). It follows rack.md §8.
   Out module carries a tag under it naming the channel it feeds. A plugin module shows the plug-in's name and
   vendor on its plate and a window mark; a click (not a drag) opens the
   plug-in's editor, as the mixer's slot does. A module of an unknown type is
-  kept, outlined in the clip colour, saying "Missing module" and its id.
+  kept, outlined in the clip colour, saying "Missing module" and its type's name.
   Bypassed modules are veiled and say so. Modules have a soft shadow and
   are dragged by any part that is not a control: a click selects, Ctrl+click
   or Shift+click toggles, a drag on the space draws a marquee (Ctrl or
@@ -2888,7 +3137,7 @@ a track's own; none without one), its name in the title size
 
 | Selection | Title | Line |
 |---|---|---|
-| One item | Its name as the arrange view shows it (§4.3), else its id | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
+| One item | Its name as the arrange view shows it (§4.3), else "*track*'s item at bar *N*" (§4.1) | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
 | Several items | "*N* items" | "On *track*", or "On *M* tracks" |
 | One track | Its label | "Channel", "Buss" or "Master" |
 | Several tracks | "*N* tracks" | "Selected together" |
@@ -2980,7 +3229,8 @@ lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
 - **Shown.** It is shown by View > Clip launcher (`ui.clips`, ticked while
   shown) and saved in the UI sidecar (`arrange.clips: {shown, width,
-  full}`, each only once chosen). The sidecar's entry wins. Only when there
+  full, follow_song, write_context}`, each only once chosen; the last two
+  are the scene menu's checks, below). The sidecar's entry wins. Only when there
   is none does the project decide: one with scenes opens with it shown, and
   one without (a new project too) hides it.
 - **Width.** Unset, it is wide enough for its columns (every scene, the +
@@ -2994,10 +3244,15 @@ same heights, scroll and colours.
   (`tcp.wheel`): the rows scroll together.
 - **The header cell (amendment L-h).** Above the scene headers, the pane
   takes a cell in the arrange header row, beside the ruler, as wide as the
-  pane. It holds **Stop all** (`launch.stop`, every track) and
-  **Arrangement** (`launch.arrangement`, every track back to the timeline),
-  the header's uniform cells, and under Stop all **Capture** (L4; a cell
-  that does not fit the pane is not drawn).
+  pane. It holds, in one row, **Stop all** (`launch.stop`, every track),
+  **Arrangement** (`launch.arrangement`, every track back to the timeline)
+  and **Capture** (L4), the header's uniform cells (56, 84 and 66 units,
+  6 apart, 8 from the edge). In a pane too narrow for their words (under
+  234 units: one or two scenes) all three are glyph cells, 22 units each:
+  a square for Stop all, two staggered bars for Arrangement and Capture's
+  dot alone. Each says its name as its hint (`LauncherHeader::hintAt`,
+  the status line's), and none overlaps another or the pane's edge at any
+  width the pane allows.
 - **Capture** behaves as recording does. A click arms it
   (`launch.capture {on: true}`: from the position heard now, or where
   playing starts), and it is lit while armed, as the transport's record
@@ -3043,10 +3298,40 @@ same heights, scroll and colours.
   performance is kept. The next click commits it first and, if that
   succeeds, arms. If it is refused again, the cell stays dark and the
   status line says one more click drops the performance and arms; that
-  click tries the commit once more first. Opening another project, or the
-  engine stopping, drops it. The app services
+  click tries the commit once more first. Opening another project drops
+  it. The app services
   it once a pass (`CaptureControl::service`) and gives the view the state
   to draw (`ArrangeView::setCaptureArmed`).
+- **A take the engine ended is committed** (ADR-0097, a capture kept).
+  When an engine stop (Stop audio, Restart audio, a device choice) or a
+  device restart ends a capture the Capture toggle armed or is ending, the
+  app keeps the take (`EngineApp::launchCapture`), and the pane's next pass
+  commits it, one undo step, also while no engine runs. A capture another
+  caller armed (an agent's `launch.capture`) is not committed at a stop, as
+  at a transport stop: its take stays kept, shown by the outline dot below;
+  a click commits it, and Quit, New and Open finalize it like any kept
+  take. The status line says so in the
+  pane's words: "The engine stopped during the capture: its take (bars
+  3–18, 2 launches) is committed." ("The audio device restarted during the
+  capture" for a device restart). Nothing arms by itself after an engine
+  stop: the cell goes dark. What is uncommitted is the app's answer
+  (`captureUncommitted`, the view's `commit`), not the pane's copy, so a
+  click after a restart commits the kept take, never the new engine's empty
+  capture, and a click never arms over an uncommitted take.
+- **A kept take shows.** While a take is kept uncommitted (its commit
+  refused, or one an agent's capture left), the cell is dark with its dot
+  drawn in outline in `armed` (`ArrangeView::setCaptureKept`,
+  `CaptureControl::keptLine`). Its hint says what is kept, why and what a
+  click does: "A take is kept, not committed: bars 1–2, 1 launch. Its
+  commit was refused: the item at bar 1 on Drums is locked. Click Capture
+  to commit it." The refusal is worded as in the unsaved-work question
+  (§4.11), from its code and path; it never shows a command name, an engine
+  message or hint.
+- **A take whose commit was undone is declined.** It is not committed
+  again and not shown kept; a click arms a new capture over it. The app
+  keeps it, so redo still restores it, until the new capture hears a frame;
+  the status line then says once "The earlier capture was replaced by this
+  one."
 
 **Columns.**
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
@@ -3062,7 +3347,8 @@ same heights, scroll and colours.
     under the pointer (`scene.insert {scene, bar, bars}`) for its longest
     clip's length rounded up to whole bars from that bar
     (`views::sceneBars`; an audio clip's seconds through the tempo map),
-    as items and a section named after it, one undo step. While it is held
+    as items and a section named after it, one undo step, with the scene
+    menu's two checks (below). While it is held
     over the lanes the ghost layer draws a drop marker at that bar in
     `focus`, a light wash over the span and each clip's copy on its track
     (`ItemGestures::showSceneGhost`).
@@ -3070,10 +3356,62 @@ same heights, scroll and colours.
     first bar line at or after the playhead), **Insert at end** (from the
     first bar line at or after the end of the last item or section,
     `views::barAfterArrangement`), both `scene.insert` for the same bars,
-    and Delete (`scene.remove`, with its clips).
+    two checks, **Lay out scenes…**, and Delete (`scene.remove`, with its
+    clips).
+  - **The checks** say how every scene is laid on the timeline, by a drop,
+    Insert or Lay out scenes… (`views::SceneLaying`, one state per project
+    view, saved in the sidecar's `arrange.clips`; both unchecked by default,
+    for the drop and the menu alike). **Follow the song's key and chords**
+    sends `follow: chords`; unchecked, `follow` is not sent, so each clip
+    keeps its own Follow (the clip inspector's). `follow: key` and
+    `follow: none` for a whole scene stay with the clips' own Follow and
+    with agents; the check is not the whole of `follow`. **Write harmony to
+    the context track** sends `write_context`: the clips' own key and
+    chords go onto the context track under each section that has none. A
+    pick toggles its check and closes the menu.
+  - **Lay out scenes…** opens a dialog for `arrangement.build`: every scene
+    in pane order, each with a check (on) and its bars (its longest clip's
+    whole bars where it would land after the ones before it), **From bar**
+    (the first whole bar at or after the end of the arrangement), and the
+    same two checks, which read and write the same state as the menu's.
+    **Lay out** sends the checked scenes in order (no repeats; an agent can
+    repeat a scene); with none checked it is disabled.
+  - A row's bars follow the rows before it until edited by hand: unticking
+    or ticking a row, or editing a row's bars or From bar, works out each
+    later row not edited by hand again where it would now land (so a meter
+    change between them counts). An unticked row takes no bars. A row edited
+    by hand keeps what was typed, and is never worked out again while the
+    dialog is open. A From bar that is not a whole number from 1 to 100000
+    changes no row.
+  - A field is a whole number when it is digits, with spaces only at its
+    ends. One that is not, or is 0 (the commands' own lower limit), is said
+    in the dialog by its row ("Verse: give its bars as a whole number from
+    1", "From bar: …") and nothing is sent. A whole number of any length is
+    sent (held at a billion), so every other limit is the command's.
+  - A refusal shows in the dialog (and in the status line) as the command
+    says it, with names for ids (below), the first listed
+    error when the arguments' form was refused, and the hint after. The
+    error's path names the entry (`/sequence/<i>/…`, the i-th checked row)
+    or `/bar`: that row's name goes first unless the message already says
+    it, and a dot in `armed` marks the row (or From bar). The text wraps to
+    the dialog's width. The dialog stays open with its entries; done, it
+    closes.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
+  - **Names, not ids** (§4.1). The header draws an unnamed scene as
+    "Scene N", the words its refusals use; an unnamed clip's cell draws no
+    name (its row and column say it). Every launcher refusal reaches the
+    user (the status line, the Lay out dialog) with each id in its message,
+    hint and listed errors said by `views::objectNames`: the pane's
+    commands (`ArrangeView::runLauncher`), items dropped into cells, the
+    menu's Delete, Capture's refusals and the ruler's Capture as scene.
+  - What laying did goes to the status line (`views::followNotice`): each
+    clip that follows or was laid as written in another key, and, with
+    write_context, a section whose harmony was not written ("Verse's harmony
+    is not written: the context track has points there", "… its clips
+    disagree at bar 9"); `arrangement.build`'s head names the scene, or
+    counts them ("3 scenes from bar 5").
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit
@@ -3112,15 +3450,32 @@ same heights, scroll and colours.
   a body at least `LauncherPane::kFadeRoom` (8 units) high and the part shown
   at least 2 units wide. A MIDI clip has no fades and draws none; no text is
   drawn for a fade. A muted clip is dimmed, as a
-  muted item is. Clips launch under a master
-  playrate; the engine refuses only an audio clip while the playrate keeps
-  the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
-  exactly those, and the scenes' ▶ whose launch would start one, the same
-  way (`views::launchRefused`, `views::sceneLaunchRefused`). The engine does
-  not report which clips it would refuse, so that function mirrors its one
-  check (launch_runtime.cpp, `Engine::launch`) from the session; a MIDI-clock
-  chase, which stretches too, is not seen. A click still asks, and the
-  refusal's message reaches the status line.
+  muted item is. The pane dims what a press would be refused for right now, as
+  the engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`; the
+  app hands the views a `views::LaunchRefusals`): a clip as a muted clip is
+  dimmed, a scene's ▶ in quiet ink at the same 0.45. A clip is refused when
+  its track is frozen (`track.frozen`, with the engine running or not), when
+  it is an audio clip with take FX or a take envelope and the latest published
+  plan keeps the pitch, under a pitch-keeping master playrate or a MIDI-clock
+  chase (`launch.playrate`; other clips launch under any playrate), when its
+  audio did not fit the prepared-audio budget (`launch.memory`), or while the
+  latest published plan does not hold it yet (`launch.clip`: a clip just added
+  waits there while audio is prepared, which holds every load). A scene's ▶ is
+  dimmed when `launch.scene` would refuse: nothing it holds can play, frozen
+  tracks' and memory-skipped clips left out as the command leaves them out
+  (`launch.scene`), or a clip it would launch with the rest is refused
+  (`launch.playrate`, `launch.clip`); a scene holding one memory-skipped clip
+  launches the rest, so its ▶ stays bright and only that clip dims. Refusals
+  that depend on the transport (no engine running, a relocation, a full queue)
+  are not shown. While the pane is shown the app asks again, every clip and
+  scene in one call (`EngineApp::launchRefusals`, one pass over the clips),
+  only when `EngineApp::launchRefusalGeneration` moves (a published plan, an
+  edit, an engine started or stopped, a project opened; `gui::RefusalWatch`,
+  each frame), at most once a frame, so a fader drag, which edits every frame,
+  asks once a frame; while it is hidden nothing is asked, and the first frame
+  it is shown asks if anything moved meanwhile. No text is drawn for a
+  refusal, and the code gives it no look of its own; a click still asks, and
+  the refusal's message reaches the status line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -3161,8 +3516,35 @@ same heights, scroll and colours.
   clip from a copy of the pressed item's takes (`clip.add {item}`); the item
   stays where it was, the new clip is selected, and the cell is outlined
   while the item is over it (an occupied one in `meter-clip`, refusing it).
-  A refused drop shows the error's message in the status line (a warped
-  take, `clip.unsupported`).
+  With other items selected, each makes a clip on the row at its offset
+  from the pressed item's, as a move offsets rows. Items on one track
+  take the scenes from the dropped one in time order (the first in time
+  the dropped scene, the next the scene after it, each track's run its
+  own; the pressed item need not be first). One `clip.add` each, in one
+  transaction (one undo step, "Clips from items"), ordered by row and
+  position, and every target cell is outlined while held, `focus` if it
+  would take its clip (empty, on a channel; the centre's stop square of an
+  empty cell counts as empty) and `meter-clip` if not
+  (`LauncherPane::showDrop`'s cells). Cells out of view (scrolled past
+  the pane's scene columns or rows) are counted as "+N" in a small tag at
+  the edge most of them lie beyond, on the pointer's row or column; the
+  pane does not scroll. The new clips are selected
+  (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
+  (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
+  them all with `clip.add`'s message. These refuse the drop before
+  anything is sent (`gui.launcher.drop`), and the cell under the pointer
+  is outlined in `meter-clip`:
+  - an offset that lands above the first row, below the last or on an
+    automation lane (naming the item);
+  - a track's run longer than the scenes from the dropped one ("Keys's 3
+    items need 3 scenes from Verse, and there are 2", the hint saying how
+    many to add); a drop creates no scenes;
+  - a selected item on a track without a row, a collapsed folder's child
+    or a hidden track ("<item> is on a hidden track"), as such an item
+    refuses a move.
+
+  A drop on any cell of a scene column, taken or not, goes to `clip.add`. A refused drop shows the
+  error's message in the status line (a warped take, `clip.unsupported`).
 - **What laying did with the keys.** A clip or scene laid on the timeline
   from the pane (a drag, Lay on timeline at playhead, Insert at playhead or
   at end) says in the status line, without a dialog, what its clips' keys
@@ -3281,12 +3663,48 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   commits it. Off while playing ends on the next bar, then commits; the
   cell is dashed meanwhile, and a second click ends it at once and commits.
   An agent's quantized end dashes the cell too, and a click then ends the
-  capture at once and commits it.
-- A master playrate: at a rate that moves the pitch nothing dims; keeping
-  the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
-  `launcher-refused-dark.png`), its ▶ click is refused with
-  `launch.playrate` through the launcher's error hook while a MIDI clip's
-  launches, and nothing dims again at rate 1.
+  capture at once and commits it. A take kept across Restart audio is
+  committed by the pane's next pass; after Stop audio, the pass with no
+  engine commits it and says so, and nothing is armed after Start; a device
+  restart (`DummyBackend::requestRestart`) commits it the same way, said as
+  the device's. A refused take kept across Stop audio shows kept (the
+  outline dot, the hint with the refusal and no hint text of the engine's);
+  a click while still locked is refused and arms nothing, and after
+  unlocking a click commits the kept take, then arms. A take whose commit
+  was undone is not shown kept; a click arms without committing it, and the
+  status line says once that it was replaced when the new capture hears a
+  frame (`test_launcher.cpp`). Quit commits a launcher take before the
+  usual question; a refused one is named on a clean project, Cancel keeps
+  it, and after unlocking Quit commits it; a take whose commit was undone is
+  not counted; a capture an agent starts, or a take refused, while Open's
+  dialog is open is asked about again before the project opens; an edit,
+  or an agent's capture, while the safe-load question is open asks the
+  discard decision again on the next pass with the overrides set back, and
+  then the plug-in question again unless it was answered "normally"; with
+  nothing to save the plug-in question comes back from the normal load and
+  the project never opens overridden (`test_app.cpp`, a rig that answers
+  modes and settled reports as the engine does). A refused take's words are
+  driven per launch: two locked items, a locked item on another launched
+  track, a loop window, and a locked item under a fade-out's tail, also
+  when the run's first launch is another clip (`test_launcher.cpp`).
+- The pane against the engine (step E): at every step the clips drawn dimmed
+  and the scenes whose ▶ is dimmed are exactly those
+  `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the
+  view holds. Stopped, running, and at a rate that moves the pitch nothing
+  dims; keeping the pitch, the take-envelope audio clip and its scene's ▶ dim
+  and the plain audio clip does not (golden `launcher-refused-dark.png`), its
+  ▶ click is refused with `launch.playrate` while a MIDI clip's launches; a
+  clip with new audio just added dims with `launch.clip`, and the scene
+  holding only it, until its audio is prepared and loaded; a frozen track's
+  clips dim with `track.frozen` from the edit on and a scene left with nothing
+  to play with `launch.scene`, whose dimmed ▶ click is refused with
+  `launch.scene`, and stopped the frozen clips stay dimmed while no scene
+  does. A clip whose audio did not fit dims alone with `launch.memory` while
+  its scene's ▶ stays bright and launches the rest; any code set on the view
+  dims the same way. A fader drag asks for the refusals once per frame that
+  moved the head while the pane is shown, never while it is hidden, and once
+  when it is shown again, each ask one `EngineApp::launchRefusals` call (a
+  count, not a time).
 - The clip menu's Take FX… handing the app the active take, and the FX
   window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and
@@ -3670,16 +4088,93 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **PipeWire graph** (Request, shared with other apps, or Force). A short note says what the choices mean on that system, and
   status lines show the running backend, rate, block, device period and
   output latency, a needed restart, or why the engine is not running.
-  Restart audio and Stop audio buttons follow. Each choice is saved, then a
+  Restart audio and Stop audio buttons follow. For the native device the
+  heading has **Refresh** (`AudioDeviceDialog::rescan`), which lists the
+  devices again: PortAudio sees a device plugged in since only when nothing
+  holds it, so a running engine is stopped (`engine.stop`), the devices
+  listed (`engine.devices`) and the engine started again (`engine.start`)
+  the way it last started: one that came up on the defaults because the
+  saved device was refused at app start falls back again, and runs on the
+  saved device once that is back;
+  audio stops for a moment, which its hover hint says. A stopped engine is
+  only listed for. While recording it is disabled, its hint "Refresh is off
+  while recording", and refused (`audio.recording`); likewise while a
+  launcher capture is armed or running, which the stop would cut short
+  ("Refresh is off while the launcher captures", `audio.capture`,
+  `gui::refreshHeldBy`). A kept take does not hold it: the stop keeps the
+  take, and the pane commits it. The hint is said in the status
+  line on hover. A refused start shows
+  why in the dialog's status and the status line, the
+  engine left stopped and the dialog open with the fresh list. Every error
+  the dialog shows (a refused start, a choice, Restart audio, Refresh, the
+  native device list) is in the dialog's own words, by the table of audio
+  device errors below: what went wrong, and what to do next where that alone
+  gives no step, chosen by the audio system and the error's code and path.
+  An error with no row shows the engine's message alone, as a sentence. A
+  command name or the engine's hint, written for command callers, never
+  shows; the full error with its hint goes to the log (`onLog`: stderr), once
+  until a start succeeds. The status lines wrap at plain spaces only; a number and
+  its unit are joined by a no-break space ("48000 Hz", "0.0 ms"). Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
-  stopped one stays stopped. The native input opens all its channels up to
+  stopped one stays stopped. A restart keeps the fallback the last start had:
+  after the app came up on the defaults, a choice the device refuses (the
+  saved device still missing, a rate it refuses) runs on the defaults again,
+  so audio is not stopped by a change of rate or buffer. The dialog's status
+  and the status line say it in the dialog's own words, as sentences, never
+  with a command name or an agent's hint: "The output device "Interface" was
+  not found. Audio is running on the default device. The choice is kept for
+  when it returns." (a case of the table says its cause there; any other
+  refusal: "The saved choice was refused: <message>."). The defaults leave the rate to the device: when
+  the engine runs at another rate than the one chosen, the note names the
+  engine's rate, "… on the default device at 48000 Hz.", and the chosen rate
+  stays saved for when the device returns. The rows show the saved choice;
+  the row a missing device's error points at reads "Interface (not found)"
+  ("System default (not found)" for a missing default; an ASIO driver's
+  input error marks the output row, its one device) until a start finds it.
+  With both named devices missing, the input is reported: it opens first. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the
   saved choice is kept. A failed start, or that fallback, opens the dialog,
   whose status says why (stderr is not seen from Finder or a desktop entry). engine.start receives the mapping
   (`engineStartArgs`): an explicit rate, or for the native device the output
   device's own rate; for JACK, `force_graph` only when forcing.
 
+**Audio device errors** (`errorWords`, audio_device.cpp). The words key on
+the engine's error code, which carries the cause (engine.md, the codes of a
+failed start), and the audio system; the error's path only says which device.
+No message text is compared. The audio systems are JACK (Linux, through
+PipeWire), Core Audio (macOS), WASAPI in shared mode and ASIO (Windows), and
+Dummy, which opens no device and has no rows; no ALSA and no WASAPI exclusive
+mode are built. "Choose another audio system" is said only when the Audio
+system menu lists another one with devices, never for Dummy alone. *X* is the
+device asked for: an ASIO driver is one device for input and output; an
+unnamed device is "the default input (output) device", "No ASIO device" on
+ASIO, never `""`. The row the error points at is marked: "(not found)" on
+the device's row (an ASIO driver's: the output row), "(no inputs)" on the
+input row.
 
+| Cause (code) | Audio system | The dialog says |
+|---|---|---|
+| `backend.unavailable` | JACK | The JACK library is missing or incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
+| `backend.driver` | JACK | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
+| `backend.open` | JACK | The engine's message (a port or the activation refused), then: Restart audio; if it fails again, restart PipeWire or the JACK server. |
+| `backend.driver` | ASIO | The ASIO driver did not start. If another app is using it, close that app; check that the interface is connected; then Restart audio. |
+| `backend.device.not_found` | Core Audio, WASAPI | The output (input) device "*X*" was not found, or: The default output (input) device was not found. Choose another device, or Refresh once it is connected. |
+| `backend.device.not_found` | ASIO | The device "*X*" was not found, or: No ASIO device was found. Choose another device, or Refresh once it is connected. |
+| `backend.device.no_inputs` | Core Audio, WASAPI, ASIO | The input device "*X*" has no inputs (ASIO: The device "*X*" has no inputs). Choose another input device, or None (playback only). |
+| `backend.device.ambiguous` | Core Audio, WASAPI, ASIO | More than one device is named "*X*". Rename one in the system's sound settings, or choose another device. |
+| `backend.device.channels` | Core Audio, WASAPI, ASIO | The input (output) device has too few channels. Choose another input device, or None (playback only) / Choose another output device. |
+| `backend.device.invalid` | WASAPI | The device could not be opened. Another app may be using it in exclusive mode, or it was disconnected: close that app or reconnect it, then Restart audio. |
+| `backend.device.invalid` | Core Audio, ASIO | The device could not be opened. It may have been disconnected: reconnect it or choose another device, then Restart audio. |
+| `backend.host_api.not_found` | Core Audio, WASAPI, ASIO | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
+| `backend.rate` | Core Audio, WASAPI | The device does not run at *N* Hz. Choose another sample rate, or the device's own rate. (No rate chosen: The device refused the sample rate.) |
+| `backend.rate` | ASIO | The device does not run at *N* Hz. Choose another sample rate, or check that the interface is connected. (No rate chosen: The device refused the sample rate. Check that the interface is connected.) An absent interface reads as a refused rate on ASIO. |
+| `backend.busy` | Core Audio | The device is in use. Another app has taken it over: close that app, then Restart audio. |
+| `backend.busy` | ASIO | The ASIO driver is already open in this app. Restart audio. |
+| anything else (`backend.open` off JACK, `backend.config`, `backend.unsupported`, `engine.*`, `backend.driver` off JACK and ASIO, `backend.busy` on WASAPI, which never reports it) | any | The message alone, as a sentence. |
+
+A test walks engine.start's registered `backend.*` codes: each has words for at
+least one audio system, or is listed as the message alone (`backend.config`,
+`backend.unsupported`), so a new or renamed code without words fails.
 
 ## 7. Visual identity
 
@@ -3889,7 +4384,8 @@ or pan gesture changes only that member. Group suspension disables links,
 including selection and matched-span item edits, but leaves VCA sound active.
 
 A group's optional VCA appears after audio strips and before pinned masters in
-the existing mixer. It has a name/color, member count/menu, envelope button,
+the existing mixer. It has a name/color, member count/menu ("1 member", "2
+members"), envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
 A right-click on its fader, mute or solo opens that control's parameter menu
 (§4.2): MIDI learn (§4.5, `vca.learn.set`, ADR-0058), the volume or mute lane,

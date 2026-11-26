@@ -3,15 +3,23 @@
 // Render settings, presets and the processing chain (ADR-0055, engine.md §3).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
 #include <supple/engine/app.h>
+#include <supple/json/write.h>
 #include <supple/model/schemas.h>
 
 #include "../../../tests/file_platform.h"
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+#include "native_files.h"
 #include "render_commands.h"
 
 using namespace supple;
@@ -456,4 +464,313 @@ TEST_CASE("a dry run checks the cover without reading it; a render reads it") {
     auto mix = r.run("render.mix", R"({"name":"c","end_beat":1,"outputs":[{"format":"flac"}],
         "metadata":{"cover":"cover.png"}})");
     CHECK(holds(mix["path"].asString(), "image/png"));
+}
+
+TEST_CASE(
+    "a broken user render default answers a code each render.* command declares (round "
+    "180 F4)") {
+    // resolveFor reads the default (readPreset), and json::parse answers
+    // json.parse.<what>: the json.parse.* family every render, the settings
+    // and the presets that read it declare. The reviewer's probe D.
+    Rig r;
+    r.song();
+    r.run("render.preset.save", R"({"default":true,"settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "default.json";
+    REQUIRE(fs::exists(file));
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": {\"tail_s\": 1,}";  // a truncated, hand-edited file
+    }
+    // render.regions resolves the same way (resolveFor), once it has regions.
+    for (const char* name : {"render.mix", "render.stems", "render.dry-run", "render.settings",
+                             "render.preset.list", "render.preset.load"}) {
+        INFO(name);
+        const std::string args =
+            std::string_view(name) == "render.preset.load" ? R"({"default": true})" : "{}";
+        const Error e = r.fails(name, args);
+        INFO("code " << e.code << " | hint " << e.hint);
+        CHECK(e.code.rfind("json.parse.", 0) == 0);
+        CHECK(e.path == "/args/default");  // read from the default (round 184 F2)
+        const cmd::CommandInfo* info = r.registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "json.parse.*"; }));
+    }
+    // A member the schema refuses keeps its place in the file, under /default.
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << R"({"schema": "supple.render-preset/1.0", "name": "default",)"
+            << R"( "settings": {"tail_s": "long"}})";
+    }
+    const Error member = r.fails("render.mix", "{}");
+    INFO("code " << member.code << " | path " << member.path);
+    CHECK(member.path.rfind("/args/default/settings/", 0) == 0);
+}
+
+TEST_CASE(
+    "a render default that cannot be read answers file.open at /default, told from a write "
+    "(round 184 F2)") {
+    // file.open is core-base's code for a file that cannot be opened, to
+    // read or to write. Only the path says the default was being read.
+    Rig r;
+    r.song();
+    r.run("render.preset.save", R"({"default":true,"settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "default.json";
+    REQUIRE(fs::exists(file));
+    {
+#ifdef _WIN32
+        // Another program holding the file open without sharing.
+        const test::ExclusiveHold held(file);
+        REQUIRE(held.held());
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a mode-000 file can still be read; skipped");
+            return;
+        }
+        fs::permissions(file, fs::perms::none);
+        struct Restore {
+            fs::path path;
+            ~Restore() {
+                std::error_code ec;
+                fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, ec);
+            }
+        } restore{file};
+#endif
+        for (const char* name : {"render.mix", "render.settings"}) {
+            INFO(name);
+            const Error e = r.fails(name, "{}");
+            INFO("code " << e.code << " | path " << e.path << " | hint " << e.hint);
+            CHECK(e.code == "file.open");
+            CHECK(e.path == "/args/default");
+            const cmd::CommandInfo* info = r.registry.find(name);
+            REQUIRE(info);
+            CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                              [](const cmd::ErrorSpec& s) { return s.code == "file.open"; }));
+        }
+    }
+    r.run("render.settings", "{}");  // readable again
+}
+
+TEST_CASE("a named preset that cannot be read answers its code at /name, as the default's") {
+    // render.preset.load {name} reads the file through findRenderPreset,
+    // which puts the reader's errors under /name (round 184 F2's follow-up).
+    Rig r;
+    r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "Archive.json";
+    REQUIRE(fs::exists(file));
+    const char* load = R"({"name":"Archive"})";
+    {
+#ifdef _WIN32
+        const test::ExclusiveHold held(file);
+        REQUIRE(held.held());
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a mode-000 file can still be read; skipped");
+            return;
+        }
+        fs::permissions(file, fs::perms::none);
+        struct Restore {
+            fs::path path;
+            ~Restore() {
+                std::error_code ec;
+                fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, ec);
+            }
+        } restore{file};
+#endif
+        const Error e = r.fails("render.preset.load", load);
+        INFO("code " << e.code << " | path " << e.path << " | hint " << e.hint);
+        CHECK(e.code == "file.open");
+        CHECK(e.path == "/args/name");
+        const cmd::CommandInfo* info = r.registry.find("render.preset.load");
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "file.open"; }));
+    }
+    r.run("render.preset.load", load);  // readable again
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": {\"tail_s\": 1,}";
+    }
+    const Error parse = r.fails("render.preset.load", load);
+    CHECK(parse.code.rfind("json.parse.", 0) == 0);
+    CHECK(parse.path == "/args/name");
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << R"({"schema": "supple.render-preset/1.0", "name": "Archive",)"
+            << R"( "settings": {"tail_s": "long"}})";
+    }
+    const Error member = r.fails("render.preset.load", load);
+    INFO("code " << member.code << " | path " << member.path);
+    CHECK(member.path.rfind("/args/name/settings/", 0) == 0);
+}
+
+TEST_CASE(
+    "render.preset.list reports a damaged preset with its read code; render.preset.delete "
+    "removes it unread (round 186 F1)") {
+    // A damaged user preset is listed as {name, damaged: {code, path}}, the
+    // path as render.preset.load {name} would answer it, so a client can show
+    // it and offer its removal. Deleting never reads the file.
+    Rig r;
+    r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    r.run("render.preset.save", R"({"name":"Good","settings":{"tail_s":2}})");
+    const fs::path file = r.dir.path / "render-presets" / "Archive.json";
+    REQUIRE(fs::exists(file));
+    const auto entry = [&](const std::string& name) {
+        auto list = r.run("render.preset.list", "{}");
+        for (const auto& p : list["presets"].asArray())
+            if (const json::Value* n = p.find("name"); n && n->asString() == name) return p;
+        return json::Value();
+    };
+    const auto damaged = [&](const std::string& expectPrefix, bool exact) {
+        json::Value archive = entry("Archive");
+        INFO(json::writeCanonical(archive));
+        REQUIRE(archive.isObject());
+        CHECK(archive.find("settings") == nullptr);
+        REQUIRE(archive.find("factory"));
+        CHECK_FALSE(archive["factory"].asBool());  // round 190 S1
+        REQUIRE(archive.find("damaged"));
+        json::Value& d = archive["damaged"];
+        const std::string code = d["code"].asString();
+        const std::string path = d["path"].asString();
+        if (exact)
+            CHECK(path == expectPrefix);
+        else
+            CHECK(path.rfind(expectPrefix, 0) == 0);
+        // The same code and path as loading it by name answers.
+        const Error load = r.fails("render.preset.load", R"({"name":"Archive"})");
+        CHECK(code == load.code);
+        CHECK(path == load.path);
+        // The others are listed as before.
+        CHECK(entry("Good")["settings"]["tail_s"] == 2.0);
+        return code;
+    };
+    const auto removed = [&] {
+        r.run("render.preset.delete", R"({"name":"Archive"})");
+        CHECK_FALSE(fs::exists(file));
+        CHECK(entry("Archive").isNull());
+        CHECK(r.fails("render.preset.delete", R"({"name":"Archive"})").code ==
+              "render.preset_unknown");
+        r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    };
+    // Not JSON.
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": {\"tail_s\": 1,}";
+    }
+    CHECK(damaged("/args/name", true).rfind("json.parse.", 0) == 0);
+    removed();
+    // A member the schema refuses: its place in the file.
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << R"({"schema": "supple.render-preset/1.0", "name": "Archive",)"
+            << R"( "settings": {"tail_s": "long"}})";
+    }
+    damaged("/args/name/settings/", false);
+    removed();
+    // A file that is not a preset: schema.* at the name (round 190 F2).
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "[]";
+    }
+    CHECK(damaged("/args/name", true).rfind("schema.", 0) == 0);
+    removed();
+    // A link to nothing: listed as damaged, and load answers the same, not
+    // preset_unknown; delete removes the link, not its target (round 190
+    // F1). Windows makes a symbolic link only with the privilege (or
+    // developer mode): without it this part is skipped there.
+    {
+        fs::remove(file);
+        const fs::path target = r.dir.path / "elsewhere" / "Gone.json";
+        std::error_code ec;
+        fs::create_symlink(target, file, ec);
+        if (ec) {
+            MESSAGE("no symbolic links here (" << ec.message() << "): the link case skipped");
+        } else {
+            CHECK(damaged("/args/name", true).rfind("file.", 0) == 0);
+            r.run("render.preset.delete", R"({"name":"Archive"})");
+            CHECK_FALSE(fs::exists(fs::symlink_status(file)));
+            CHECK(entry("Archive").isNull());
+            CHECK(r.fails("render.preset.load", R"({"name":"Archive"})").code ==
+                  "render.preset_unknown");
+            // A link whose target is there: delete removes the link only.
+            fs::create_directories(target.parent_path());
+            {
+                std::ofstream out(target);
+                out << "{}";
+            }
+            fs::create_symlink(target, file);
+            r.run("render.preset.delete", R"({"name":"Archive"})");
+            CHECK_FALSE(fs::exists(fs::symlink_status(file)));
+            CHECK(fs::exists(target));
+        }
+        r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    }
+    // A file that cannot be read.
+#ifdef _WIN32
+    {
+        const test::ExclusiveHold held(file);
+        REQUIRE(held.held());
+        CHECK(damaged("/args/name", true) == "file.open");
+        // Held open without sharing it cannot be removed either: a write
+        // failure, not a missing preset.
+        CHECK(r.fails("render.preset.delete", R"({"name":"Archive"})").code ==
+              "render.preset_write");
+    }
+    removed();
+#else
+    if (::geteuid() == 0) {
+        MESSAGE("running as root: a mode-000 file can still be read; skipped");
+        return;
+    }
+    fs::permissions(file, fs::perms::none);
+    struct Restore {
+        fs::path path;
+        ~Restore() {
+            std::error_code ec;
+            fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, ec);
+        }
+    } restore{file};
+    CHECK(damaged("/args/name", true) == "file.open");
+    removed();  // removed without being read
+#endif
+}
+
+TEST_CASE(
+    "a preset that cannot be removed answers render.preset_write, not preset_unknown (round "
+    "183 S2)") {
+    Rig r;
+    r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    const fs::path dir = r.dir.path / "render-presets";
+    const fs::path file = dir / "Archive.json";
+    REQUIRE(fs::exists(file));
+    {
+#ifdef _WIN32
+        // Windows removes a file from a read-only folder, but not one that
+        // is open without delete sharing.
+        std::ifstream held(file);
+        REQUIRE(held);
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a read-only folder does not stop a delete; skipped");
+            return;
+        }
+        const auto writable =
+            fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write;
+        fs::permissions(dir, writable, fs::perm_options::remove);
+#endif
+        const Error e = r.fails("render.preset.delete", R"({"name":"Archive"})");
+#ifndef _WIN32
+        fs::permissions(dir, fs::perms::owner_write, fs::perm_options::add);
+#endif
+        CHECK(e.code == "render.preset_write");
+        CHECK(e.path == "/args/name");
+        const cmd::CommandInfo* info = r.registry.find("render.preset.delete");
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "render.preset_write"; }));
+    }
+    REQUIRE(fs::exists(file));
+    r.run("render.preset.delete", R"({"name":"Archive"})");
+    CHECK_FALSE(fs::exists(file));
+    CHECK(r.fails("render.preset.delete", R"({"name":"Archive"})").code == "render.preset_unknown");
 }

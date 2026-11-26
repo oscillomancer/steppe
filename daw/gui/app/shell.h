@@ -5,11 +5,14 @@
 // selection (UiState), commands (the bus, Origin::Ui) and the meter feed.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "app_actions.h"
 #include "fx_attention.h"
@@ -42,6 +45,30 @@ std::string countsText(const model::Session& session);
 
 // The engine's launch state as the arrange view draws it (ADR-0097).
 views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state);
+// The engine app's answers (EngineApp::launchRefusals: what a press on each
+// clip and scene would be refused for now) as the views draw them, by code.
+views::LaunchRefusals launchRefusalViews(const engine::EngineApp::LaunchRefusals& refusals);
+// Keeps the arrange view's refusals current while its launcher pane is
+// shown: asks them again whenever EngineApp::launchRefusalGeneration moves
+// (a plan published, an edit, an engine started or stopped, a project
+// opened), and only then. While the pane is hidden nothing draws them and
+// nothing is asked (a fader drag edits every frame); the pane shown, the
+// first pass asks if anything moved meanwhile. Each frame.
+class RefusalWatch {
+  public:
+    // Where an ask goes: one EngineApp::launchRefusals call, every clip and
+    // scene in one pass (the default; a test wraps it to count the calls).
+    using Source = std::function<engine::EngineApp::LaunchRefusals(const engine::EngineApp& app)>;
+    explicit RefusalWatch(Source source = {}) : source_(std::move(source)) {}
+    void update(const engine::EngineApp& app, views::ArrangeView& view);
+    // How many times the refusals were asked for (tests pin the bound).
+    std::size_t asked() const { return asked_; }
+
+  private:
+    Source source_;
+    std::optional<std::uint64_t> seen_;  // nullopt: never asked yet
+    std::size_t asked_ = 0;
+};
 
 class Shell {
   public:
@@ -146,6 +173,7 @@ class Shell {
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)
     UiState& ui_;
     std::string status_, editStatus_;
+    RefusalWatch refusals_;  // the launcher's dimmed clips and scenes (step E)
     // The name and keys of the control the pointer rests on, which the
     // status line says in the note's place; a note set since the pointer
     // came to rest there shows instead (a press's error is not hidden).

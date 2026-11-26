@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <memory>
 
+#include "launch_capture.h"
 #include "safe_load.h"
 #include "supple/gui/process.h"
 #include "supple/product.h"
@@ -19,6 +20,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/item_gestures.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -198,6 +200,16 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
     });
     actions_.addUi("ui.file.save_as", "File: save as…",
                    [this] { chooseSave([this](auto paths) { saveAs(paths.front()); }); });
+    // Main's undo and redo steps kept in the file too (project.save
+    // {history: true}, ADR-0076): in place, or where the user chooses for a
+    // project that has no file yet. A refusal says why in the status line.
+    actions_.addUi("ui.file.save_history", "File: save with undo history", [this] {
+        if (app_.projectPath().empty())
+            return chooseSave([this](auto paths) { saveAs(paths.front(), true); });
+        json::Value args = json::Value::object();
+        args["history"] = true;
+        if (exec("project.save", std::move(args))) markSaved();
+    });
     actions_.addUi("ui.file.template.save", "File: save template…", [this] { openSaveTemplate(); });
     actions_.addUi("ui.file.template.load", "File: load template…", [this] { openTemplateList(); });
     actions_.addUi("ui.track.template.save", "Track: save as template…",
@@ -213,7 +225,8 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
 void FileActions::registerQuit(std::function<void()> quit, bool prompt) {
     actions_.addUi("ui.quit", "File: quit", [this, quit = std::move(quit), prompt] {
         // A popup only holds interactive quits that may need a discard decision.
-        const bool idle = !(app_.engine() && app_.engine()->recording()) && !dirty();
+        const bool idle = !(app_.engine() && app_.engine()->recording()) && !dirty() &&
+                          !(capture_ && (capture_->lit() || capture_->kept()));
         if (!prompt || idle || !root_.popupOpen()) confirmDiscard("Quit?", quit, prompt);
     });
 }
@@ -229,21 +242,26 @@ std::function<void(DialogLifetime::Paths)> FileActions::guardDialog(
     const auto generation = app_.projectGeneration();
     const auto version = app_.head().version;
     const auto branch = app_.versions().branch();
-    return dialogs_.guard(
-        post_, [this, generation, version, branch, opening, done = std::move(done)](auto paths) {
-            if (paths.empty()) return;
-            auto current = [this, generation] { return currentProject(generation); };
-            if (!current()) return;
-            auto complete = [current, done, paths = std::move(paths)] {
-                // A replacement can also happen while the renewed prompt is open.
-                if (current()) done(paths);
-            };
-            if (opening && (app_.head().version != version || app_.versions().branch() != branch ||
-                            (app_.engine() && app_.engine()->recording())))
-                confirmDiscard("Open another project?", std::move(complete));
-            else
-                complete();
-        });
+    // The launcher's take the first question finalized (or was told it
+    // would lose): a capture begun, or a take refused, while the dialog is
+    // open needs the question again (review round 170 F1).
+    const std::string take = opening ? keptTake() : std::string();
+    return dialogs_.guard(post_, [this, generation, version, branch, take, opening,
+                                  done = std::move(done)](auto paths) {
+        if (paths.empty()) return;
+        auto current = [this, generation] { return currentProject(generation); };
+        if (!current()) return;
+        auto complete = [current, done, paths = std::move(paths)] {
+            // A replacement can also happen while the renewed prompt is open.
+            if (current()) done(paths);
+        };
+        if (opening && (app_.head().version != version || app_.versions().branch() != branch ||
+                        (app_.engine() && app_.engine()->recording()) ||
+                        (capture_ && (capture_->lit() || keptTake() != take))))
+            confirmDiscard("Open another project?", std::move(complete));
+        else
+            complete();
+    });
 }
 
 Result<json::Value> FileActions::exec(const std::string& command, json::Value args) {
@@ -464,35 +482,38 @@ void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint6
         json::Value check = json::Value::object();
         check["autosave"] = true;
         if (!autosave.empty()) check["autosave_file"] = autosave;
-        checked(std::move(check), [this, autosave, same](const json::Value& found) {
-            if (!same()) {
-                showError(
-                    "Another project was opened while the question was open; nothing was "
-                    "loaded.");
-                return false;
-            }
-            json::Value args = json::Value::object();
-            args["autosave"] = true;
-            // The file the check read is the file recovered.
-            if (!autosave.empty())
-                args["autosave_file"] = autosave;
-            else if (const json::Value* read = found.find("autosave"); read && read->isString())
-                args["autosave_file"] = read->asString();
-            auto r = exec("project.recover", std::move(args));
-            if (!r) return false;
-            ui_.selectedTracks.clear();
-            ui_.selectedItems.clear();
-            // Not marked saved: the file on disk is still the older version.
-            std::string text =
-                "Opened the newest autosave in place of the saved file. It is not saved yet: "
-                "save it to keep it.";
-            if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
-                for (const auto& w : warnings->asArray())
-                    if (const json::Value* m = w.find("message"); m && m->isString())
-                        text += "\n" + m->asString();
-            showNotice("file.recovered", "Recovered the autosave", text);
-            return true;
-        });
+        checked(
+            "Open the newer autosave?", std::move(check),
+            [this, autosave, same](const json::Value& found) {
+                if (!same()) {
+                    showError(
+                        "Another project was opened while the question was open; nothing was "
+                        "loaded.");
+                    return false;
+                }
+                json::Value args = json::Value::object();
+                args["autosave"] = true;
+                // The file the check read is the file recovered.
+                if (!autosave.empty())
+                    args["autosave_file"] = autosave;
+                else if (const json::Value* read = found.find("autosave"); read && read->isString())
+                    args["autosave_file"] = read->asString();
+                auto r = exec("project.recover", std::move(args));
+                if (!r) return false;
+                ui_.selectedTracks.clear();
+                ui_.selectedItems.clear();
+                // Not marked saved: the file on disk is still the older version.
+                std::string text =
+                    "Opened the newest autosave in place of the saved file. It is not saved yet: "
+                    "save it to keep it.";
+                if (const json::Value* warnings = r->find("warnings");
+                    warnings && warnings->isArray())
+                    for (const auto& w : warnings->asArray())
+                        if (const json::Value* m = w.find("message"); m && m->isString())
+                            text += "\n" + m->asString();
+                showNotice("file.recovered", "Recovered the autosave", text);
+                return true;
+            });
     });
 }
 
@@ -513,33 +534,35 @@ void FileActions::recoverSession(const std::string& session, const std::string& 
     confirmDiscard("Recover \"" + title + "\"?", [this, session, title] {
         json::Value check = json::Value::object();
         check["session"] = session;
-        checked(std::move(check), [this, session, title](const json::Value&) {
-            json::Value args = json::Value::object();
-            args["session"] = session;
-            auto r = exec("project.recover", std::move(args));
-            if (!r) return false;
-            ui_.selectedTracks.clear();
-            ui_.selectedItems.clear();
-            // Not marked saved: it is unsaved until the user saves it.
-            std::string text;
-            if (const json::Value* a = r->find("autosave"); a && a->isString())
-                text = "Opened from its newest readable autosave.";
-            else
-                text = "It had no autosave: a new project holds what could be put back.";
-            if (const json::Value* back = r->find("recovered");
-                back && back->isArray() && !back->asArray().empty())
-                text += " " +
-                        plural(static_cast<std::int64_t>(back->asArray().size()), "recording was",
-                               "recordings were") +
-                        " put back (Undo removes them).";
-            text += " It is not saved yet: save it to keep it.";
-            if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
-                for (const auto& w : warnings->asArray())
-                    if (const json::Value* m = w.find("message"); m && m->isString())
-                        text += "\n" + m->asString();
-            showNotice("file.recovered", "Recovered \"" + title + "\"", text);
-            return true;
-        });
+        checked("Recover \"" + title + "\"?", std::move(check),
+                [this, session, title](const json::Value&) {
+                    json::Value args = json::Value::object();
+                    args["session"] = session;
+                    auto r = exec("project.recover", std::move(args));
+                    if (!r) return false;
+                    ui_.selectedTracks.clear();
+                    ui_.selectedItems.clear();
+                    // Not marked saved: it is unsaved until the user saves it.
+                    std::string text;
+                    if (const json::Value* a = r->find("autosave"); a && a->isString())
+                        text = "Opened from its newest readable autosave.";
+                    else
+                        text = "It had no autosave: a new project holds what could be put back.";
+                    if (const json::Value* back = r->find("recovered");
+                        back && back->isArray() && !back->asArray().empty())
+                        text += " " +
+                                plural(static_cast<std::int64_t>(back->asArray().size()),
+                                       "recording was", "recordings were") +
+                                " put back (Undo removes them).";
+                    text += " It is not saved yet: save it to keep it.";
+                    if (const json::Value* warnings = r->find("warnings");
+                        warnings && warnings->isArray())
+                        for (const auto& w : warnings->asArray())
+                            if (const json::Value* m = w.find("message"); m && m->isString())
+                                text += "\n" + m->asString();
+                    showNotice("file.recovered", "Recovered \"" + title + "\"", text);
+                    return true;
+                });
     });
 }
 
@@ -615,18 +638,48 @@ void FileActions::showError(const std::string& message) {
     if (actions_.onError) actions_.onError(message);
 }
 
-void FileActions::checked(json::Value args, std::function<bool(const json::Value&)> then) {
+void FileActions::checked(const std::string& what, json::Value args,
+                          std::function<bool(const json::Value&)> then) {
     if (!safeLoad_) {
         (void)then(json::Value::object());
         return;
     }
-    safeLoad_->check(std::move(args), std::move(then));
+    // The safe-load question stays open as long as the person leaves it: what
+    // the discard decision covered can change meanwhile (an agent's edit or
+    // capture, a take refused). Then the decision is asked again, which
+    // finalizes, instead of loading (review round 171 F1). The load that did
+    // not happen sets back the overrides its answers made (SafeLoad::finish's
+    // undo, once this returns false), so the new decision is asked on a later
+    // pass, never from inside the answer: a load run now would see the
+    // plug-in still overridden, ask nothing, open, and then have its choice
+    // reverted under it (review round 173 F1). A "normally" answer has
+    // settled the plug-in's reports already, so only the others are asked
+    // again.
+    const auto generation = app_.projectGeneration();
+    const auto version = app_.head().version;
+    const auto branch = app_.versions().branch();
+    const std::string take = keptTake();
+    json::Value again = args;
+    safeLoad_->check(std::move(args), [this, what, generation, version, branch, take,
+                                       again = std::move(again),
+                                       then = std::move(then)](const json::Value& found) {
+        if (!currentProject(generation)) return false;
+        const bool changed = app_.head().version != version || app_.versions().branch() != branch ||
+                             (app_.engine() && app_.engine()->recording()) ||
+                             (capture_ && (capture_->lit() || keptTake() != take));
+        if (!changed) return then(found);
+        post_([this, generation, what, again, then] {
+            if (!currentProject(generation)) return;
+            confirmDiscard(what, [this, what, again, then] { checked(what, again, then); });
+        });
+        return false;
+    });
 }
 
 void FileActions::openPath(const std::filesystem::path& path) {
     json::Value check = json::Value::object();
     check["path"] = path.string();
-    checked(std::move(check), [this, path](const json::Value& found) {
+    checked("Open another project?", std::move(check), [this, path](const json::Value& found) {
         json::Value args = json::Value::object();
         args["path"] = path.string();
         // The bytes the check read are the bytes opened.
@@ -662,7 +715,7 @@ std::filesystem::path projectFolderPath(std::filesystem::path chosen,
     return base / stem / chosen.filename();
 }
 
-void FileActions::saveAs(const std::filesystem::path& path) {
+void FileActions::saveAs(const std::filesystem::path& path, bool history) {
     const std::filesystem::path p = projectFolderPath(path, app_.projectPath());
     std::error_code ec;
     if (std::filesystem::exists(p, ec) && p != app_.projectPath()) {
@@ -671,6 +724,7 @@ void FileActions::saveAs(const std::filesystem::path& path) {
     }
     json::Value args = json::Value::object();
     args["path"] = p.string();
+    if (history) args["history"] = true;
     if (exec("project.save", std::move(args))) markSaved();
 }
 
@@ -720,7 +774,8 @@ void FileActions::exportItem(model::Id item, std::function<void(const std::strin
     const model::Take* take = it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
     if (!take || !take->source) return status("Export: the item has no material");
     const bool midi = take->source->kind == model::Kind::Midi;
-    std::string name = take->name.empty() ? item.str() : take->name;
+    // The file is named as the item is referred to (views::objectName).
+    std::string name = take->name.empty() ? views::objectName(s, item) : take->name;
     for (char& c : name)
         if (std::string_view("/\\:*?\"<>|").find(c) != std::string_view::npos) c = '-';
     std::filesystem::path folder = app_.projectPath().empty() ? mediaHome() : app_.projectDir();
@@ -887,7 +942,7 @@ void FileActions::loadTemplate(const std::string& name) {
     json::Value check = json::Value::object();
     check["path"] = where;
     check["template"] = true;
-    checked(std::move(check), load);
+    checked("Start a new project from \"" + name + "\"?", std::move(check), load);
 }
 
 Status FileActions::import(const std::vector<std::filesystem::path>& files) {
@@ -926,15 +981,30 @@ struct FileActions::DiscardRequest {
     std::function<void()> then;
     std::uint64_t generation, version;
     std::string branch;
+    std::string take;  // the kept take it was asked about (CaptureControl::takeKey)
 };
+
+bool FileActions::finalize() {
+    // Recording is not a version until Stop commits its takes, nor a launcher
+    // capture until its commit (one undo step, as the toggle's off). Decide
+    // whether anything would be lost only after them; a refused commit keeps
+    // the take, which the question then names.
+    if (app_.engine() && app_.engine()->recording() &&
+        !exec("transport.stop", json::Value::object()))
+        return false;
+    if (capture_) (void)capture_->finalize();
+    return true;
+}
+
+std::string FileActions::keptTake() { return capture_ ? capture_->takeKey() : std::string(); }
 
 bool FileActions::revalidateDiscard(const std::shared_ptr<DiscardRequest>& request) {
     // A stale request must not even stop recording in the replacement project.
     if (!currentProject(request->generation)) return false;
     const bool recording = app_.engine() && app_.engine()->recording();
-    if (recording && !exec("transport.stop", json::Value::object())) return false;
+    if (!finalize()) return false;
     if (recording || app_.head().version != request->version ||
-        app_.versions().branch() != request->branch) {
+        app_.versions().branch() != request->branch || keptTake() != request->take) {
         // The old decision did not cover these takes/edits. Ask even if an
         // intervening save made this revision clean, or capture was empty.
         showDiscard(request->what, request->then);
@@ -944,63 +1014,70 @@ bool FileActions::revalidateDiscard(const std::shared_ptr<DiscardRequest>& reque
 }
 
 void FileActions::confirmDiscard(const std::string& what, std::function<void()> then, bool prompt) {
-    // Recording is not a version until Stop commits its takes. Decide whether
-    // anything would be lost only after the same command as the Stop button.
-    if (app_.engine() && app_.engine()->recording() &&
-        !exec("transport.stop", json::Value::object()))
-        return;
-    if (!prompt || !dirty()) return then();
+    if (!finalize()) return;
+    if (!prompt || (!dirty() && keptTake().empty())) return then();
     showDiscard(what, std::move(then));
 }
 
 void FileActions::showDiscard(const std::string& what, std::function<void()> then) {
     auto request = std::make_shared<DiscardRequest>(
         DiscardRequest{what, std::move(then), app_.projectGeneration(), app_.head().version,
-                       app_.versions().branch()});
+                       app_.versions().branch(), keptTake()});
+    // A take whose commit was refused: what is lost, and that Cancel keeps it.
+    // With nothing else unsaved there is nothing to save: the question is
+    // only whether to go on and lose it, asked with the action's own verb
+    // ("Quit", "Open", "Start", "Recover"), Cancel focused.
+    const bool unsaved = dirty();
+    const std::string lost = capture_ ? capture_->lostLine(unsaved) : std::string();
+    std::string text = unsaved ? "The project has unsaved changes." : "";
+    if (!lost.empty()) text += (text.empty() ? "" : " ") + lost;
+    const std::string verb = what.substr(0, what.find_first_of(" ?"));
     auto form = std::make_unique<ui::Node>("file.confirm");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(420);
-    form->layout.height = ui::SizeRule::fixed(130);
+    form->layout.height = ui::SizeRule::fixed(lost.empty() ? 130 : 160);
     form->layout.padding = ui::Insets::all(14);
     form->layout.gap = 10;
     form->emplace<ui::Label>("file.confirm.title", what, ui::Font::UiBold, "body");
-    form->emplace<ui::TextBlock>("file.confirm.text", "The project has unsaved changes.",
-                                 ui::Font::Ui, "small", "ink-quiet");
+    form->emplace<ui::TextBlock>("file.confirm.text", text, ui::Font::Ui, "small", "ink-quiet");
     auto& row = form->emplace<ui::Node>("file.confirm.buttons");
     row.layout.dir = ui::Layout::Dir::Row;
     row.layout.height = ui::SizeRule::fixed(28);
     row.layout.gap = 8;
     // Each button copies what it needs first: closePopup destroys the button.
-    row.emplace<ui::Button>("file.confirm.save", "Save", [this, request] {
-        auto keep = request;
-        root_.closePopup();
-        if (!revalidateDiscard(keep)) return;
-        if (app_.projectPath().empty()) {
-            // Save as first; continue after the dialog answers.
-            chooseSave([this, keep](auto paths) {
-                if (!revalidateDiscard(keep)) return;
-                saveAs(paths.front());
-                if (!dirty() && revalidateDiscard(keep)) keep->then();
-            });
-            return;
-        }
-        if (exec("project.save", json::Value::object())) {
-            markSaved();
-            if (revalidateDiscard(keep)) keep->then();
-        }
-    });
-    row.emplace<ui::Button>("file.confirm.discard", "Don't save", [this, request] {
-        auto keep = request;
-        root_.closePopup();
-        if (!revalidateDiscard(keep)) return;
-        keep->then();
-    });
-    row.emplace<ui::Button>("file.confirm.cancel", "Cancel", [this, request] {
+    if (unsaved)
+        row.emplace<ui::Button>("file.confirm.save", "Save", [this, request] {
+            auto keep = request;
+            root_.closePopup();
+            if (!revalidateDiscard(keep)) return;
+            if (app_.projectPath().empty()) {
+                // Save as first; continue after the dialog answers.
+                chooseSave([this, keep](auto paths) {
+                    if (!revalidateDiscard(keep)) return;
+                    saveAs(paths.front());
+                    if (!dirty() && revalidateDiscard(keep)) keep->then();
+                });
+                return;
+            }
+            if (exec("project.save", json::Value::object())) {
+                markSaved();
+                if (revalidateDiscard(keep)) keep->then();
+            }
+        });
+    row.emplace<ui::Button>("file.confirm.discard", unsaved ? std::string("Don't save") : verb,
+                            [this, request] {
+                                auto keep = request;
+                                root_.closePopup();
+                                if (!revalidateDiscard(keep)) return;
+                                keep->then();
+                            });
+    ui::Node* cancel = &row.emplace<ui::Button>("file.confirm.cancel", "Cancel", [this, request] {
         const auto generation = request->generation;
         root_.closePopup();
         (void)currentProject(generation);
     });
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
+    if (!unsaved) root_.focus(cancel);
 }
 
 }  // namespace supple::gui

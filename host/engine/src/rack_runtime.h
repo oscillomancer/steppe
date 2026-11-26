@@ -59,9 +59,25 @@ using engine::pluginModuleType;
 
 // rack.probe's listener (never saved, in no catalog but a probe's): records
 // the first kProbeChannels channels (voices) of its input, `seconds` (its
-// knob) long.
+// knob) long, in device time: rack.probe's window of up to 10 song seconds lasts
+// that over the lowest master playrate (0.25) at most, and a little more.
 inline constexpr std::string_view kProbeModule = "com.suppleaudio.rack.probe";
 inline constexpr int kProbeChannels = 4;
+inline constexpr double kProbeMaxSeconds = 41;
+// What rack.probe's listeners may hold in all: each of up to 8 ports reserves kProbeChannels
+// float channels of the device seconds it needs. 512 MiB is a little more than the most a probe
+// held before the playrate fix, 8 ports of 10.01 s at the schema's top rate of 384 kHz (492 MB),
+// so every probe that worked then still works; a window that needs more than this (a low master
+// playrate, many ports and a high project rate) is refused (rack.probe_size).
+inline constexpr std::size_t kProbeBudgetBytes = std::size_t{512} << 20;
+// The frames one listener reserves for `deviceSeconds`, with the rack grid's slack: what
+// RackPool::module reserves and what the budget counts, written once.
+inline std::size_t probeListenerFrames(double deviceSeconds, double sampleRate) {
+    return static_cast<std::size_t>(std::ceil(deviceSeconds * sampleRate)) + rack::kGrid;
+}
+inline std::size_t probeListenerBytes(std::size_t ports, double deviceSeconds, double sampleRate) {
+    return ports * kProbeChannels * sizeof(float) * probeListenerFrames(deviceSeconds, sampleRate);
+}
 std::shared_ptr<const rack::ModuleType> probeModuleType();
 class ProbeModule final : public rack::HostModule {
   public:

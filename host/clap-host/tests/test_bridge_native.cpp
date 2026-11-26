@@ -359,20 +359,26 @@ TEST_CASE("a bridged instance's own call deadline outlasts a stall the process-w
         std::condition_variable answered;
         bool done = false;
         REQUIRE(supple::test::pauseProcess(pid));
-        // Resumed after 1.5 s, unless the call came back first: then the
-        // bridge was killed, and its pid is not signalled again.
-        std::thread resume([&] {
-            std::unique_lock held(lock);
-            if (!answered.wait_for(held, std::chrono::milliseconds(1500), [&] { return done; }))
-                supple::test::resumeProcess(pid);
-        });
+        // Where the instance's own deadline outlasts the stall, the bridge is
+        // resumed after 1.5 s, unless the call came back first (then it was
+        // killed, and its pid is not signalled again). Where the process-wide
+        // 500 ms decides, nothing resumes it: a timer started here could
+        // resume it inside the 500 ms if this thread were held for a second
+        // before the call.
+        std::thread resume;
+        if (own)
+            resume = std::thread([&] {
+                std::unique_lock held(lock);
+                if (!answered.wait_for(held, std::chrono::milliseconds(1500), [&] { return done; }))
+                    supple::test::resumeProcess(pid);
+            });
         const bool processed = c.process(audio.block());
         {
             std::lock_guard held(lock);
             done = true;
         }
         answered.notify_all();
-        resume.join();
+        if (resume.joinable()) resume.join();
         REQUIRE(processed);
         CHECK(c.failed() == !own);
         if (own) {

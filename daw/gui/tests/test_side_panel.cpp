@@ -316,7 +316,7 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     sel.selectedItems = {empty};
     subject = gui::inspectorSubject(s, sel, theme);
     CHECK(subject.kind == Kind::Item);
-    CHECK(subject.title == empty);  // no take name and no file: its id
+    CHECK(subject.title == "Bass's item at bar 1");  // no take name and no file
     CHECK(subject.detail == "Empty item on Bass");
     REQUIRE(subject.color);
     CHECK(ui::packRgba(*subject.color) == ui::packRgba(theme.color("track-orange")));

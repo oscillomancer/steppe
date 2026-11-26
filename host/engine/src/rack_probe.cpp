@@ -7,6 +7,7 @@
 // speed of a CV.
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 
 #include "command_validation.h"
@@ -14,6 +15,7 @@
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
 #include "supple/harmony/harmony.h"
+#include "supple/model/follow.h"
 #include "supple/model/schemas.h"
 
 namespace supple::engine {
@@ -74,7 +76,50 @@ struct ProbeArgs {
 
 double rounded(double x, double step = 1e-4) { return std::round(x / step) * step; }
 
-std::string noteName(int midi) { return harmony::spell(midi); }
+// The song position of a running frame a listener recorded, from the rows a render with
+// `OfflineSettings::songClock` set wrote: linear between block starts, and the last block's
+// slope after the last row. Under a master playrate a frame is device time, and the song
+// position at it is the start plus the integral of the rate, not the start plus the frame over
+// the sample rate; at unity the two are the same. Empty rows: the unity formula.
+double songSecondsAt(const std::vector<std::pair<std::int64_t, double>>& rows, double frame,
+                     double startSeconds, double rate) {
+    if (rows.empty()) return startSeconds + frame / rate;
+    auto next = std::upper_bound(rows.begin(), rows.end(), frame,
+                                 [](double f, const auto& row) { return f < double(row.first); });
+    if (next == rows.begin())
+        return rows.front().second + (frame - double(rows.front().first)) / rate;
+    const auto& at = *(next - 1);
+    double slope = 1.0 / rate;  // song seconds per frame
+    if (next != rows.end())
+        slope = (next->second - at.second) / double(next->first - at.first);
+    else if (next - 1 != rows.begin()) {
+        const auto& before = *(next - 2);
+        slope = (at.second - before.second) / double(at.first - before.first);
+    }
+    return at.second + (frame - double(at.first)) * slope;
+}
+
+// The key and chord that hold at a running frame of the probe's render (from_beat's window), as
+// the session's context track has them (ADR-0100). Everything it reads is the project's: the
+// context points, the tempo map, the master playrate and from_beat, so the same project and
+// arguments name the same notes.
+using PlaceAt = std::function<harmony::Place(double frame)>;
+
+// The lowest master playrate the probe's render plays at, never above 1 (above it the render is
+// shorter): the project's rate, or the lowest point of the active rate envelope, as
+// checkRenderRange reads it. A window of `seconds` song seconds lasts `seconds` over this in
+// device time, which is what the listener must be able to hold.
+double lowestPlayrate(const model::Session& s) {
+    double lowest = s.project->playrate.rate;
+    if (const auto envelope = model::activePlayrateEnvelope(s)) {
+        lowest = model::kMaxPlayrate;
+        for (const auto& point : model::effectivePoints(s, *envelope))
+            lowest = std::min(lowest, point.value);
+    }
+    return std::clamp(lowest, model::kMinPlayrate, 1.0);
+}
+
+std::string noteName(int midi, const harmony::Place& place) { return harmony::spell(midi, place); }
 
 std::string fixed(double x, int digits) {
     char buf[48];
@@ -87,13 +132,15 @@ std::string decibels(double x) {
 }
 
 // The fundamental of a periodic stretch (YIN's cumulative mean normalised
-// difference), 20 Hz .. 5 kHz; none when the signal is not periodic.
-std::optional<double> fundamental(const std::vector<double>& x, double rate) {
+// difference), 20 Hz .. 5 kHz; none when the signal is not periodic. `centre` gets the
+// middle sample of the stretch it read.
+std::optional<double> fundamental(const std::vector<double>& x, double rate, std::size_t& centre) {
     const auto maxLag = static_cast<std::size_t>(rate / 20.0);
     const auto minLag = static_cast<std::size_t>(std::max(2.0, rate / 5000.0));
     const std::size_t window = 2048;
     if (x.size() < window + maxLag + 1) return std::nullopt;
     const std::size_t from = (x.size() - window - maxLag) / 2;  // the middle
+    centre = from + window / 2;
     std::vector<double> d(maxLag + 1, 0.0);
     for (std::size_t lag = 1; lag <= maxLag; ++lag) {
         double sum = 0;
@@ -127,7 +174,7 @@ std::optional<double> fundamental(const std::vector<double>& x, double rate) {
 // What the port carried. `voices`: its first channels (at least one).
 json::Value describe(const std::vector<std::vector<double>>& voices, int width,
                      const sd::PortModel& port, const std::string& end, double rate, double seconds,
-                     double bpm) {
+                     double bpm, const PlaceAt& placeAt) {
     json::Value out = json::Value::object();
     out["port"] = end;
     static const char* const kinds[] = {"audio", "pitch", "gate", "cv", "unipolar", "phase"};
@@ -200,6 +247,7 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
     } else if (port.signal == sd::PortModel::Signal::Pitch) {
         // The notes the voices move to, in time order (1 = an octave, 0 = C4).
         std::vector<int> seen;
+        std::vector<std::size_t> seenAt;  // the frame each entry of `seen` was added at
         std::set<int> distinct;
         std::vector<int> last(voices.size(), INT32_MIN);
         for (std::size_t i = 0; i < frames; ++i)
@@ -208,14 +256,19 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
                 if (note == last[c]) continue;
                 last[c] = note;
                 if (!distinct.count(note) || (!seen.empty() && seen.back() != note))
-                    if (seen.size() < 64) seen.push_back(note);
+                    if (seen.size() < 64) {
+                        seen.push_back(note);
+                        seenAt.push_back(i);
+                    }
                 distinct.insert(note);
             }
         json::Value notes = json::Value::array();
         std::string list;
         for (std::size_t k = 0; k < seen.size(); ++k) {
-            notes.push_back(noteName(seen[k]));
-            if (k < 16) list += (list.empty() ? "" : " ") + noteName(seen[k]);
+            // Each entry is named by the key and chord holding when it was reached.
+            const std::string name = noteName(seen[k], placeAt(static_cast<double>(seenAt[k])));
+            notes.push_back(name);
+            if (k < 16) list += (list.empty() ? "" : " ") + name;
         }
         out["notes"] = std::move(notes);
         text = "pitch, " + std::to_string(distinct.size()) + " distinct note" +
@@ -226,15 +279,18 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
         out["peak_db"] = rounded(20 * std::log10(peak), 0.1);
         out["rms_db"] = rounded(rms > 1e-9 ? 20 * std::log10(rms) : -200, 0.1);
         text = "audio, peak " + decibels(peak) + ", rms " + decibels(rms);
-        if (auto f = fundamental(x, rate)) {
+        std::size_t centre = 0;
+        if (auto f = fundamental(x, rate, centre)) {
+            // Named where it was measured: the middle of the stretch the pitch was read from.
+            const auto place = placeAt(static_cast<double>(centre));
             const double midi = 69 + 12 * std::log2(*f / 440.0);
             const int note = static_cast<int>(std::lround(midi));
             json::Value p = json::Value::object();
             p["hz"] = rounded(*f, 0.01);
-            p["note"] = noteName(note);
+            p["note"] = noteName(note, place);
             p["cents"] = rounded(100 * (midi - note), 1);
             out["pitch"] = std::move(p);
-            text += ", " + fixed(*f, 1) + " Hz (" + noteName(note) + " " +
+            text += ", " + fixed(*f, 1) + " Hz (" + noteName(note, place) + " " +
                     (midi >= note ? "+" : "") + fixed(100 * (midi - note), 0) + " ct)";
         } else {
             text += ", not periodic";
@@ -338,8 +394,12 @@ void registerRackProbe(cmd::Registry& registry) {
         "(a poly cable's first 4 voices summed); gates counted over the voices, per beat, "
         "and how long any is high; the notes the voices' pitches visit; a CV's range and "
         "speed (voice 1). notes: notation (as midi.write takes it) the rack's "
-        "Notes modules play from from_beat, besides what their tracks hold. Nothing is "
-        "changed; playback is not disturbed.";
+        "Notes modules play from from_beat, besides what their tracks hold. A low master "
+        "playrate lengthens what the listeners hold (seconds over the rate), and one that "
+        "would need more than 512 MiB in all is refused: rack.probe_size. Note names "
+        "follow the key and chord of the context track at the beat each note is heard "
+        "(G# or Ab), the default names with none. Nothing is changed; playback is not "
+        "disturbed.";
     c.tags = {"rack", "modular", "analysis"};
     c.args = schema::object<ProbeArgs>("rack_probe_args")
                  .field("rack", &ProbeArgs::rack,
@@ -355,7 +415,9 @@ void registerRackProbe(cmd::Registry& registry) {
                  .build();
     c.result = schema::any();
     c.errors = {{"rack.unknown", "no such rack", "rack.list"},
-                {"rack.port", "not an output of a module in the rack", "rack.get lists them"}};
+                {"rack.port", "not an output of a module in the rack", "rack.get lists them"},
+                {"rack.probe_size", "the listeners would hold more than 512 MiB",
+                 "shorten seconds or probe fewer ports"}};
     c.examples = {{"Listen to Notes' gate and the VCA while a chord plays",
                    j(R"({"rack": "rk_1", "ports": ["mo_2.gate", "mo_3.out"], "seconds": 1,
                "notes": "voice v; 1: [C4 E4 G4]:h r:h"})"),
@@ -367,6 +429,20 @@ void registerRackProbe(cmd::Registry& registry) {
         if (!rack || !s.racks.contains(*rack))
             return Error("rack.unknown", "no rack " + a.rack, "/rack", "rack.list");
         const double seconds = a.seconds.value_or(2.0), fromBeat = a.fromBeat.value_or(0.0);
+        // The listeners hold the render in device time: seconds over the lowest rate.
+        const double deviceSeconds = seconds / lowestPlayrate(s) + 0.01;
+        const std::size_t bytes =
+            detail::probeListenerBytes(a.ports.size(), deviceSeconds, s.project->sampleRate);
+        if (bytes > detail::kProbeBudgetBytes)
+            return Error("rack.probe_size",
+                         "this probe's listeners would hold " + std::to_string(bytes >> 20) +
+                             " MiB (" + std::to_string(a.ports.size()) + " ports, " +
+                             fixed(deviceSeconds, 1) + " s of device time at " +
+                             fixed(s.project->sampleRate, 0) + " Hz); the limit is " +
+                             std::to_string(detail::kProbeBudgetBytes >> 20) + " MiB",
+                         "/seconds",
+                         "shorten seconds or probe fewer ports; a low master playrate "
+                         "lengthens what the listeners hold (seconds over the rate)");
         model::EditTxn t(s, s.version + 1);
         std::vector<std::pair<Id, const sd::PortModel*>> probes;
         for (std::size_t k = 0; k < a.ports.size(); ++k) {
@@ -378,7 +454,7 @@ void registerRackProbe(cmd::Registry& registry) {
             probe.type = std::string(detail::kProbeModule);
             probe.version = "1.0.0";
             probe.params = json::Value::object();
-            probe.params["seconds"] = seconds + 0.01;
+            probe.params["seconds"] = deviceSeconds;
             const Id id = t.create(probe);
             t.create(model::Cable{end->first, {id, "in"}, std::nullopt, ""});
             probes.emplace_back(id, end->second);
@@ -396,10 +472,19 @@ void registerRackProbe(cmd::Registry& registry) {
         settings.endSeconds = settings.startSeconds + seconds;
         settings.projectDir = e.projectDir();
         settings.modules = std::move(catalog);
+        std::vector<std::pair<std::int64_t, double>> clock;  // frame -> song seconds
+        settings.songClock = &clock;
         auto rendered = renderOffline(*copy, pool, settings);
         if (!rendered) return std::move(rendered).error();
         const double rate = copy->project->sampleRate;
         const double bpm = copy->timeMap->bpmAt(fromBeat);
+        // Note names follow the context track at the beat each note is heard at, in the copy
+        // (a probe adds modules, cables and notes items, never context points).
+        const PlaceAt placeAt = [&copy, &clock, start = settings.startSeconds,
+                                 rate = copy->project->sampleRate](double frame) {
+            return model::songNamePlace(
+                *copy, copy->timeMap->beatAt(songSecondsAt(clock, frame, start, rate)));
+        };
         json::Value out = json::Value::object();
         out["seconds"] = seconds;
         out["from_beat"] = fromBeat;
@@ -414,8 +499,8 @@ void registerRackProbe(cmd::Registry& registry) {
                 const auto& v = probe->recorded[static_cast<std::size_t>(ch)];
                 voices.emplace_back(v.begin(), v.end());
             }
-            ports.push_back(
-                describe(voices, probe->width, *probes[k].second, a.ports[k], rate, seconds, bpm));
+            ports.push_back(describe(voices, probe->width, *probes[k].second, a.ports[k], rate,
+                                     seconds, bpm, placeAt));
         }
         out["ports"] = std::move(ports);
         if (!rendered->warnings.empty()) {
@@ -606,7 +691,12 @@ void registerRackCapture(cmd::Registry& registry) {
                        beats](const OfflineSettings& renderSettings) -> Result<CaptureResult> {
             InstancePool pool(resolver, identity);
             pool.setOverrides(overrides);
-            auto rendered = renderOffline(copy, pool, renderSettings);
+            // The listener's frames are running frames: under a master playrate they are not
+            // song time, so the render says what song position each block plays.
+            OfflineSettings withClock = renderSettings;
+            std::vector<std::pair<std::int64_t, double>> clock;
+            withClock.songClock = &clock;
+            auto rendered = renderOffline(copy, pool, withClock);
             if (!rendered) return std::move(rendered).error();
             const rack::Instance* in = pool.racks().find(id);
             const auto* capture =
@@ -617,7 +707,9 @@ void registerRackCapture(cmd::Registry& registry) {
             midi::Sequence seq;
             const double ppq = seq.ppq;
             auto beatOf = [&](std::int64_t frame) {
-                return copy.timeMap->beatAt(start + static_cast<double>(frame) / rate) - fromBeat;
+                return copy.timeMap->beatAt(
+                           songSecondsAt(clock, static_cast<double>(frame), start, rate)) -
+                       fromBeat;
             };
             auto snap = [&](double beat) {
                 return a.quantize ? std::round(beat / *a.quantize) * *a.quantize : beat;

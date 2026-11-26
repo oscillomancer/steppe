@@ -12,6 +12,9 @@ namespace {
 
 enum class BackendArg { Jack, Dummy, PortAudio };
 
+struct EngineStopDone {
+    std::optional<std::vector<std::string>> warnings;
+};
 struct EngineDevicesArgs {
     std::optional<BackendArg> backend;
 };
@@ -324,11 +327,28 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.result = engineStatusSchema();
         c.errors = {
             {"engine.running", "the engine is already running", "engine.stop first"},
-            {"backend.device", "device or host API was not found",
-             "choose names from engine.devices"},
+            {"backend.device.not_found", "the input or output device was not found",
+             "choose an exact name from engine.devices"},
+            {"backend.device.ambiguous", "two devices share the name",
+             "rename one in its driver, or choose another host API"},
+            {"backend.device.no_inputs", "the input device is listed without inputs",
+             "set inputs to zero for playback only"},
+            {"backend.device.channels", "the device has too few channels",
+             "reduce inputs or outputs to the counts engine.devices shows"},
+            {"backend.device.invalid", "the device is gone or held in exclusive mode",
+             "list engine.devices again, or free the device"},
+            {"backend.host_api.not_found", "the host API was not found",
+             "choose an exact host_api from engine.devices"},
+            {"backend.busy", "another stream or process holds the device",
+             "stop it, then start again"},
+            {"backend.driver", "the ASIO driver or the JACK server did not start",
+             "close other apps using the driver, or start PipeWire with pipewire-jack"},
+            {"backend.rate", "the device does not support the rate (ASIO: or is absent)",
+             "name a rate engine.devices lists as the device's default_rate"},
             {"backend.config", "device format is invalid", "check rate and channel capacities"},
             {"backend.unavailable", "JACK is not installed", "install pipewire-jack"},
-            {"backend.open", "no JACK server answered", "is PipeWire running?"},
+            {"backend.open", "the device did not open for another reason",
+             "check engine.devices, rate and channels"},
             {"backend.unsupported", "backend is unavailable on this platform", "select dummy"}};
         c.examples = {
             {"Without a device", j(R"({"backend": "dummy", "block": 128})"),
@@ -379,18 +399,30 @@ void registerDeviceCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     [&] {
-        Command<NoArgs, Empty> c;
+        Command<NoArgs, EngineStopDone> c;
         c.name = "engine.stop";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Stop real-time playback and release the audio device.";
+        c.description =
+            "A clip launcher capture is kept, not lost: one running ends here, at what was heard. "
+            "warnings names a capture launch.commit has not written; it stays committable "
+            "after the engine starts again (launch.state's capture_kept).";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
-        c.result = emptySchema();
+        c.result =
+            schema::object<EngineStopDone>("engine_stop_done")
+                .field("warnings", &EngineStopDone::warnings, schema::arrayOf(schema::string()))
+                .build();
         c.examples = {{"Stop", j("{}"), j("{}"), "engine_running"}};
-        c.run = [](const NoArgs&, Context& ctx) -> Result<Empty> {
-            app(ctx).stopEngine();
-            return Empty{};
+        c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStopDone> {
+            EngineApp& a = app(ctx);
+            a.stopEngine();
+            EngineStopDone out;
+            // The same line a client in-process reads (captureKeptWarning).
+            if (auto warning = a.captureKeptWarning())
+                out.warnings = std::vector<std::string>{std::move(*warning)};
+            return out;
         };
         addChecked(registry, std::move(c));
     }();

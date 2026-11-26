@@ -11,6 +11,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "supple/cmd/bus.h"
@@ -50,6 +51,9 @@ json::Value audioDeviceJson(const AudioDeviceSettings& settings);
 json::Value engineStartArgs(const AudioDeviceSettings& settings,
                             std::span<const engine::AudioDevice> devices);
 
+class CaptureControl;
+class Shell;
+
 class AudioDeviceDialog {
   public:
     using Enumerate = std::function<Result<std::vector<engine::AudioDevice>>()>;
@@ -60,14 +64,37 @@ class AudioDeviceDialog {
                       AudioDeviceSettings settings, Save save);
     // Starts the engine from the settings. With `fallback` (app start), a
     // refused choice of devices or rate retries the defaults; the saved
-    // choice is kept for when the device returns.
+    // choice is kept for when the device returns. The dialog and onError say
+    // so as sentences, without command hints ("The output device "X" was not
+    // found. Audio is running on the default device at 48000 Hz. The choice
+    // is kept for when it returns.": the rate, the engine's, only when it
+    // differs from the one chosen), and the missing device's row reads
+    // "X (not found)".
     Status start(bool fallback = false);
     // Saved, then a running engine (or one whose start failed) restarts with
     // it. A failed save changes nothing.
     Status apply(AudioDeviceSettings next);
-    Status restart();  // stop if running, then start
+    // Stop if running, then start with the fallback the last start had (the
+    // app starts with one): a refused choice runs on the defaults, said in
+    // lastError() and through onError.
+    Status restart();
     void stop();
     void open();  // lists the devices present now
+    // Refresh: lists the devices again. PortAudio sees a device plugged in
+    // since only when nothing holds it, so a running engine stops for the
+    // listing and starts again the way it last started (with the defaults
+    // as a fallback when that start had them; audio stops for a moment).
+    // Refused while
+    // recording (audio.recording), which it would put at risk, and while a
+    // launcher capture is armed or runs (audio.capture), which an engine
+    // stop would cut short; a kept take does not hold it (the stop keeps it).
+    // A failed start is said in the dialog's status and through onError; the
+    // engine is left stopped, the fresh list shown.
+    Status rescan();
+    bool recording() const;
+    bool engineCapturing() const;  // the engine's own capture runs
+    // Why Refresh is off now ("" when it is not): recording or a capture.
+    std::string refreshBlocked() const;
     bool isOpen() const;
     void refresh();  // open dialog only; also called by the GUI tick
     const AudioDeviceSettings& settings() const { return settings_; }
@@ -78,7 +105,14 @@ class AudioDeviceDialog {
     // engine.start/engine.stop; tests replace them to avoid real devices.
     std::function<Result<json::Value>(const json::Value& args)> startEngine;
     std::function<void()> stopEngine;
-    std::function<void(const std::string&)> onError;
+    std::function<void(const std::string&)> onError;  // the dialog's words (the status line)
+    // The engine's full error where the dialog says it in its own words,
+    // its hint for command callers included: for a log (the app: stderr).
+    std::function<void(const std::string&)> onLog;
+    // A launcher capture armed or running, which an engine stop would cut
+    // short. Default: the engine's capture; the app adds the Capture
+    // toggle's own (refreshHeldBy). A kept take survives a stop.
+    std::function<bool()> captureHeld;
 
   private:
     std::vector<engine::AudioDevice> devices(bool reload);
@@ -86,6 +120,10 @@ class AudioDeviceDialog {
     void openMenu(const std::string& id, std::vector<ui::MenuItem> items);
     void build(bool reload);  // the dialog's rows; `reload` enumerates again
     void choose(AudioDeviceSettings next);
+    // An error in the dialog's own words, as sentences, never a command name
+    // or hint (that goes to onLog); `fallback`: the cause before "Audio is
+    // running on the default device"; `step`: with what to do next.
+    std::string explain(const Error& e, bool fallback = false, bool step = true);
 
     ui::Root& root_;
     cmd::Dispatcher& dispatcher_;
@@ -95,7 +133,21 @@ class AudioDeviceDialog {
     Save save_;
     std::vector<engine::AudioDevice> devices_;
     std::string enumerateError_, lastError_;
-    bool wanted_ = false;  // a start was asked for: changes restart the engine
+    std::string logged_;                // the last detail onLog was given
+    bool wanted_ = false;               // a start was asked for: changes restart the engine
+    bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
+    // The output and input rows' suffixes after a failed start ("(not
+    // found)", "(no inputs)"), from the error's code and path.
+    std::pair<std::string, std::string> marks_;
+    bool asio() const;  // the native device on its ASIO host
 };
+
+// The app's wiring: the dialog's refusals and failures go to the status
+// line (and stderr, for a start from a terminal), and a capture the
+// launcher's Capture toggle holds (armed, running or kept) keeps Refresh off.
+void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell);
+// What holds Refresh for the Capture toggle: a capture armed or running
+// (CaptureControl::lit), never a kept take, which survives the stop.
+std::function<bool()> refreshHeldBy(CaptureControl& capture);
 
 }  // namespace supple::gui

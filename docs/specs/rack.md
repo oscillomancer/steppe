@@ -753,7 +753,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
-| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes; refused with `rack.probe_size` when the listeners would need more than 512 MiB (§7.2 "Probe names"). Note names (a pitch port's `notes`, an audio port's `pitch.note`, and the description) are spelled by `harmony::spell` at the key and chord of the context track that hold at the project beat they were heard at (ADR-0100; §7.2 "Probe names") |
 | `rack.capture` | action | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?, async?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
@@ -927,6 +927,35 @@ capitalised, and a word that is a type's key spelled as that type's
 one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
 "LFO"). A plugin module keeps its plug-in's name.
 
+**Probe names.** `rack.probe` names a note as the roll and `midi.get` do (`specs/harmony.md` §3,
+ADR-0100): by the key and chord of the project's context track that hold at the project beat the
+note is heard at, the default table where none holds (a place before beat 0 reads beat 0's).
+That beat is the song position the recorded frame plays, through the tempo map. The render keeps
+the master playrate, so a frame is device time (`seconds` is song time and the render lasts
+`seconds` over the rate) and its song position is read from the render's own clock, which
+integrates the rate (a scalar or an envelope). The render reads the clock at every frame of a
+block and keeps a row wherever the position bends, so a step of the rate inside a 64-frame block,
+or two bends in one block, is followed and an event at a step is named by the key holding at its
+own frame; at unity it is `from_beat` plus the frames over the sample rate. The listener
+holds the whole render: it is sized for `seconds` over the lowest rate the master plays at in the
+project (the project's rate, or the lowest point of the active rate envelope anywhere in it, not
+only in the window; 0.25 at the least, so up to 40 device seconds), and the answer's gate counts,
+rates and pitch window cover all of it. The listeners of all the ports hold at most 512 MiB
+(`rack.probe_size`, path `/args/seconds`, hint: shorten `seconds` or probe fewer ports): each port
+reserves four float channels of the device seconds it needs at the project's sample rate, so a
+window of 10 s at the lowest rate (40 s of device time) takes at most 2 ports at 384 kHz, 4 at
+192 kHz and all 8 at 96 kHz and below. 512 MiB is a little more than the most a probe held before the playrate fix,
+8 ports of 10.01 s at 384 kHz (492 MB), so every probe that worked then still works. Gate
+`per_second` and `per_beat` divide by song time, so a source that runs on the device clock (a
+free-running LFO) reads off by the rate. A pitch port's `notes` entry is named at the frame its list gained it (a pitch
+heard again later is named at that later time), an audio port's `pitch.note` at the middle of
+the stretch the pitch was read from (the middle of the window), and the description repeats
+those names. The answer depends only on the project (its context points, tempo map and master
+playrate) and the arguments (`from_beat`, `seconds`, `notes`, `ports`), so the same project and arguments give the same names; the context is read
+from the copy, which adds modules, cables and notes items and never context points. No field
+is added: the names are the same strings in the same fields, spelled `G#4` or `Ab4` as the
+context says. `rack.capture` writes MIDI numbers and names nothing.
+
 ### 7.3 Capture
 
 `rack.capture` turns what a rack plays into notes. It renders a copy of the
@@ -940,10 +969,13 @@ voice) and velocity (`round(127 × v)`, clamped to 1..127; 96 without
 `velocity`), and a fall below 0.25 ends it. A note still sounding at the
 end ends there. It keeps up to 65,536 gate changes and warns when there
 were more. With `quantize` (beats, 1/64..4) starts and ends go to the
-nearest grid line and a note lasts at least one step. The notes, in beats
+nearest grid line and a note lasts at least one step. The notes, in song beats
 from `from_beat`, become a MIDI source, a take named `name` (default the
 rack's name) and an item at `at` (default `from_beat`) on `track`, a
-channel, `beats` long. The same project and arguments give the same notes.
+channel, `beats` long. The same project and arguments give the same notes. The render keeps the
+master playrate, so the listener's frames are device time; each event is placed at the song
+position the render's own clock gives for its frame (the clock `rack.probe` reads, §7.2 "Probe
+names"), and a note lasts as many song beats as the rack held it for, at any master playrate.
 
 With `async: true`, the command returns `{job}` immediately and renders the
 immutable project and module/plug-in catalogue snapshot on a job worker.

@@ -713,7 +713,8 @@ TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissi
     CHECK(notice->kind == RestartNotice::Kind::NoReport);  // the run without a report is newest
     CHECK(notice->incidents == std::vector<std::string>{name(3), name(2), name(1)});
     CHECK(notice->earlier == 2);
-    CHECK(notice->earlierNote.find("Steppe also closed unexpectedly 2 times before that.") !=
+    CHECK(notice->earlierNote.find(std::string(product::kName) +
+                                   " also closed unexpectedly 2 times before that.") !=
           std::string::npos);
     REQUIRE(acknowledgeNotice(*notice, root.path));
     CHECK_FALSE(noticeFor(root));
@@ -727,7 +728,8 @@ TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissi
     notice = noticeFor(root);
     REQUIRE(notice);
     CHECK(notice->earlier == 1);
-    CHECK(notice->earlierNote.find("Steppe also closed unexpectedly once before that.") !=
+    CHECK(notice->earlierNote.find(std::string(product::kName) +
+                                   " also closed unexpectedly once before that.") !=
           std::string::npos);
 }
 TEST_CASE("an unexpected report a newer build wrote still counts for the notice") {

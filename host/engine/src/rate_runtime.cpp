@@ -225,6 +225,7 @@ void Engine::setSyncRate(double scale) {
     scale = std::isfinite(scale) ? std::clamp(scale, .25, 4.) : 1.;
     if (scale == syncScale_) return;
     syncScale_ = scale;
+    if (capture_.on && !capture_.pending) capture_.facts.rateChanged = true;  // as_heard
     auto* p = latestPlan_.load(std::memory_order_acquire);
     // A plan compiled later takes the scale; this one gets a scalar control.
     if (!backend_ || !latest_ || !p || !p->syncRate) return;
@@ -343,7 +344,13 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                 const auto elapsed =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 ratePreparationSeconds_ = std::max(elapsed, ratePreparationSeconds_ * .9);
-                if (!result || frontier() + granularity < handStream) break;
+                if (!result) break;
+                std::int64_t reached = frontier();
+                if (lateAttemptsForTests_ > 0) {  // as if the renderer had passed the hand
+                    --lateAttemptsForTests_;
+                    reached = std::max(reached, handStream - granularity);
+                }
+                if (reached + granularity < handStream) break;
                 // Priming must finish before its scheduled boundary. A busy
                 // machine can need more than the ordinary render horizon;
                 // predict farther ahead and prepare again while old audio runs.
@@ -351,7 +358,7 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                                       (backend_->ownsThread() ? elapsed : 0) * p.rate * 2)) +
                                   2 * granularity + 128;
                 const auto oldHand = handStream;
-                handStream = (frontier() + lead + 63) / 64 * 64;
+                handStream = (std::max(frontier(), reached) + lead + 63) / 64 * 64;
                 handDevice += handStream - oldHand;
                 p.handAt = handStream;
                 if (attempt == 2)

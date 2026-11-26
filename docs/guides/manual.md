@@ -68,7 +68,10 @@ by default, or ASIO).
 **Edit > Audio device…** (also a row in **Edit > Preferences…**) chooses the
 audio system, the output and input devices, the sample rate and the buffer
 size. Steppe remembers the choice and starts with it next time. Each change
-restarts the running engine at once.
+restarts the running engine at once. Plugged in a device while the dialog is
+open? On macOS and Windows, **Refresh** lists the devices again; audio stops
+for a moment while it does, so it is off while you record or while the
+launcher's Capture is on or still holds a performance.
 
 **Edit > Preferences…** holds the settings that apply to every project, in
 sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.
@@ -107,11 +110,26 @@ applies to Steppe and its plug-in bridges only: it changes no system setting,
 and ends when Steppe stops the engine. macOS and Windows do not merge memory
 this way, and nothing changes there.
 
-If the device is missing or busy when Steppe starts, the app still opens. The
-Audio device dialog then opens and says why. Choose another device, or
-**Restart audio** once the device is ready. The dialog's status lines show
-what is running: the backend, rate, buffer size, device period and output
-latency.
+If the device is missing or busy when Steppe starts, the app still opens. It
+tries the default device instead, and the Audio device dialog opens and says
+why. When the default device runs, audio keeps going on it. The dialog and the
+status line say so, for example: The output device "Interface" was not found.
+Audio is running on the default device at 48000 Hz. The choice is kept for
+when it returns. The rate is named only when it differs from the one you
+chose; the default device keeps its own rate. The missing device's row reads
+**Interface (not found)**. Changing the rate or buffer size meanwhile keeps
+audio on the default device, and your choices stay saved. Once the device is
+back, **Refresh** or **Restart audio** runs on it again. If the default device
+fails too, audio stays stopped: choose another device, or **Restart audio**
+once the device is ready. The dialog's status lines show what is running: the
+backend, rate, buffer size, device period and output latency.
+
+When audio cannot start, the dialog says why and what to do. On Linux, "The
+JACK server did not answer" means PipeWire's JACK support (pipewire-jack) or a
+JACK server is not running: start it, then **Restart audio**. On Windows, an
+ASIO driver that does not start is often held by another app, and an app using
+a device in exclusive mode keeps it from others: close that app, then
+**Restart audio**.
 
 The right end of the transport bar shows what the device is running at, for
 example **48 kHz · 256 samples**. It stays quiet while all is well. If
@@ -138,9 +156,10 @@ branch you have not merged yet is still there after quitting and reopening,
 with each of its steps (**View > History and command log**, a tab of the
 side panel), and it can be undone step by step or
 merged into main as before. The file opens on the branch that was current when
-it was saved. Main's own undo history is not kept: after reopening, undo on
-main starts from the saved state. (Agents can keep it with
-`project.save {"history": true}`.) Autosaves keep branches too.
+it was saved. Main's own undo and redo steps are kept only when you save
+with **File > Save with undo history** (agents use
+`project.save {"history": true}`); after a plain save, undo on main starts
+from the saved state when you reopen. Autosaves keep branches too.
 
 If a program that does not know about branches (an older Steppe, a script)
 changed the file's main project, the saved branches no longer fit it: Steppe
@@ -198,7 +217,13 @@ New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the
 project, then ask whether to save the changes. Cancel keeps the recorded takes;
 Undo removes that recording. If stopping fails, the error is shown and the
-requested action does not continue. If an agent starts another recording or
+requested action does not continue. A launcher capture is finished the same
+way: its take is written to the timeline (one step you can undo) before the
+question. If it can't be written (a locked item is in the way, say), the
+question names the take and says it will be lost, even when nothing else
+changed; then the buttons are just the action (Quit, say) and Cancel. Cancel
+keeps the take, so you can fix what it names first. A take whose
+writing you undid is left out: you turned it down. If an agent starts another recording or
 edits the current project while that question or its Save As dialog is open,
 the app stops the new recording and asks again before saving or leaving.
 A changed branch also requires a new decision.
@@ -208,6 +233,12 @@ open, any button cancels the old request with a notice, leaving the replacement
 project untouched. File and folder dialog results are also ignored with a notice
 if the project was replaced; open the dialog again. If edits arrive
 while Open is waiting, Steppe asks about unsaved changes again before opening.
+The same holds while it asks how to load a plug-in that crashed before: if
+the project changes or a launcher capture runs meanwhile, it checks for
+unsaved changes again (asking if there are any), then asks again about any
+plug-in you chose to run in
+a separate process or not to load (one you chose to load normally is not
+asked about again).
 
 **File > Import…** (Ctrl+I) brings in audio files (WAV, FLAC, MP3) and MIDI
 files (`.mid`) at the playhead: one file onto the selected track, several onto
@@ -1136,6 +1167,11 @@ and write mode the last value holds until you stop or pause. A modulation
 that reaches that parameter through its envelope pauses while you hold it
 and resumes on top of what you recorded.
 
+An item's own effects (its take FX) are automated on the item's track, in
+song time, and their lanes run the whole width of the timeline. They play
+only under the item, and only while that take is the one heard, so the lane
+is dimmed everywhere else; you can still edit points there.
+
 Undo, redo or switching branches while playing starts a fresh automation
 pass at the current position. Earlier moves no longer override the envelope
 or extend their last value to where you stop.
@@ -1721,9 +1757,16 @@ Above the columns, **Stop all** silences every clip and **Arrangement**
 returns every track to the timeline. Each scene's header has a ▶ that
 launches the scene; double-click its name to rename it, drag it sideways
 to reorder the scenes, and right-click it for Rename, Colour, Insert at
-playhead, Insert at end and Delete. The **+** after the last scene adds one.
+playhead, Insert at end, the two checks for how scenes are laid, Lay out
+scenes… and Delete (all described below). The **+** after the last scene
+adds one; until you name it, it shows as "Scene" and its place, such as
+"Scene 4".
 
-**Capture**, under Stop all, records what you launch the way the record
+Stop all, Arrangement and Capture sit in one row. In a narrow pane they
+show as small symbols (a square, two bars and a dot); rest the pointer on
+one and the status line names it.
+
+**Capture**, after Arrangement, records what you launch the way the record
 button records audio. Click it so it lights, then play and launch clips and
 scenes. When you stop (or seek, or change the loop) the performance is
 written onto the timeline as items, in one undo step, and Capture stays lit
@@ -1735,21 +1778,53 @@ lights when an agent is capturing; clicking it then finishes that capture
 and writes it.
 
 If the performance can't be written (a locked item is in the way, say),
-Capture goes dark and the status line says why. The performance is kept: fix
-what it names, then click Capture, and it is written before Capture lights
-again. If it is refused again, the status line says so, and one more click tries
-once more and, if it still can't, discards the performance and starts a new
-capture.
+Capture goes dark and the status line says why. The performance is kept, and
+the Capture button shows it with its dot in outline (hover over it for what is
+kept and why): fix what it names, then click Capture, and it is written before
+Capture lights again. If it is refused again, the status line says so, and one
+more click tries once more and, if it still can't, discards the performance and
+starts a new capture.
+
+If the audio engine stops while you capture with the Capture button (Stop
+audio, Restart audio, a new device, or the device restarting), the take so far
+is written to the timeline and the status line says so; Capture goes dark until
+you click it again. A capture an agent started is not written at a stop: its
+take is kept, and the Capture button shows it with its dot in outline. Click
+Capture to write it; Quit, New and Open write it first too. If you
+undo a written take and then click Capture, a new capture starts; the undone
+take stays undoable until the new one begins, and the status line says when it
+is replaced.
 
 To put a scene into the song, drag its header onto the timeline: it lies
 from the bar you drop it on, for as many whole bars as its longest clip
 needs, with a marker showing where while you drag. **Insert at playhead**
 and **Insert at end** in its menu do the same from the next bar line at the
 playhead, or after the last item or section. Each makes a section named
-after the scene. The other way round, right-click a section in the ruler
-and choose **Capture as scene** to make a scene from the items inside it.
+after the scene. Two checks in the same menu say how the clips are laid,
+for a drop too: **Follow the song's key and chords** lays the MIDI clips so
+they sound in the key and chords of the song where they land (unchecked,
+each clip keeps its own Follow, set in its inspector; following only the
+key, or forcing a clip to play as written, is set there per clip), and
+**Write harmony to the context track** writes the clips' own key and
+chords onto the context track under the new section, unless the track
+already has points there or the clips disagree about the key or chord at
+some point (the status line says which). The project remembers both, and
+recalling a screenset leaves them as they are. **Lay out scenes…**
+lays several scenes one after the other: tick the scenes you want, set each
+one's bars and the bar to start from, and choose **Lay out**. Each
+scene's bars start at what its clips need where it would land, and follow
+the scenes before it as you tick and change them, until you type a scene's
+bars yourself. If it can't
+be done the dialog says why, marks the scene it is about with a red dot,
+and keeps what you entered. The other way round, right-click a section in
+the ruler and choose **Capture as scene** to make a scene from the items
+inside it.
 When one of these cannot be done (items already lie in the way, a scene has
-no clips, a section has two items on one track) the status line says why.
+no clips, a section has two items on one track) the status line says why. It
+names the clips, items, tracks, scenes and sections involved; one without
+a name is called by where it is, such as "Scene 4", "Bass's clip in Verse"
+or "Keys's item at bar 5". A clip without a name shows no name in its cell,
+since its row and column already say its track and scene.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
@@ -1770,6 +1845,16 @@ track, the track's items on the timeline are dimmed.
 Drag a clip to another empty cell to move it, with Ctrl to copy it; an
 occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
+With several items selected, each one makes a clip on its own row, kept
+at the same distance from the item you hold, as when you move them.
+Several items on one track go into that scene and the ones after it, in
+the order they play: the first into the scene you drop on, the next into
+the one after it. One undo takes them all back. Every cell they will
+fill is outlined while you hold them; cells scrolled out of view are
+counted in a small "+2"-style tag at the pane's edge. If any of them can't go (its cell is
+taken, its row is not a channel, it would fall off the track list, there
+are not enough scenes after the one you drop on, or it is on a hidden
+track or in a closed folder), none is made and the status line says why.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
 Duplicate, Lay on timeline at playhead, Take FX… (the clip's own effects,
 which play whenever the clip does) and Delete; Delete on the keyboard
@@ -1788,10 +1873,16 @@ different key ("its chord Am differs from F at bar 5" in the same key over
 another chord). A Capture take laid under a different key or chord says so
 the same way. A clip with its own key
 shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
-when the clip follows. Clips launch under a master playrate, but
-while it keeps the pitch an audio clip can't be launched: the pane draws
-those clips (and the scenes holding one) dimmed, and a click says why in
-the status line.
+when the clip follows. The pane draws a clip dimmed when launching it
+now would be refused: an audio clip with take FX or take envelopes while
+the master playrate keeps the pitch (or follows MIDI clock), a clip
+whose audio didn't fit in memory, a frozen track's clips, or a clip
+just added while audio is being prepared (it stays dimmed until the
+audio is ready). A scene's
+▶ is dimmed when the scene can't launch: nothing in it can play, or a
+clip it would start with the rest is refused. A refusal that depends on
+the transport, such as the engine not running, is not shown. A click
+still asks, and the status line says why.
 
 In the piano roll a clip starts at its own bar 1, and its end is marked
 "end", with the time after it shaded. It has no place in the
@@ -1886,7 +1977,14 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 that grid's next line, so the performance ends on the bar. The Capture
 button, turned off while playing, ends it on the project's launch quantize
 and commits it there. `launch.commit` then writes the performance onto the
-timeline as ordinary items, in one undo step. It is laid out as it ran:
+timeline as ordinary items, in one undo step. A capture not yet committed is
+kept when the engine stops or the audio device restarts or fails: a running
+one ends there, `engine.stop` (or the device's event) says so, and
+`launch.commit` still writes it, with the engine stopped or started again.
+A new capture replaces it once it begins, and `launch.capture` says so.
+Undoing the commit makes the capture uncommitted again while it is kept, and
+`engine.stop` names an uncommitted one each time it is called. It is
+laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
 played a clip or was stopped, those stretches replace what the timeline had
@@ -1903,16 +2001,45 @@ the commit is refused with `launch.commit.fade` and the performance kept:
 set the clip's fades to 0, or capture it again. MIDI is copied, so editing the
 items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
-committing again writes the same performance over itself.
+committing again writes the same performance over itself. Removing a clip
+while it plays returns its track to the arrangement, and a capture keeps
+that as you heard it: the clip up to there, then the arrangement. The
+commit then refuses, naming the removed clip and keeping the capture; undo
+the removal and commit again.
 
-Renders play the arrangement only; the render dialog says so while a
-clip is playing. Not yet:
-- launching an audio clip while the master playrate keeps the pitch
-  (`launch.playrate`); MIDI clips, and audio clips without it, follow
-  the playrate;
+The render dialog's **Plays** row chooses what a mix or stems render plays:
+the **Arrangement**; the **Last capture**, exactly as you heard it, on the
+version it played on (the dialog says "As heard", or why not, before you
+render); or the **Launcher** as it plays now, from Start to End. A
+performance render plays once over its own range, and its file name gets
+" performance" added to the mix's or the stems' name, which you can change
+(a name you type stays when you switch between Master mix and Stems). If
+the last capture changes while the dialog is open, the dialog shows the new
+one. Last capture's range shows the bars it covers and how long the file
+runs; a capture that went round a loop says "looped", and its file is longer
+than those bars because it plays each time round. While the arrangement is chosen
+and a clip is playing, the dialog says the clips playing now are not in the
+render. An agent can render a performance too: `render.mix` (or
+`render.stems`, `render.dry-run`, `render.queue.add`) with
+`performance: "captured"` plays the capture as it ran, on the version it
+began on, and says whether that is what you heard (`as_heard`, with the
+reasons it is not: an edit or a playrate change during it, live input, a
+dropout, a failed plug-in, an engine stop, or a start after playing
+began). `as_heard: true` refuses a render that would not be. A
+`captured_performance` object renders as given, and
+`{from: "launcher", start_beat, end_beat}` renders what the launcher plays
+now over that range. Not yet:
+- launching an audio clip with take FX or take envelopes while the
+  master playrate keeps the pitch (`launch.playrate`); other clips
+  follow the playrate, audio ones time-stretched with the pitch kept, and
+  a launch then lands at least about 61 ms ahead, while its stretcher
+  gets ready (anything launched on that track meanwhile lands after it),
+  and a launch pressed while a playrate change takes effect, or queued
+  before it and not yet begun, can land a boundary later;
 - capturing while a launched audio clip plays and the master playrate
   keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
-  pitch first. Otherwise a capture runs under any playrate and through
+  pitch first. Launching an audio clip then ends a capture at its switch,
+  with a warning. Otherwise a capture runs under any playrate and through
   changes to it, and the commit plays the same song positions, not the
   same durations, at another rate.
 
@@ -1921,8 +2048,9 @@ launches: it plays the clip, falls silent when the track stops, and
 plays the timeline again with the arrangement. The track's MIDI sends
 carry the clips too.
 
-A frozen track plays its print: `launch.clip` refuses it and
-`launch.scene` skips it.
+A frozen track plays its print: `launch.clip` refuses its clips
+(`track.frozen`), and the pane draws them dimmed, and `launch.scene`
+skips them.
 
 ### From scenes to a song
 
@@ -1976,12 +2104,16 @@ they render.
 
 What a project leaves unset comes from **your default**: **Save as default**
 stores the dialog's settings for every project, and values that come from it
-are drawn in the quieter ink. **Presets** are named settings of your own, plus
+are drawn in the quieter ink. If your default cannot be read (its file was
+damaged or its permissions changed), the dialog says so and the Preset list
+offers nothing until you click Save as default again. **Presets** are named settings of your own, plus
 read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP),
 a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
 (−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
 (Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
-writes it to the project. Presets and your default are kept in the data folder
+writes it to the project. A preset of yours whose file was damaged is listed as
+*(damaged)*: choose it, then **Delete preset**, or save a preset under its name
+to replace it. Presets and your default are kept in the data folder
 (`render-presets`, see *Where Steppe keeps its files*).
 
 ### Sources and ranges
@@ -2000,7 +2132,9 @@ writes it to the project. Presets and your default are kept in the data folder
   version* to start a branch at that mix.
 - **Range**: the entire project (to the last item's end), the time
   selection (the range drawn on the ruler, also the loop, whether or not
-  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
+  looping is on), or a custom start and end, written as bar, beat and
+  thousandths as the transport shows them (`3.1.000`; `3` or `3.2` will do),
+  with the time beside each. A **tail** renders seconds past the end for
   reverb and delays; *Cut silence at the end* trims what is left quiet.
 
 ### Files and formats

@@ -17,6 +17,7 @@
 #include <type_traits>
 
 #include "supple/base/environment.h"
+#include "supple/base/sleep.h"
 #include "supple/base/thread.h"
 #include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
@@ -104,10 +105,29 @@ DummyBackend::DummyBackend(Options options) : options_(options) {}
 
 DummyBackend::~DummyBackend() { stop(); }
 
+void DummyBackend::requestRestart(std::string reason) {
+    restartReason_ = std::move(reason);
+    restartNeeded_.store(true);
+}
+
+BackendStatus DummyBackend::status() const {
+    BackendStatus s{config_.blockSize, 0, 0, 0, false, {}};
+    s.restartNeeded = restartNeeded_.load();
+    if (s.restartNeeded) s.restartReason = restartReason_;
+    return s;
+}
+
 Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     if (running_)
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
+    if (onStart_) onStart_();
+    if (failStarts_ > 0) {
+        --failStarts_;
+        return Error("backend.open", "the dummy device did not open (a test's failStarts)", {},
+                     "a test asked for it; start again");
+    }
+    restartNeeded_.store(false);
     config_ = config;
     if (options_.grantedRate > 0) config_.sampleRate = options_.grantedRate;
     callback_ = std::move(callback);
@@ -143,7 +163,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                 cycle();
                 if (options_.paced) {
                     next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
-                    std::this_thread::sleep_until(next);
+                    supple::sleepUntil(next);
                 }
             }
             finishMidi();  // the final callback (Backend::stop contract)
@@ -308,6 +328,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rtPrimed_ = false;
         primeAhead_.store(INT64_MAX, std::memory_order_relaxed);
         livePlan_ = nullptr;
+        classBase_ = nullptr;
         liveReady_ = liveEntered_ = false;
         callbackGen_.store(0);
     }
@@ -555,7 +576,7 @@ void Engine::stop() {
                                   std::chrono::duration<double>(std::max(0.05, 4 * period)));
         while (syncFarewells_.load(std::memory_order_acquire) == acked &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            supple::sleepFor(std::chrono::milliseconds(1));
         if (syncFarewells_.load(std::memory_order_acquire) != acked && config_.sampleRate > 0) {
             const double leave =
                 static_cast<double>(syncOutputLatency_.load(std::memory_order_relaxed)) /
@@ -606,8 +627,9 @@ void Engine::stop() {
     backend_ = nullptr;
     plan_ = nullptr;
     livePlan_ = nullptr;
-    syncRt_ = nullptr;  // no callback runs now
-    resetAuditions();   // a voice playing is dropped (ADR-0094)
+    classBase_ = nullptr;  // freed with plans_ below
+    syncRt_ = nullptr;     // no callback runs now
+    resetAuditions();      // a voice playing is dropped (ADR-0094)
     syncNext_.store(nullptr);
     syncAdopted_.store(nullptr);
     syncRuntimes_.clear();
@@ -653,7 +675,9 @@ void Engine::stop() {
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    const std::shared_ptr<const model::Session> before = latest_;
     auto loaded = loadNow(session, projectDir);
+    if (loaded && before) captureEdit(*before, session);  // a render's as_heard
     // A deferred edit compiles in the first load() past its deferral, whoever
     // calls it. If that failed, the edit never played: latest_ goes back to
     // the session that did, so the prune, the mix and scalar shortcuts and
@@ -1219,7 +1243,7 @@ Status Engine::awaitTransport(double timeoutSeconds) {
     auto waitUntil = [&](auto done) {
         while (!done()) {
             if (std::chrono::steady_clock::now() >= deadline) return done();
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
         }
         return true;
     };
@@ -1251,7 +1275,7 @@ bool Engine::awaitPlan(double timeoutSeconds) {
         if (std::chrono::steady_clock::now() > deadline)
             return false;
         else
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
     return true;
 }
 
@@ -1280,7 +1304,7 @@ bool Engine::awaitRendered(std::int64_t frames, double timeoutSeconds) {
         // A renderer without work (every node live) waits for no consumption:
         // wake it, so it reports the stream position it keeps ahead.
         wakeRenderer();
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        supple::sleepFor(std::chrono::microseconds(200));
     }
 }
 
@@ -1289,7 +1313,7 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
         std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
     while (!holdSeen_.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() > deadline) return false;
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        supple::sleepFor(std::chrono::microseconds(200));
     }
     return true;
 }
@@ -2139,6 +2163,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::carryLiveNotes(*plan_, *plan, false);
             detail::carryRateSources(*plan_, *plan, -1);
             detail::carryMix(*plan_, *plan, -1);
+            ackReturns(*plan, -1, false, rtEpoch_, rtStream_.load(std::memory_order_relaxed));
         }
         detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, plan ? &plan->modules : nullptr,
                                  &processing_);
@@ -2657,7 +2682,7 @@ Result<std::vector<RecordedTake>> Engine::stopRecording() {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (cycleSeq_.load(std::memory_order_acquire) == seq &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
         if (cycleSeq_.load(std::memory_order_acquire) == seq)  // never free what it may use
             return Error("record.busy",
                          "the audio callback has not returned for 2 s; the recording is kept", {},
@@ -2829,7 +2854,7 @@ void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
         // of `next` is untouched until the handoff is published below.
         if (continuable) detail::carryMix(*plan_, *next, 1, 0);
     }
-    if (next) next->handContinuable = continuable;
+    if (next) next->handContinuable = next->liveCarried = continuable;
     detail::adoptRackModules(plan_ ? &plan_->rendererModules : nullptr,
                              next ? &next->rendererModules : nullptr, &processing_);
     adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_,
@@ -2848,6 +2873,9 @@ void Engine::publishRendererPlan(detail::Plan& next, std::uint64_t epoch,
         next.handEpoch = epoch;
     }
     if (queuedRate) ratePlanRequests_.consume();
+    // Its returns, before the callback can see the plan (the live nodes
+    // carried from this renderer's included).
+    ackReturns(next, -1, true, epoch, streamLocal_);
     // Queued for the callback before the adoption is reported, so a caller
     // of awaitPlan() knows the callback's next cycle takes it.
     planHandoffs_.push(&next);  // space checked before adoption
@@ -3207,6 +3235,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             // not discard the only graph for live monitoring. Rate plans keep
             // the strict epoch check: their converter state belongs to a seek.
             if (oldEpoch && hand->rateEnabled) {
+                // Skipped, never adopted: a node it took into the live region
+                // is lost there (round 178 F2, round 180 F1).
+                ackSkipped(*hand);
+                classBase_ = hand;
                 planHandoffs_.consume();
                 continue;
             }
@@ -3216,8 +3248,13 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             if (oldEpoch || !playing || here >= hand->handAt) {
                 // Exactly at the handoff, playing, in its epoch: the renderer's
                 // carried state is the callback's here (adoptLive).
-                adoptLive(hand,
-                          !oldEpoch && playing && hand->handContinuable && here == hand->handAt);
+                const bool continuous =
+                    !oldEpoch && playing && hand->handContinuable && here == hand->handAt;
+                if (livePlan_)
+                    ackClassMoves(*livePlan_, classBase_, *hand, hand->liveCarried, e, here);
+                classBase_ = nullptr;
+                adoptLive(hand, continuous);
+                ackReturns(*hand, 1, false, e, here);  // the live region's own
                 planHandoffs_.consume();
                 wakeRenderer();
                 continue;

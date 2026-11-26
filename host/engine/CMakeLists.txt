@@ -11,7 +11,7 @@ supple_add_library(engine
           src/rack_runtime.cpp src/param_ref.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/session_lock.cpp src/plugin_outputs.cpp src/commands.cpp src/project_commands.cpp src/tempo_commands.cpp src/track_commands.cpp src/item_commands.cpp src/fx_commands.cpp src/history_commands.cpp
           src/envelope_commands.cpp src/device_commands.cpp src/transport_commands.cpp src/audition_commands.cpp src/route_commands.cpp src/log_commands.cpp src/crash_report_commands.cpp src/suspects.cpp src/ruler_commands.cpp src/context_commands.cpp src/lead_sheet.cpp src/clip_context.cpp src/clip_follow.cpp src/midi_context.cpp src/modulation_commands.cpp
           src/plugin_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
-          src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/comp_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/clip_launcher_commands.cpp src/launch_commands.cpp src/launch_commit.cpp src/scene_section_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
+          src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/comp_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/clip_launcher_commands.cpp src/launch_commands.cpp src/launch_commit.cpp src/render_performance.cpp src/scene_section_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_ports.cpp src/hardware_midi.cpp src/midi_port_commands.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_clock_outputs.cpp
   DEPS supple::model supple::clap-host supple::diagnostics-context supple::audio-file supple::timeline supple::semantic-params-abi
        supple::command-bus supple::lua-bus supple::notation supple::core-params supple::core-analysis
@@ -66,7 +66,11 @@ set(_engine_test_sources
   tests/test_commands.cpp tests/test_context_commands.cpp tests/test_clip_launcher.cpp
   tests/test_clip_player.cpp tests/test_clip_player_live.cpp tests/test_clip_player_rack.cpp
   tests/test_clip_player_rate.cpp tests/test_clip_player_rate_commit.cpp tests/test_clip_player_rate_fades.cpp
+  tests/test_clip_player_rate_stretch.cpp tests/test_clip_player_rate_presses.cpp
   tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_held.cpp
+  tests/test_clip_player_rate_trajectory.cpp tests/test_clip_player_rate_trajectory_queued.cpp
+  tests/test_clip_player_rate_retry.cpp
+  tests/test_launch_capture_kept.cpp tests/test_render_performance.cpp
   tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp
   tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp
   tests/test_scripts.cpp tests/test_strips.cpp
@@ -84,7 +88,7 @@ if(_engine_linux_tests)
 endif()
 
 if(SUPPLE_BUILD_TESTS)
-  supple_add_tests(engine SOURCES ${_engine_test_sources} LABELS rt SPLIT)
+  supple_add_tests(engine SOURCES ${_engine_test_sources} DEPS supple::product-info LABELS rt SPLIT)
   # Helpers with no test case of their own (a SPLIT entry for them would match nothing).
   target_sources(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/host/clap-host/tests/shared_page.cpp
                                       tests/native_files.cpp tests/native_cpus.cpp
@@ -92,14 +96,25 @@ if(SUPPLE_BUILD_TESTS)
   # The longest engine file under ThreadSanitizer: it ran past the presets'
   # 600 s on a busy machine and took 363 s alone.
   set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
-  # One case each, about 5 min under ThreadSanitizer at -j 3 (the preset runs
-  # 6): a minute in dev.
+  # About 5 min under ThreadSanitizer at -j 3 (the preset runs 6), a minute
+  # or so in dev: one case each, rate_stretch and presses a few shorter ones.
   set_tests_properties(engine.tests.test_clip_player_rate_chain engine.tests.test_clip_player_rate_wrap
-                       engine.tests.test_clip_player_rate_fades PROPERTIES TIMEOUT 1200)
+                       engine.tests.test_clip_player_rate_fades engine.tests.test_clip_player_rate_stretch
+                       engine.tests.test_clip_player_rate_presses PROPERTIES TIMEOUT 1200)
+  # S3 step D4's trajectory cases: 227 s and 206 s under ThreadSanitizer at
+  # -j 2 (before the cold-restart case moved in from rate_stretch, 573 s then);
+  # 290 s and 266 s on capture-kept, where the retry entry took 161 s at -j 2.
+  set_tests_properties(engine.tests.test_clip_player_rate_trajectory
+                       engine.tests.test_clip_player_rate_trajectory_queued
+                       engine.tests.test_clip_player_rate_retry PROPERTIES TIMEOUT 1200)
   # 344 s under ThreadSanitizer at -j 3 (candidate batch-c's run-all timed it
   # out at 600 s with the held-track cases, now in _held: 116 s, under the
-  # default limit).
+  # default limit); 564 s at -j 2 with them.
   set_tests_properties(engine.tests.test_clip_player_rate PROPERTIES TIMEOUT 1200)
+  # About 100 s in dev on Linux, but 357-364 s on a Windows runner, and 600 s was
+  # passed there once the probe's master-playrate windows came in: a guard, the
+  # cases themselves are kept short.
+  set_tests_properties(engine.tests.test_module_library PROPERTIES TIMEOUT 1200)
   target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
   add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)

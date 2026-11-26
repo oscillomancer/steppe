@@ -31,6 +31,7 @@
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -3020,21 +3021,21 @@ Status MidiEditor::reload() {
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
     if (title_) {
-        std::string name = state_.item;
+        // The track, then the item or clip as the arrangement names it;
+        // an unnamed one by views::objectName's words, which say its track.
+        const model::Session& head = app_.head();
+        std::string name;
+        if (const auto id = model::Id::parse(state_.item)) name = views::objectName(head, *id);
         if (owner->clip) {
-            const model::Track* t = app_.head().tracks.find(owner->track);
-            name = (t && !t->name.empty() ? t->name : owner->track.str()) + " — " +
-                   (owner->clip->name.empty() ? state_.item : owner->clip->name) + " · clip";
+            name = owner->clip->name.empty() ? name + " · clip"
+                                             : views::objectName(head, owner->track) + " — " +
+                                                   owner->clip->name + " · clip";
         }
         if (auto id = model::Id::parse(state_.item))
-            if (const model::Item* it = app_.head().items.find(*id))
-                if (const model::Track* t = app_.head().tracks.find(it->track)) {
-                    // The item as the arrangement names it; its id when it
-                    // has no name there.
-                    const std::string label = views::Lanes::itemLabel(app_.head(), *it);
-                    name = (t->name.empty() ? it->track.str() : t->name) + " — " +
-                           (label.empty() ? state_.item : label);
-                }
+            if (const model::Item* it = head.items.find(*id)) {
+                const std::string label = views::Lanes::itemLabel(head, *it);
+                if (!label.empty()) name = views::objectName(head, it->track) + " — " + label;
+            }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
         // A following take says how: "follows D major → E minor" (its own key
         // at the item's start, the song's there), or "written in D major".
@@ -3132,12 +3133,15 @@ Status MidiEditor::reloadAudio() {
     projectGeneration_ = app_.projectGeneration();
     version_ = head.version;
     if (title_) {
-        const model::Track* t = head.tracks.find(owner->track);
         char seconds[32];
         std::snprintf(seconds, sizeof seconds, "%.2f s", owner->clip->length);
-        titleBase_ = "Audio \u00b7 " + (t && !t->name.empty() ? t->name : owner->track.str()) +
-                     " \u2014 " + (owner->clip->name.empty() ? state_.item : owner->clip->name) +
-                     " \u00b7 clip \u00b7 " + seconds;
+        // An unnamed clip by views::objectName's words, which say its track.
+        const auto clipId = model::Id::parse(state_.item);
+        const std::string clipName =
+            owner->clip->name.empty() && clipId
+                ? views::objectName(head, *clipId)
+                : views::objectName(head, owner->track) + " \u2014 " + owner->clip->name;
+        titleBase_ = "Audio \u00b7 " + clipName + " \u00b7 clip \u00b7 " + seconds;
         refreshTitle();
     }
     root_.damageAll();

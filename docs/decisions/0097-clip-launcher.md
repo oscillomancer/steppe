@@ -355,8 +355,10 @@ Clips replace that with an **ordered budget**:
   timelines.
 - **The queue is the engine's (L-b).** It has fixed capacity and holds one
   entry per track; a newer launch on a track replaces its pending entry.
-  Plans hold only the players, so an entry survives plan swaps and a plan
-  waiting for adoption.
+  *(Note 2026-11-23: one applied early, by a clip chain's lead or, under
+  a pitch-keeping rate, an audio clip's warm-up, is not; see the revision
+  "S3 step D".)* Plans hold only the players, so an entry survives plan
+  swaps and a plan waiting for adoption.
   - **Who applies it:** the executor that runs the track's node when its
     block reaches the target. It splits the block at the target, as at a
     loop wrap, and takes the entry by compare-and-swap, so a node handed
@@ -430,6 +432,8 @@ Clips replace that with an **ordered budget**:
   *(2026-11-20, the lead with L4's engine half: seeks and wraps are not
   logged yet; capture and commit as built are in engine.md §1.4.2, and a
   capture lives in one transport epoch.)*
+  *(2026-11-24: a render can play a performance when asked; see the
+  revision "renders play a launcher performance" below.)*
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -784,7 +788,9 @@ revision records step 1 as built.
   step 1 an audio clip then has no player: compile warns
   `launch.playrate`, and its launch is refused with `launch.playrate` (hint:
   turn off the playrate's preserve pitch, or set it to 1 without an
-  envelope). MIDI clips launch. Step 1b plays these audio clips.
+  envelope). MIDI clips launch. Step 1b plays these audio clips. *(Note
+  2026-11-23: step D does, except one read through a take chain; see the
+  revision "S3 step D".)*
 - **MIDI clips** play each event at the first frame whose song position
   reaches it, by the rule timeline MIDI follows on the playrate path
   (`rateEvents`).
@@ -828,7 +834,8 @@ revision records step 1 as built.
 - A placement integrates the rate up to the boundary on the main thread,
   on a 64k-frame copy of the timeline.
 - Limits until later steps:
-  - audio clips under a pitch-keeping playrate (step 1b);
+  - audio clips under a pitch-keeping playrate (step 1b; *note 2026-11-23:*
+    played by step D, but for clips with take chains);
   - a frozen track's print cuts in, not crossfaded, on a playrate plan;
   - when a plan swap changes the trajectory, launched audio reads the new
     one at once, where timeline clips crossfade between the two;
@@ -923,7 +930,8 @@ the boundary.
   pitch. Such a plan arriving while one plays ends a running capture where
   it was heard, with a warning naming the clip. (An audio launch under a
   pitch-keeping rate is refused until step D; then the launch goes ahead
-  and the capture ends at its switch.)
+  and the capture ends at its switch.) *(Note 2026-11-23: so it does; see
+  the revision "S3 step D".)*
 - **The switch crossfade is 240 song samples** under a master playrate
   as at unity, each frame's share by its song position (`launchClock`),
   live always and not only in a capture: a committed item's fade runs in
@@ -1057,6 +1065,310 @@ launched while stopped ...", "a capture of clips with fades commits as
 heard ...", "launch.commit refuses what an item's fades cannot write
 ..."), test_clip_player_rate_commit.cpp (the same capture under 0.75 and
 the envelope), test_clip_launcher.cpp (the conversions).
+
+## Revision (2026-11-23, S3 step D): launched audio under a pitch-keeping playrate
+
+**Context.** With the pitch kept, a playrate plan reads audio through
+stretch converters, which must be seeked and primed before they play: at
+48 kHz an output lookahead of 2880 device frames and an analysis lookahead
+of 2880 source frames, 45 primes. Step 1 therefore refused audio launches
+there (`launch.playrate`). Priming a converter at the switch would cost a
+burst in one callback (Q5), and a converter started late would differ from
+the replay.
+
+**Decision** (the lead's step D design, 2026-11-23).
+- **Three readers per node** with audio clips: 0 plays, 1 goes out, 2
+  warms. At a switch they rotate: what played goes out on reader 1 with its
+  converter's history; a launch warmed up on reader 2 comes in on reader 0.
+- **The warm-up is cooperative and early.** A launch reaches the node
+  `launchWarm` device frames before its switch (`prewarm`): the
+  converter's output lookahead rounded up to whole 64-frame quanta, plus
+  one (2944 frames, about 61 ms, at 48 kHz). Reader 2 seeks there for
+  output from the switch's quantum and primes once per 64 frames played
+  (a frame credit, at any block size), so it is ready by the switch with
+  no burst. Placement keeps an audio clip's launch `launchEarly` ahead of
+  the clock (the larger of the clip-chain lead and `launchWarm`), and the
+  early decision and the horizon use it; MIDI clips, stops and returns,
+  which warm nothing, keep the clip-chain lead alone (the co-director's
+  ruling, round 139 R3). A launch is applied from its warm-up's first
+  frame, so a later one on the track does not replace it; reader 2 warms
+  one launch at a time, so placement keeps an audio launch at least
+  `launchWarm` after the track's applied audio launch still to switch, and
+  any other launch of the track at least a frame after it: the later press
+  wins (round 139 S1).
+- **Live equals the replay.** Every prime position is a function of the
+  switch's quantum and the trajectory, not of when it runs. The replay
+  delivers the warm-up as a third switch entry, `launchWarm` early. A
+  reading runs every quantum in order from its start (a skipped quantum is
+  run before the next, up to 32). With no warm-up (a launch from stop, a
+  relocation, a plan that lost the converter) it seeks and primes at once,
+  as the replay does: from its switch's quantum, catching up, when that
+  is at most 32 quanta back, so it plays what a warm-up would; else at its
+  own quantum. Its loop cycle is the switch frame's either way (round 139
+  R4), from the song phase recorded at the switch (2026-11-24: it was read
+  back from the timeline's ring, about 11 s at 48 kHz. The cycle matters
+  only before the launch's first wrap, which unanchors it, where the
+  converter reads ahead into the next cycle; a cold restart there about
+  one ring after the switch, with the frame that overwrote the switch's
+  slot already past the wrap, took cycle 1, and the clip read silence for
+  the whole of that cycle before its anchor). The worst cold restart is 45 primes and 32 quanta of catch-up in
+  one block (48 kHz).
+- **What it reads:** the player's song frames from the anchor, folded as
+  the song is, before the anchor only in a later loop cycle than the
+  switch's. The switch crossfade and the clip's fades weight its output.
+  Going out it plays on as the clip repeats, without the tape path's held
+  pass (`hold`) or cut at the crossfade's end (`until`): its converter has
+  read some 5000 song frames past a switch (output and analysis
+  lookahead) before the switch is known, so neither could reach the
+  crossfade, and no capture commits a stretched launch (Q2 b; round 139
+  R2).
+- **Plan swaps** that keep the rate controls hand the readers to the new
+  plan with their converters, by clip (`carryLaunchReaders`). One that
+  changes the trajectory restarts them cold where they play: an interim,
+  where timeline clips crossfade between trajectories. *(2026-11-24:
+  replaced by the revision "S3 step D4".)*
+- **Still refused:** an audio clip read through a take chain (take FX or
+  an active take envelope): compile warns `launch.playrate` and its
+  launch is refused, naming it, with the hint to turn off preserve pitch
+  or launch a copy without take FX.
+- **Capture (Q2 b).** A launched audio clip's switch queued while the
+  newest plan keeps the pitch ends a running capture on its boundary, with
+  a warning that it launches an audio clip; arming while one plays stays
+  refused.
+
+**Consequences.**
+- Tests (test_clip_player_rate_stretch.cpp and, for presses during a
+  warm-up, test_clip_player_rate_presses.cpp; the refusal in
+  test_clip_player_rate.cpp): live equals the replay for a scene,
+  a switch between two audio clips and a stop under a pitch-keeping 0.75
+  and an envelope, in both executors, at two block sizes (the envelope at
+  one), and differs from the tape reading; the warm-up primes a quantum's worth a quantum, is
+  ready by the switch and comes in with its history, at most one prime
+  per 64 frames at 32- and 128-frame blocks; a cold start plays the same
+  bit for bit, also at a loop wrap between the switch's quantum start and
+  the switch, and after a converter lost within the catch-up; a plan swap
+  mid-clip stays the replay (cold, it differs by 0.055), and so does one
+  during the warm-up; a rate change during the warm-up still switches; a
+  launch made while stopped lands on the play start; a launch made during
+  another's warm-up lands after its switch, live as the replay, also at
+  32-frame blocks; a stop, a return or a MIDI clip pressed during it,
+  quantized or not, lands after its switch and wins, live as the replay;
+  MIDI, stop and return launches keep the tape path's timing; the capture
+  ends at an audio launch's switch and commits
+  exactly; a clip with take FX is refused.
+- Each node with audio clips holds three converters under a pitch-keeping
+  plan: about 0.94 MB each, stereo at 48 kHz.
+- An unquantized audio clip launch lands up to about 61 ms later than on
+  the tape path.
+- A launch made during another's warm-up on its track lands at least
+  `launchWarm` after that one's switch (unquantized, about 61 ms later
+  than it would otherwise).
+- Limits until later D steps: a trajectory change restarts launched audio
+  cold; clips with take chains are refused; the launcher pane still dims
+  audio clips under a pitch-keeping rate until the GUI follows.
+
+## Revision (2026-11-23, S3 step E, engine side): the engine says what a press would be refused for
+
+The launcher pane dimmed clips by a copy of the engine's rule made from the session, which missed a
+MIDI-clock chase and went stale with step D. The engine now answers it from the code that refuses:
+`Engine::launchRefusal(request)` runs `launch()`'s checks of one request against the latest published
+plan, and `launch()` runs the same function, so the checks cannot drift; the app builds the request from
+the session the commands read, as the press does, so the request cannot either (round 145 B1). The app
+adds launch.clip's own
+`track.frozen` check (it applies with no engine too) and launch.scene's selection
+(`EngineApp::sceneLaunchRefusal`: frozen and memory-skipped clips left out as the command warns; empty,
+launch.scene's error). Only per-clip refusals are reported; transport-state ones (`engine.stopped`,
+`launch.later`, `launch.queue`) are a press's to answer. `EngineApp::launchRefusalGeneration()` is the
+one value the pane polls: it moves with a published plan, an engine start or stop, a session version and
+a project opened, and never repeats, so the pane needs neither the engine's identity nor the freeze's
+render job. engine.md §1.4.2 has the details; the pane's side is the gui-lead's (gui.md).
+Tests: test_clip_player_rate.cpp ("the launcher's refusals…") and the memory case in
+test_clip_launcher.cpp.
+
+## Revision (2026-11-24, S3 step D4): launched audio across a trajectory change
+
+*(Revised the same day after review round 145: A1 to A6, and S1's miss path.)*
+
+**Context.** Step D's readers restart cold where they play when a plan swap changes the trajectory (a
+scalar, preserve pitch, an envelope): a burst of up to 45 primes in one block, and a cut from the old
+trajectory's reading to the new one, while the timeline's items switch at `rateSwitchDevice` (S) with a
+converter primed on the main thread and a 10 ms crossfade from the old one. The co-director chose to
+switch launched audio the items' way (option A of the S3 design note) over warming it in the callback
+and switching about 61 ms later (option B), so the two stay in step.
+
+**Decision.**
+- **Units.** S is a device frame; in an executor's stream it is `handAt + S − rateHandDevice`, as
+  `rateSafeStream_` converts it.
+- **The mirror.** At prepare the main thread reads what each node with audio clips reads at S, from the
+  acknowledged launch log and the applied launch slots only: the clip, its anchor, its switch quantum,
+  its loop cycle and whether it is unanchored (the key; `stretchSource` positions depend on all five).
+  Slots are atomics and an applied slot's target is fixed, so the read takes no lock.
+- **Priming.** It primes a reader for that reading on the new trajectory from S, and for an applied
+  warm-up whose switch is after S a reader on the new trajectory primed as far as that warm-up's frame
+  credit stands at the handover. Prime positions are functions of the switch quantum and the trajectory
+  (step D), so where they are primed does not change what plays. Each primed reader carries its key.
+- **Adoption.** The executor that runs the node (the renderer for rendered nodes, the callback for live
+  ones, each at `handAt` in its own stream) compares each key with what it holds for S: its reader 0, or
+  the warming launch that switches at or before S. A match takes the primed reader. A miss primes the
+  same reading there and then, within a warm-up's length: at most 45 primes per reader, N readers missing
+  in one block costing N times that. Either way the old reader 0 plays the old trajectory
+  (`previousTimelines`) until S and crossfades into the new one over `smoothFrames`, exactly as an item,
+  converting while it is read (round 142 H1). So a miss changes CPU only, never what plays (round 145
+  S1); priming in an executor is step D's bounded cold-start work, already real-time safe.
+- **Rotation and the extra states.** A switch inside the trajectory crossfade, in (S, S + `smoothFrames`),
+  rotates the reader with its `previous` (`applyLaunch`), so the outgoing side plays both until
+  S + `smoothFrames`. An outgoing reader still in its own switch crossfade at S finishes it on the old
+  trajectory. Placement keeps a node's switches `launchWarm` (2944) apart, more than a switch crossfade
+  (at most 960 device frames: 240 song samples at 0.25), so one extra reader state per node holds every
+  case: before a switch at or before S the primed reader waits in it, and after a switch inside the
+  crossfade the old state is `previous`. When `rateSourceAhead` exceeds `launchWarm` − 960 − 63 frames
+  (a take chain of about 40 ms or more anywhere in the project), reader 1 can still be busy at adoption
+  while a warm-up switching at or before S is pending, and compile gives each node with audio clips a
+  second extra state. Both are allocated at compile.
+- **How long the old trajectory is kept.** When the outgoing or the incoming plan has audio players under
+  stretch (a switch to tape included, re-check C1), `rateSafeDevice` is
+  S + max(`smoothFrames`, ⌈`launchFadeFrames` / 0.25⌉) + `rateSourceBehind` + 64 (round 145 A1):
+  the next compiled change or scalar edit cannot be adopted, and take trajectory 0 away, while an
+  outgoing reader still reads it. That is about 10 ms later than items alone need, at 48 kHz.
+- **Nothing is freed on an audio executor.** A primed reader the node does not take, and an old state
+  once its crossfade is over, are swapped into the outgoing plan and released with it on the main
+  thread, as `carryRateSources` does for items.
+- **Why the mirror stays right.** Between the read and the adoption a reading can change only by a launch
+  already placed at the read being applied with its switch at or before S (a live node's warm-up, which
+  the callback reaches about `aheadFrames` after the renderer would), or by one being replaced or voided.
+  A warming launch placed after the read cannot switch that early (placement, below), and any other
+  launch only takes the audio reading away. The key check catches every case, and the miss path plays
+  what a match would have. (With a large `rateSourceAhead`, S − `handAt` can exceed `launchWarm`, and a
+  launch applied after the adoption warms on the new plan's trajectory, which equals the old one until
+  S: no primed reader is needed.)
+- **Placement.** No launch target already acknowledged moves. While a change is pending, from the
+  prepare until the slowest executor that runs the node has passed S + `smoothFrames` (for a live node,
+  the callback's played stream), a warming launch is placed at least `smoothFrames` + `launchWarm`
+  after S, so its warm-up runs on the new trajectory alone; other launches keep their floors. A
+  quantized press can then land a whole boundary later (engine.md; the manual's launcher section
+  says so when the code lands).
+- **Tape on either side.** A switch to tape plays the old stretch reader as `previous` through the
+  crossfade, converting while it is read. A switch from tape primes the new reader and fades from the
+  tape reading, which keeps no history. A launch the tape plan applied without a warm-up (tape has none)
+  that switches after the adoption takes the miss path (re-check C3): the executor primes it at adoption,
+  for S or as far as its warm-up's credit stands, within 45 primes, or it warms as usual when its warm-up
+  has not begun; it never starts cold at its switch.
+
+**Tests.** No replay spans a controls change (an offline render has one session), so the tests check:
+- continuity at S (no step larger than the material's own) and, after the crossfade, the reading equal
+  to a fresh warm reading on the new trajectory, in both executors and at blocks of 32 to 512;
+- a warm-up under way at the change, switching on time and equal to a warm reading on the new
+  trajectory, within step D's prime bound, with its switch both after S + `smoothFrames` and inside
+  (S, S + `smoothFrames`) (A2);
+- the race on a live node: a launch pending at the read whose warm-up the callback starts before its
+  adoption (T − `launchWarm` between the callback's position at the read and `handAt`, T ≤ S), arranged
+  by the executors' positions, not by delaying the prepare (`prepareRatePlan` repeats a late transition,
+  which would read the slot again). Two nodes miss in one block; the output equals the matched path's,
+  and each block's primes stay within 45 per reader, under rtsan (A3, A5);
+- an old rate of 0.25 with a switch one quantum before S, then a second change at the earliest
+  admission: the outgoing reader's crossfade completes, with the second plan both stretched and tape
+  (A1, C1);
+- a transport loop wrap between a clip's anchor and S (A6);
+- the mirror and the carry at plan level with explicit readings; the placement floor while a change is
+  pending, judged by the callback for a live node; and both tape directions.
+
+**Built:** phase 1 (2026-11-24, round 152's fixes the same day): every adoption takes the miss path,
+primed on the audio thread within a warm-up's primes per reader (`carryLaunchAcross`,
+`PlayerReader::previous`), with the A1 bound and the placement floor; it could ship alone. Phase 1's
+tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
+- continuity across an envelope edit, a switch to tape and one from tape, in both executors and at blocks
+  of 32 to 512 (a click about ten times the material's step before, stretch to stretch and to tape);
+- the primes per callback: 45 for one track and 90 for two, all in the callback holding S, and the
+  switch there continuous (the cold start before D4 primed as many, with a click: that part goes red
+  without D4);
+- three launches after a change still warm up, two primes a callback (round 152 F1: 45 at each switch
+  before);
+- a launch queued across a change (its switch before S, a warm-up under way after it, one voided and
+  placed again a bar later), and one switching just before a change of preserve pitch, both ways
+  (round 152 N2);
+- tape to stretch just after a launch in a later loop cycle plays as in the first (round 152 F2; the
+  converter reads from S, after the anchor, so the cycle it keeps is not heard there: the case pins the
+  result), and at plan level the reading handed on from a tape reader keeps its switch's cycle, from the
+  phase recorded at the switch or, for a switch on a plan without a playrate, the frame read back (red
+  with the tape reader's own cycle, 0);
+- a cold restart just before the launch's first wrap, about one ring after its switch, keeps the
+  switch's cycle (step D; silent for the cycle before the anchor when it was read back from the ring);
+- the floor for a launch pressed inside the pending window, and the A1 bound at plan level for every
+  side.
+
+Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
+
+*Revision 2026-11-24, the mirror taken out (the co-director, on review round 166):* phase 2 was
+built (469496c2 through 77c51914 on codirector/launch-s3-d4-mirror; review rounds 163 and 166) and
+removed by a revert on top of ab732087, so it can be brought back by reverting that revert. Measured:
+its output is by design the miss path's, and what it saves is the miss path's burst, 45 primes per
+launched stretched track in the block holding S. With the anticipative renderer, the default and the
+only executor the GUI starts, a renderer caught up leaves the hand about 128 frames past its frontier,
+under the render block the frontier can move at once, so a budget that keeps the mirror from making an
+attempt late (round 166 F) primed nothing; the renderer's misses run within its render-ahead, not
+against a device deadline. It served only the in-callback executor, which only a scripted
+`engine.start {"anticipative": false}` reaches. Its code (a second key path in audio-thread code)
+and test time did not earn that. Kept from it: the tests' renderer settle before an edit and a check
+that two compared runs switched at the same S, and a test hook that makes preparation attempts late
+(late attempts move S later; three end in the recovery seek). The in-callback executor's burst is a
+known limit in STATUS.
+
+### Revision 2026-11-24: a capture is kept across an engine stop
+
+Before it, an engine stop, a device restart or a device failure destroyed the Engine and with it a
+running or ended, uncommitted capture, silently. Decided (the co-director, with Nate's rule "a
+recording is never lost"): `EngineApp` keeps the last capture across `dropEngine`; a running one is
+ended at the heard position first; it stays committable and readable (`launch.state`'s `capture_kept`)
+with the engine stopped or started again, at any device rate; the stop's answer and the device events
+warn while it is uncommitted; a newer capture replaces it only once it begins, and `launch.capture`
+warns then (a capture is a buffer until committed, and the GUI commits at each take's end). Replacing
+the project or quitting drops it; the GUI's unsaved-work dialog is to count it
+(`EngineApp::captureUncommitted`, the gui-lead's change); a headless quit loses it, a limit stated in
+STATUS. A capture a relocation ends (a seek, a loop change, a stop, and the
+playrate's recovery seek, a prepared locate) stays in the engine, committable, as it did before.
+After review round 168: an undo of the commit makes the capture uncommitted again for as long as it
+is kept (the commit counts while the head descends from the version it was written in), so replacing
+it warns; `launch.state` reports a capture armed and a kept one at once; the GUI's Capture commits a
+kept take, and the warnings are readable in-process (`EngineApp::captureKeptWarning`,
+`captureReplaceWarning`), and `CaptureView` carries what they say as fields, with the commit's
+state (never written, committed, or undone: declined, which the GUI does not write again); the
+Capture pane's showing them, and not arming over a kept take, is the
+gui-lead's. After the round 168 re-check: the app pins the commit's version, so a history squash
+cannot hide that it was undone; a merge that brings the commit onto the head's line counts as it;
+and a launch.commit whose transaction rolls back marks nothing.
+
+### Revision 2026-11-24: renders play a launcher performance
+
+Before it, renders played the arrangement only; a capture reached a file only through launch.commit.
+Decided (the co-director, the contract in engine.md §3.1): `render.mix`, `render.stems`,
+`render.dry-run` and `render.queue.add` take an optional `performance`, "captured", a
+`captured_performance`, or the launcher as it plays over a beat range, and the render replays it
+offline (`OfflineSettings::launches`, in song frames, `launchesInSong`). A render without one still
+plays the arrangement only, and the render dialog's line stays true for it. The result says what was
+played (`performance`, `range`) and whether it is what was heard (`as_heard`, with reasons from facts
+the engine records while it captures: an edit, a playrate change, live input, a dropout, a plug-in
+failure, an engine stop, a start mid-run); `as_heard: true` refuses otherwise. Offline equals what
+was heard, bit for bit, when it says so. A dry run compiles no plan; the one refusal it cannot see is
+a clip past the memory budget. Not rendered: plug-in state from before the start, edits and rate
+changes during a capture (one version is rendered), a loop under a master playrate, and a capture at
+another device rate (launch.commit converts it).
+
+### Revision 2026-11-25: the executors report a return to the arrangement
+
+Before it, the control thread guessed where a plan that lacked a track's clip returned the track
+(an immediate launch's floor, or the playrate plan's handAt), kept the guesses beside the log, and
+could not tell a plan the executors skipped (a removal undone before any executor block), which it
+then marked uncertain. Decided (the co-director, after review rounds 172 and 174): `carryLaunch`
+marks the node, the executor that adopts the plan acks the return through its launch-ack ring at
+its own adoption frame, and the main thread logs it as an ordinary arrangement launch. A skipped
+plan logs nothing; `launch.state`'s "uncertain" and the `launch_state_uncertain` reason are gone. A
+lost ack (a full ring) falls back to the guess, with a warning, and the capture is not as heard. A
+capture with a return stays not as heard (`edited_during`) for the edit behind it; the replay plays
+the return as heard. *(2026-11-25, after review round 176: the return is logged on the node's
+timeline, the stream less its latency shift, so a whole-log replay equals live; a track that joins
+or leaves the anticipative executor's live region without a continuous handoff is acked as a return;
+the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
+engine.md §1.4.2 has the rules.
 
 ## Consequences
 

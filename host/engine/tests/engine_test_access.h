@@ -48,6 +48,17 @@ struct EngineTestAccess {
         e.launchCommitForTests_ = hook;
         e.launchCommitContext_ = context;
     }
+    // The next `attempts` prepareRatePlan attempts count as late: each
+    // prepares again with the hand later, so S later; three fail, and the
+    // recovery seek prepares the plan once more.
+    static void lateAttempts(Engine& e, int attempts) { e.lateAttemptsForTests_ = attempts; }
+    // The newest prepared trajectory change's switch S as a stream frame
+    // (INT64_MIN: none, or a seek). Control thread.
+    static std::int64_t preparedSwitch(const Engine& e) {
+        const detail::Plan* p = e.ratePreparedTail_;
+        if (!p || p->rateSwitchDevice == INT64_MIN) return INT64_MIN;
+        return p->rateSwitchDevice - p->rateOrigin;
+    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;
@@ -86,6 +97,15 @@ struct EngineTestAccess {
         return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
+    // What the callback has played of the current epoch (manual backends:
+    // between cycles, on the test's thread).
+    static std::int64_t played(const Engine& e) { return e.playedStream(e.epoch_.load()); }
+    // The handoff the callback last skipped (round 180 F2), and one set as
+    // a skip leaves it: the latest plan by default (between manual cycles).
+    static const detail::Plan* classBase(const Engine& e) { return e.classBase_; }
+    static void skipped(Engine& e, detail::Plan* plan = nullptr) {
+        e.classBase_ = plan ? plan : e.latestPlan_.load();
+    }
     // The renderer waits for the callback to free room (a ring or its lead).
     static bool rendererWaitsForRoom(const Engine& e) {
         return e.rendererWakeAt_.load() != INT64_MAX;
@@ -156,5 +176,65 @@ struct EngineTestAccess {
     }
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
     static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
+    // The latest plan's handover (a playrate plan's, prepared on the main
+    // thread) and the returns to the arrangement the engine recorded.
+    static std::int64_t latestHandAt(const Engine& e) { return e.latestPlan_.load()->handAt; }
+    // An ack drained late, as the callback's can be behind the renderer's
+    // (only between manual blocks: the callback is the ring's producer).
+    static void drainedLate(Engine& e, const LaunchLogEntry& x) {
+        Engine::LaunchAck a;
+        a.track = x.track.n;
+        a.clip = x.clip.n;
+        a.epoch = x.epoch;
+        a.action = static_cast<std::uint8_t>(x.action);
+        a.stream = x.runningFrame;
+        a.anchorSample = x.anchorSample;
+        a.songFrame = x.songFrame;
+        a.anchorBeat = x.anchorBeat;
+        (void)e.callbackLaunchAcks_->push(a);
+    }
+    static std::uint64_t returnAcksDropped(const Engine& e) { return e.returnAcksDropped_.load(); }
+    static std::uint64_t returnAcksDuplicated(const Engine& e) { return e.returnAcksDuplicated_; }
+    static std::uint64_t launchAcksDropped(const Engine& e) { return e.launchAcksDropped_.load(); }
+    // The in-callback executor's ack ring made full with filler, as if it
+    // were tiny (the test thread runs the Manual backend's cycles, so
+    // nothing pushes meanwhile); emptyLaunchRing discards what it holds,
+    // before the main thread drains it.
+    static std::size_t fillLaunchRing(Engine& e) {
+        std::size_t n = 0;
+        while (e.callbackLaunchAcks_->push(Engine::LaunchAck{})) ++n;
+        return n;
+    }
+    static std::size_t emptyLaunchRing(Engine& e) {
+        std::size_t n = 0;
+        Engine::LaunchAck a;
+        while (e.callbackLaunchAcks_->pop(a)) ++n;
+        return n;
+    }
+    // The returns the log holds (an executor's ack, or the fallback for a
+    // lost one), in its order.
+    static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
+        std::vector<LaunchLogEntry> out;
+        for (std::size_t i = 0; i < e.launchLog_.size(); ++i)
+            if (e.launchIsReturn_[i]) out.push_back(e.launchLog_[i]);
+        return out;
+    }
+    // A full ring, as the in-callback executor would have met it: its
+    // return acks waiting are lost and counted (the test thread runs the
+    // Manual backend's cycles, so nothing pushes meanwhile).
+    static std::size_t loseReturnAcks(Engine& e) {
+        std::vector<Engine::LaunchAck> keep;
+        std::size_t lost = 0;
+        Engine::LaunchAck a;
+        while (e.callbackLaunchAcks_->pop(a)) {
+            if (a.returned)
+                ++lost;
+            else
+                keep.push_back(a);
+        }
+        for (const auto& k : keep) (void)e.callbackLaunchAcks_->push(k);
+        e.returnAcksDropped_.fetch_add(lost);
+        return lost;
+    }
 };
 }  // namespace supple::engine

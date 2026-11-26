@@ -49,6 +49,19 @@ on:
         description: Junk-fill heap memory (macOS MallocPreScribble and MallocScribble, Linux MALLOC_PERTURB_)
         type: boolean
         default: false
+      # Reading what passing tests print (a number a test reports with MESSAGE, a timing the
+      # log should show): ctest -V for the run. Narrowed runs only, the full suite's output
+      # is far too long to read; it changes what is logged, not what runs.
+      verbose:
+        description: Print passing tests' output too (ctest -V; for a narrowed run, not the full suite)
+        type: boolean
+        default: false
+      # The 10 GB cache store cannot hold every branch run's compiler caches
+      # (CONTRIBUTING.md): main always saves, tags never do, a branch only when asked.
+      save_caches:
+        description: Save this run's compiler caches (a candidate's first run; main always saves, tags never)
+        type: boolean
+        default: false
   push:
     tags: ['ci/**']
 
@@ -116,6 +129,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      # Whether this run saves its compiler caches: main always, a branch when
+      # dispatched with save_caches, a tag never (a tag's caches are readable by
+      # no other ref). The dependency cache keeps its own rule.
+      SAVE_COMPILER_CACHE: ${{ (github.ref == 'refs/heads/main' || (github.ref_type == 'branch' && inputs.save_caches)) && 'true' || 'false' }}
     # Different ci/<branch>-<n> tags still cancel superseded platform builds.
     concurrency:
       group: build-${{ needs.plan.outputs.branch }}-${{ matrix.platform }}
@@ -171,6 +189,21 @@ jobs:
       # Ninja/clang-cl still need the Windows SDK and link.exe environment.
       - uses: ilammy/msvc-dev-cmd@v1
         if: matrix.platform == 'windows'
+      # Real-time scanning sees every process start and every file the build writes. The runner
+      # is disposable, so its workspace and temp folders are excluded; the state is printed before
+      # and after, to read what the runner had (round: test-time study, section 12). A refusal
+      # (tamper protection, no rights) leaves the run unchanged.
+      # Printed, not changed: on the Windows image real-time protection was already off and C:\
+      # and D:\ already excluded in every run measured (45516882921, 45542564419), so no
+      # exclusion is added; a change of image shows up on this line.
+      - name: Windows Defender state
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $s = Get-MpComputerStatus
+          "Defender: RealTimeProtection=$($s.RealTimeProtectionEnabled) BehaviorMonitor=$($s.BehaviorMonitorEnabled) IoavProtection=$($s.IoavProtectionEnabled)"
       - name: Windows dependencies (vcpkg binary cache)
         if: matrix.platform == 'windows'
         run: |
@@ -183,6 +216,24 @@ jobs:
           validator=$(tools/validator/build.sh)
           echo "CLAP_VALIDATOR_BIN=$validator" >> "$GITHUB_ENV"
 
+      # ccache for clang-cl, from Chocolatey (preinstalled on the runner image). A failed
+      # or stalled install (continue-on-error covers a failure, the timeout a hang) leaves
+      # the build uncached, not broken: Configure checks that ccache runs.
+      - name: Windows ccache
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          choco install ccache -y --no-progress --limit-output
+          ccache --version
+      - name: Restore Windows compiler cache
+        if: matrix.platform == 'windows'
+        id: windows-compiler-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .compiler-cache
+          key: clangcl-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: clangcl-${{ runner.arch }}-
       # Shared core libraries are compiled in several isolated plugin builds.
       - name: Restore Linux compiler cache
         if: matrix.platform == 'linux'
@@ -209,8 +260,21 @@ jobs:
             # defaults even when the exported project's command has no flags.
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
-            echo "CCACHE_MAXSIZE=500M" >> "$GITHUB_ENV"
-            cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            # 500M was full (the saved cache was 483 to 544 MB) and a restored cache
+            # saved almost no build time; macOS at 1G does not fill up.
+            echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
+            # At most two links at a time (compiles stay at the build's own width): the
+            # last dozen executables are about 600 MB each with debug info, and six
+            # GNU ld links at once are the likely cause of the runner lost mid-build
+            # (runs 45285459726, 45314588844). The nested plugin projects do not read
+            # these and build with one job already.
+            # Line tables only, as the macOS preset has it: the outputs are much
+            # smaller (links, disk, and the ccache limit), assertions and unoptimized code
+            # stay on and backtraces keep file and line. CI only; the dev preset is unchanged,
+            # and the isolated plugin projects keep their own Debug flags.
+            cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link \
+              -DCMAKE_CXX_FLAGS_DEBUG=-gline-tables-only
           elif [[ '${{ matrix.platform }}' == macos ]]; then
             echo "CCACHE_DIR=$GITHUB_WORKSPACE/.compiler-cache" >> "$GITHUB_ENV"
             echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
@@ -220,7 +284,26 @@ jobs:
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
             cmake --preset macos -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          elif [[ '${{ matrix.platform }}' == windows ]] && ccache --version > /dev/null 2>&1; then
+            echo "CCACHE_DIR=$(cygpath -m "$GITHUB_WORKSPACE/.compiler-cache")" >> "$GITHUB_ENV"
+            echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
+            # The log names the options ccache rejects (run 45438146452: 796 of 2190 compiles,
+            # all /clang: options, the project's own warning and codegen flags); the stats
+            # step summarises it.
+            echo "CCACHE_LOGFILE=$(cygpath -m "$RUNNER_TEMP")/ccache.log" >> "$GITHUB_ENV"
+            # The sources built with the project's /clang: flags stay uncached on purpose:
+            # ccache 4.14.1+ refuses them as unsafe to cache (CONTRIBUTING.md).
+            # ccache cannot cache an object whose debug information goes to a PDB at
+            # compile time (/Zi); /Z7 embeds it, and clang-cl treats /Zi as /Z7 already, so
+            # the objects are the same. CI only: the windows preset is unchanged, and the
+            # isolated plugin builds (60% of the compiles) take the setting from here.
+            cmake --preset windows -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           else
+            echo "::warning title=No ccache::ccache is missing or does not run; this Windows build is uncached"
             cmake --preset ${{ matrix.preset }}
           fi
       # Preserve expensive dependencies even when the compiler/test stage fails.
@@ -230,6 +313,73 @@ jobs:
         with:
           path: .deps
           key: ${{ steps.cache.outputs.cache-primary-key }}
+      # Memory and disk around the Linux build and tests, printed into the job
+      # log. A run whose runner is lost keeps none of this: the two lost runs'
+      # logs were gone entirely. The readings help when the runner survives to
+      # the next logging step, and a green run shows its peak. They only report,
+      # so none of them may fail a run (continue-on-error).
+      - name: Linux memory and disk before Build
+        if: matrix.platform == 'linux'
+        continue-on-error: true
+        run: |
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
+          nproc
+          du -sh .deps .compiler-cache 2>/dev/null || true
+          # A sampler for the Build step: available memory and free root disk every
+          # 15 s, started detached here, stopped and summarised after Build. The
+          # summary shows the peak of a green run, and of a Build that fails with
+          # the runner still alive; a lost runner prints nothing.
+          cat > "$RUNNER_TEMP/memsampler.sh" <<'SAMPLER'
+          #!/bin/bash
+          # usage: memsampler.sh <log> <pidfile>: "HH:MM:SS MemAvailable_MB RootAvail_MB" every 15 s
+          echo $$ > "$2"
+          while :; do
+            printf '%s %s %s\n' "$(date +%H:%M:%S)" \
+              "$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)" \
+              "$(df --output=avail -m / | tail -n 1 | tr -d ' ')" >> "$1"
+            sleep 15
+          done
+          SAMPLER
+          : > "$RUNNER_TEMP/memavail.log"
+          nohup setsid bash "$RUNNER_TEMP/memsampler.sh" "$RUNNER_TEMP/memavail.log" "$RUNNER_TEMP/memsampler.pid" > /dev/null 2>&1 &
+      # CPU use every 15 s through Build and the tests: "HH:MM:SS cpu% availableMB". It shows how much of
+      # the step the CPU idles in (sleeping or waiting tests, a serial tail); ctest reports no CPU time.
+      # Started detached here, summarised after Build and after the tests, stopped by its pid.
+      - name: Windows CPU sampler
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'cpusampler.ps1'
+          $log = Join-Path $env:RUNNER_TEMP 'cpu.log'
+          $pidfile = Join-Path $env:RUNNER_TEMP 'cpusampler.pid'
+          Set-Content -Encoding ascii -Path $log -Value $null
+          @'
+          param($log, $pidfile)
+          $PID | Out-File -Encoding ascii $pidfile
+          while ($true) {
+            # Reset each time round: a Get-Counter that throws leaves the assignment undone, and
+            # the last loop's value would be written again as this one's.
+            $c = $null
+            $m = $null
+            $c = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
+            $m = (Get-Counter '\Memory\Available MBytes' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
+            # F0, not N0: N0 writes 12,345 and awk would read 12. A counter that returns nothing
+            # writes NA, so the other column never shifts into its place (memory read as CPU %).
+            $cs = if ($null -ne $c) { '{0:F0}' -f $c } else { 'NA' }
+            $ms = if ($null -ne $m) { '{0:F0}' -f $m } else { 'NA' }
+            "$(Get-Date -Format 'HH:mm:ss') $cs $ms" | Out-File -Append -Encoding ascii $log
+            Start-Sleep -Seconds 15
+          }
+          '@ | Set-Content -Encoding ascii -Path $script
+          Start-Process -FilePath pwsh -ArgumentList '-NoProfile', '-File', $script, $log, $pidfile -WindowStyle Hidden
+      # ccache keeps its counters in the cache directory, so a restored cache
+      # carries the last run's: zero them to read this run's hit rate.
+      - name: Compiler cache statistics reset
+        continue-on-error: true
+        run: ccache --zero-stats
       - name: Build
         # Align the environment and explicit CLI limit for predictable
         # compiler concurrency on every runner.
@@ -259,6 +409,40 @@ jobs:
           else
             exit 1
           fi
+      - name: Linux memory and disk after Build
+        if: always() && matrix.platform == 'linux'
+        continue-on-error: true
+        run: |
+          if [[ -f "$RUNNER_TEMP/memsampler.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/memsampler.pid")" 2>/dev/null || true
+          fi
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
+          du -sh build/${{ matrix.preset }} .deps .compiler-cache 2>/dev/null || true
+          if [[ -s "$RUNNER_TEMP/memavail.log" ]]; then
+            echo "Build step samples (time, MemAvailable MB, root free MB): $(wc -l < "$RUNNER_TEMP/memavail.log")"
+            echo "lowest MemAvailable:"; sort -k2,2n "$RUNNER_TEMP/memavail.log" | sed -n 1p
+            echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | sed -n 1p
+            echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
+          fi
+      - name: Compiler cache statistics after Build
+        if: always()
+        continue-on-error: true
+        run: |
+          ccache --show-stats --verbose
+          ccache --show-config | grep -E '^\(.*\) (cache_dir|max_size) ' || true
+          if [[ -n "${CCACHE_LOGFILE:-}" && -f "$CCACHE_LOGFILE" ]]; then
+            echo "ccache log: $(wc -l < "$CCACHE_LOGFILE") lines; rejected compiles by reason:"
+            grep -i 'unsupported' "$CCACHE_LOGFILE" | sed -E 's/^\[[^]]*\] *//' | sort | uniq -c | sort -rn | sed -n 1,20p || true
+          fi
+      - name: Windows CPU use after Build
+        if: always() && matrix.platform == 'windows'
+        continue-on-error: true
+        run: |
+          log="$RUNNER_TEMP/cpu.log"
+          wc -l < "$log" > "$RUNNER_TEMP/cpu-build-lines"
+          echo "Build: samples, mean CPU busy, samples under 50% busy, mean available MB"
+          awk '{ sub(/\r$/, "") } NF >= 3 { if ($2 != "NA") { n++; s += $2; if ($2 < 50) low++ } if ($3 != "NA") { k++; m += $3 } } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), ", n, s / n, low, 100 * low / n; else printf "no CPU samples, "; if (k) printf "%.0f MB available\n", m / k; else print "no memory samples" }' "$log"
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
@@ -268,9 +452,12 @@ jobs:
           SUPPLE_CI_TESTS: ${{ inputs.tests }}
           SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
           SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
+          SUPPLE_CI_VERBOSE: ${{ inputs.verbose }}
         run: |
           if [[ "$SUPPLE_CI_SCRIBBLE" == true ]]; then export MALLOC_PERTURB_=165; fi
-          xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+          verbose=()
+          if [[ "$SUPPLE_CI_VERBOSE" == true ]]; then verbose=(-V); fi
+          xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev ${verbose[@]+"${verbose[@]}"} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       # The runner's desktop is 1024x768, smaller than the stock editors and
       # the 1320x840 the probes resize them to; win32-embedding can only see
       # what is on screen.
@@ -289,6 +476,7 @@ jobs:
           SUPPLE_CI_TESTS: ${{ inputs.tests }}
           SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
           SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
+          SUPPLE_CI_VERBOSE: ${{ inputs.verbose }}
         # The macOS runner has three cores: six tests at once there pushed the
         # instruments' reset, state and validator checks past their timeouts.
         # libmalloc reads MallocScribble when it is set at all, even empty, so
@@ -297,15 +485,49 @@ jobs:
           if [[ "$SUPPLE_CI_SCRIBBLE" == true && '${{ matrix.platform }}' == macos ]]; then
             export MallocPreScribble=1 MallocScribble=1
           fi
-          ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+          verbose=()
+          if [[ "$SUPPLE_CI_VERBOSE" == true ]]; then verbose=(-V); fi
+          ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${verbose[@]+"${verbose[@]}"} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+      - name: Windows CPU use after tests
+        if: always() && matrix.platform == 'windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/cpu.log"
+          if [[ -f "$RUNNER_TEMP/cpusampler.pid" ]]; then
+            taskkill //PID "$(tr -d '\r\n ' < "$RUNNER_TEMP/cpusampler.pid")" //F > /dev/null 2>&1 || true
+          fi
+          from=$(( $(cat "$RUNNER_TEMP/cpu-build-lines" 2> /dev/null || echo 0) + 1 ))
+          echo "Tests: samples, mean CPU busy, samples under 50% busy, mean available MB"
+          tail -n +"$from" "$log" | awk '{ sub(/\r$/, "") } NF >= 3 { if ($2 != "NA") { n++; s += $2; if ($2 < 50) low++ } if ($3 != "NA") { k++; m += $3 } } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), ", n, s / n, low, 100 * low / n; else printf "no CPU samples, "; if (k) printf "%.0f MB available\n", m / k; else print "no memory samples" }'
+          echo "busy % over the test step, one value per 15 s:"
+          tail -n +"$from" "$log" | awk '{ sub(/\r$/, "") } NF >= 2 { printf "%s ", $2 } END { print "" }'
+      - name: Linux memory and disk after tests
+        if: always() && matrix.platform == 'linux'
+        continue-on-error: true
+        run: |
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
+      # The compiler caches are saved whatever Build and the tests did (always()),
+      # so a seed run on main (CONTRIBUTING.md) saves even when its test entry
+      # fails; only an exact hit on the commit's own key, or a run that is not
+      # to save (SAVE_COMPILER_CACHE above), skips the save. The
+      # dependency cache is saved earlier and only after its steps passed, so a
+      # failed install never leaves a half-filled .deps under the exact key.
       - name: Save Linux compiler cache
-        if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+      - name: Save Windows compiler cache
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'windows' && steps.windows-compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .compiler-cache
+          key: ${{ steps.windows-compiler-cache.outputs.cache-primary-key }}
       - name: Save macOS compiler cache
-        if: always() && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache

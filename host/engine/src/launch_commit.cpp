@@ -51,6 +51,29 @@ Result<json::Value> invokeNested(Context& ctx, const char* name, json::Value arg
 
 }  // namespace
 
+// The engine's capture as launch.commit records it.
+CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
+    CapturedPerformance p;
+    p.sampleRate = rate;
+    p.start = c.startSample;
+    p.frames = c.frames;
+    if (c.loop.active()) p.loop = CapturedLoop{c.loop.start, c.loop.end};
+    for (const LaunchLogEntry& e : c.launches) {
+        CapturedLaunch l;
+        l.frame = e.runningFrame;
+        l.track = e.track.str();
+        l.action = e.action == LaunchLogEntry::Action::Clip   ? "clip"
+                   : e.action == LaunchLogEntry::Action::Stop ? "stop"
+                                                              : "arrangement";
+        if (e.action == LaunchLogEntry::Action::Clip) l.clip = e.clip.str();
+        if (e.scene) l.scene = e.scene->str();
+        l.anchor = e.anchorSample;
+        l.anchorBeat = e.anchorBeat;
+        p.launches.push_back(std::move(l));
+    }
+    return p;
+}
+
 schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
     const auto sample = schema::integer().range(0, kSampleLimit);
     auto launch =
@@ -149,6 +172,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
         }
     }
     std::sort(order.begin(), order.end());
+    // A launch's own path, so a refusal names which launch's stretch it
+    // met (a client words it from the code and this index).
+    const auto launchPath = [&](const CapturedLaunch* e) {
+        return at + "/launches/" + std::to_string(e - perf.launches.data());
+    };
 
     CommitDone done;
     done.from = beatAt(double(perf.start));
@@ -364,7 +392,13 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool fadeIn =
                 (last.to < perf.frames && last.e->action == "clip" && !heldBy(last, last.to)) ||
                 to > last.to;
-            SUPPLE_TRY(clear(stretches[i].from, to, fadeOut, fadeIn));
+            // A locked item in the way (item.locked, from the split or the
+            // removal) names the launch that left the arrangement there.
+            if (Status cleared = clear(stretches[i].from, to, fadeOut, fadeIn); !cleared) {
+                Error e = std::move(cleared).error();
+                e.path = launchPath(stretches[i].e);
+                return e;
+            }
             // The span it answers covers that tail (review round 135, L1).
             done.to = std::max(done.to, beatAt(double(perf.start + to)));
             i = j + 1;
@@ -398,7 +432,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 prev && !(prev->e && prev->e->action == "stop") && !(prev && heldBy(*prev, x.from));
             const bool fadeOut = x.to < perf.frames && !heldBy(x, x.to);
             const double speed = take.playrate > 0 ? take.playrate : 1.0;
-            const std::string path = at + "/launches";
+            const std::string path = launchPath(x.e);  // its fade and clip refusals
             // The clip's own fades, in song samples as its player has them
             // (S3 step C, Q4): each piece takes them on the pass edges it has.
             const std::int64_t Pf = midi ? 0 : time::samplesAt(P, rate);

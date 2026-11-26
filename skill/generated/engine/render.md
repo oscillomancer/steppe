@@ -12,7 +12,7 @@ In an argument table, a member of an object argument is listed under it as `argu
 
 List the files a render would write, with lengths, without rendering.
 
-Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source).
+Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source, mix with a performance where that is regions). With performance it also answers performance, range, as_heard and not_heard_because, compiling no plan.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -87,7 +87,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -95,6 +97,69 @@ Kind: `query`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply Hint: drop it
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `region.unknown`: no such region Hint: region.list
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance is at another rate Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of order or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a clip on another track Hint: give the clip's own track
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: a clip refused under the playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
 
 ### Examples
 
@@ -121,7 +186,7 @@ Result:
 
 Render the mix offline with the project's settings (default: whole song).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. performance plays a launcher performance instead of the arrangement alone: "captured" (the capture, on the version it began on unless version is given), a captured_performance (launch.commit's), or {from: "launcher", start_beat, end_beat}. Its range replaces bounds (bounds in the call is refused). The result adds performance (the object played), range, as_heard and not_heard_because; as_heard: true refuses one that is not as heard (render.not_as_heard). Refusals name the launch: /performance/launches/N. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -196,7 +261,9 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -204,6 +271,72 @@ Kind: `action`. Exposure: `mcp-tool`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply Hint: drop it
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `render.stale_target`: the project changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance is at another rate Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of order or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a clip on another track Hint: give the clip's own track
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: a clip refused under the playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
+- `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
 
@@ -237,7 +370,7 @@ Result:
 
 Delete one of the user's render presets, or the user's render default.
 
-
+It never reads the file, so a damaged preset (render.preset.list: damaged) is removed too.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -257,7 +390,10 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `render.preset_name`: neither or both of name and default, or a bad name Hint: name a preset or pass default: true
 - `render.preset_factory`: factory presets cannot be deleted Hint: delete one of your own
+- `render.preset_write`: the preset file cannot be removed Hint: check the user data folder
+- `render.preset_unknown`: no preset with that name, or no default Hint: render.preset.list shows them
 
 ### Examples
 
@@ -283,7 +419,7 @@ Result:
 
 Render presets, factory then user's, with settings.
 
-default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project.
+default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project. A user preset that cannot be read is {name, factory: false, damaged: {code, path}}, as render.preset.load answers it; render.preset.delete removes it.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -298,6 +434,13 @@ Kind: `query`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `file.open`: a preset file cannot be opened Hint: check the folder
+- `file.read`: a preset file cannot be read Hint: check the file
+- `file.too_large`: a preset file is too large Hint: delete it
+- `json.parse.*`: a preset file is not JSON Hint: fix or delete it
 
 ### Examples
 
@@ -342,6 +485,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `render.preset_name`: neither or both of name and default, or a bad name Hint: name a preset or pass default: true
+- `file.open`: a preset file cannot be opened Hint: check the folder
+- `file.read`: a preset file cannot be read Hint: check the file
+- `file.too_large`: a preset file is too large Hint: delete it
+- `json.parse.*`: a preset file is not JSON Hint: fix or delete it
 - `render.preset_unknown`: no preset with that name Hint: render.preset.list shows them
 
 ### Examples
@@ -410,6 +558,16 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `render.preset_name`: neither or both of name and default, or a bad name Hint: name a preset or pass default: true
+- `file.open`: a preset file cannot be opened Hint: check the folder
+- `file.read`: a preset file cannot be read Hint: check the file
+- `file.too_large`: a preset file is too large Hint: delete it
+- `json.parse.*`: a preset file is not JSON Hint: fix or delete it
+- `render.preset_write`: the presets folder cannot be made Hint: check the user data folder
+- `file.write`: a preset file cannot be written Hint: check the disk
+- `file.sync`: a preset file cannot be synced Hint: check the disk
+- `file.sync_directory`: the presets folder cannot be synced Hint: check the disk
+- `file.sync_published`: a preset was written but not synced Hint: check the disk
 - `render.preset_factory`: a factory preset has that name Hint: save under another name
 
 ### Examples
@@ -443,7 +601,7 @@ Result:
 
 Queue a render (mix, stems, regions) for render.queue.run.
 
-args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
+args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. A performance is stored as the captured_performance it resolved to. The queue is transport-like state: not an undo step, not saved with the project.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -464,7 +622,66 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `render.args`: an argument does not apply Hint: drop it
 - `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `region.unknown`: no such region Hint: region.list
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance is at another rate Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of order or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a clip on another track Hint: give the clip's own track
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: a clip refused under the playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
 
 ### Examples
 
@@ -603,6 +820,69 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `render.queue_empty`: nothing is queued Hint: render.queue.add first
+- `render.args`: an argument does not apply Hint: drop it
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `render.stale_target`: the project changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance is at another rate Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of order or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a clip on another track Hint: give the clip's own track
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: a clip refused under the playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
+- `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
 
@@ -701,7 +981,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -709,6 +991,62 @@ Kind: `action`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply Hint: drop it
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `region.unknown`: no such region Hint: region.list
+- `render.stale_target`: the project changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
 
 ### Examples
 
@@ -810,7 +1148,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -818,6 +1158,19 @@ Kind: `query`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list shows the versions
+- `branch.unknown`: no such branch Hint: branch.list shows the branches
+- `render.args`: an argument does not apply to this call Hint: drop the argument the path names
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.preset_name`: neither or both of name and default, or a bad name Hint: name a preset or pass default: true
+- `file.open`: a preset file cannot be opened Hint: check the folder
+- `file.read`: a preset file cannot be read Hint: check the file
+- `file.too_large`: a preset file is too large Hint: delete it
+- `json.parse.*`: a preset file is not JSON Hint: fix or delete it
 
 ### Examples
 
@@ -844,7 +1197,7 @@ Result:
 
 Render each selected track to its own file (stems).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. performance plays a launcher performance instead of the arrangement alone: "captured" (the capture, on the version it began on unless version is given), a captured_performance (launch.commit's), or {from: "launcher", start_beat, end_beat}. Its range replaces bounds (bounds in the call is refused). The result adds performance (the object played), range, as_heard and not_heard_because; as_heard: true refuses one that is not as heard (render.not_as_heard). Refusals name the launch: /performance/launches/N.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -919,7 +1272,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -927,6 +1282,72 @@ Kind: `action`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply Hint: drop it
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list
+- `branch.unknown`: no such branch Hint: branch.list
+- `engine.range`: the range is empty or out of bounds Hint: fix the range
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed Hint: fx.restart it
+- `engine.media_missing`: an audio file is missing Hint: restore the file
+- `engine.media_changed`: an item's audio file changed Hint: restore the file
+- `engine.media_too_long`: an audio file is too long Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `engine.stretch`: a source cannot be stretched Hint: see the message
+- `media.budget`: sources exceed the sample budget Hint: use shorter sources
+- `warp.peers`: a warp peer is missing Hint: detach the bundle
+- `warp.budget`: a warp bundle exceeds its budget Hint: shorten its items
+- `warp.rate`: a warp segment's rate is out of range Hint: rates 0.01 .. 100
+- `json.parse.*`: the render default is not JSON Hint: fix or delete it
+- `plugin.unknown`: a plug-in is not available Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a folder cannot be synced Hint: check the disk
+- `file.sync_published`: written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: a format or depth is unsupported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
+- `render.pattern`: the name pattern does not parse Hint: fix the token named
+- `render.path`: a destination is outside renders or unwritable Hint: change pattern
+- `render.exists`: a destination exists Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: render.settings
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a non-master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop it cannot follow Hint: drop the loop
+- `track.unknown`: a named track is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: too long, or so at the playrate Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `render.stale_target`: the project changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance is at another rate Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of order or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a clip on another track Hint: give the clip's own track
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: a clip refused under the playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
+- `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
 

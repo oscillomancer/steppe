@@ -765,7 +765,10 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         if (!stopped) return stopped.error();
     }
     projectGeneration_.fetch_add(1, std::memory_order_acq_rel);
-    stopAudition();  // a file audition belongs to the old project's media folder (ADR-0094)
+    keptCapture_.reset();  // the old project's (the GUI asks first: captureUncommitted)
+    pendingCommit_.reset();
+    commitPins_.clear();  // leases in the old project's history
+    stopAudition();       // a file audition belongs to the old project's media folder (ADR-0094)
     // A control still moving belongs to the old project's effects.
     learnCommits_.clear();
     learnState_.clear();
@@ -779,7 +782,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     stopJobs();
     if (engine_) {
         engine_->stop();
-        engine_.reset();
+        dropEngine();
         protections_->stop();
         processFaultBase_.reset();
         faultWatch_.clear();
@@ -1768,7 +1771,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     engine_->setMidiPreferences(midiInputsPreferences_, midiOutputsPreferences_);
     auto st = engine_->start(backend, config);
     if (!st) {
-        engine_.reset();
+        dropEngine();
         backend.setMainThreadWake(nullptr);
         return st;
     }
@@ -1785,7 +1788,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
             }
     if (!numeric) {
         engine_->stop();
-        engine_.reset();
+        dropEngine();
         backend.setMainThreadWake(nullptr);
         return numeric.error();
     }
@@ -1894,7 +1897,160 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     return st;
 }
 
-void EngineApp::haltEngine() {
+namespace {
+// A capture that has begun: placed, and heard a frame. One turned on while
+// stopped is placed at once (it begins where playing starts), its launches
+// already holding what each track plays then; turned off before playing,
+// it has captured nothing.
+bool captureBegun(const Engine::LaunchCapture& c) { return c.placed && c.frames > 0; }
+}  // namespace
+
+// Every reader of the capture comes here, and haltEngine checks the same
+// rule, so the kept capture is dropped the first time anyone looks after a
+// newer one has begun: when that is asked does not change what is kept
+// (review round 168 S4).
+std::optional<EngineApp::CaptureView> EngineApp::launchCapture() {
+    auto own = engine_ ? engine_->launchCapture() : std::nullopt;
+    if (own && captureBegun(*own) && keptCapture_)  // the newer one ran: it replaces it
+        keptCapture_.reset();
+    // A pin no capture names any more goes at once: a kept capture replaced,
+    // or the engine's replaced by a newer one (review round 168 recheck 2 S3).
+    if (!commitPins_.empty())
+        std::erase_if(commitPins_, [&](const auto& pin) {
+            return !(own && own->committedIn == pin.first) &&
+                   !(keptCapture_ && keptCapture_->capture.committedIn == pin.first);
+        });
+    if (own && (captureBegun(*own) || !keptCapture_)) {
+        const double rate = engine_->config().sampleRate;
+        return described(CaptureView{std::move(*own), rate, false, CaptureEnd::None});
+    }
+    if (!keptCapture_) return std::nullopt;
+    return described(*keptCapture_);
+}
+
+EngineApp::CaptureView EngineApp::described(CaptureView view) const {
+    view.commit = captureCommit(view.capture);
+    const model::Session session = this->view();  // holds the time map
+    const time::TimeMap& tm = *session.timeMap;
+    const double rate = view.sampleRate > 0 ? view.sampleRate : 48000.0;
+    view.startBeat = tm.beatAt(double(view.capture.startSample) / rate);
+    view.endBeat = tm.beatAt(double(view.capture.startSample + view.capture.frames) / rate);
+    view.replacedOnBegin = view.kept && engine_ && engine_->launchCapturing();
+    return view;
+}
+
+EngineApp::CaptureCommit EngineApp::captureCommit(const Engine::LaunchCapture& c) const {
+    const std::uint64_t in = c.committedIn;
+    if (in == 0) return CaptureCommit::None;
+    // Set only once the commit's transaction committed (a rollback drops the
+    // mark), and the version is pinned (commitPins_), so it is never
+    // squashed or collected. Committed while the head reaches it: by first
+    // parents (an undo takes it back, a redo restores it), or through a
+    // merge of a line that holds it.
+    std::set<std::uint64_t> seen;
+    return reachesCommit(versions_->headVersion(versions_->branch()), in, seen)
+               ? CaptureCommit::Committed
+               : CaptureCommit::Undone;
+}
+
+bool EngineApp::reachesCommit(std::uint64_t at, std::uint64_t in,
+                              std::set<std::uint64_t>& seen) const {
+    const model::VersionStore& store = *versions_;
+    while (at > in) {  // ids grow from parent to child, replays included
+        if (!seen.insert(at).second) return false;  // walked from here already
+        const model::Version* v = store.version(at);
+        // Not retained (a source step a budget squash folded away): say it
+        // is uncommitted, the side that warns.
+        if (!v) return false;
+        // A merge's replayed step stands for its source (review round 168
+        // recheck 2 F1): the commit itself, or a later step of its line.
+        if (v->replayOf >= in && reachesCommit(v->replayOf, in, seen)) return true;
+        // A merge's last step: its second parent is the merged branch's head.
+        if (v->parents.size() > 1 && reachesCommit(v->parents[1], in, seen)) return true;
+        if (v->parents.empty()) return false;
+        at = v->parents[0];
+    }
+    return at == in;
+}
+
+void EngineApp::applyCommitMark(const CommitMark& mark, std::uint64_t version) {
+    if (mark.version != version) return;
+    if (mark.kept) {
+        if (!keptCapture_) return;
+        keptCapture_->capture.committedIn = version;
+    } else {
+        if (!engine_) return;
+        engine_->markCaptureCommitted(version);
+    }
+    if (auto lease = versions_->pin(version)) commitPins_[version] = std::move(lease);
+    pruneCommitPins();
+}
+
+void EngineApp::pruneCommitPins() {
+    std::set<std::uint64_t> named;
+    if (keptCapture_) named.insert(keptCapture_->capture.committedIn);
+    if (engine_)
+        if (const auto c = engine_->launchCapture()) named.insert(c->committedIn);
+    std::erase_if(commitPins_, [&](const auto& pin) { return !named.contains(pin.first); });
+}
+
+bool EngineApp::captureUncommitted() {
+    const auto c = launchCapture();
+    if (!c || !c->capture.placed || c->capture.frames <= 0 || c->capture.launches.empty())
+        return false;
+    return c->commit != CaptureCommit::Committed;  // never written, or taken back
+}
+
+void EngineApp::markCaptureCommitted(std::uint64_t version) {
+    if (replaying_) return;  // a replayed launch.commit writes a recorded performance
+    const auto c = launchCapture();
+    if (!c) return;
+    pendingCommit_ = CommitMark{version, c->kept};  // applied by commitTransaction
+}
+
+bool EngineApp::captureKept() {
+    (void)launchCapture();  // a newer capture that has begun replaces it
+    return keptCapture_.has_value();
+}
+
+std::optional<std::string> EngineApp::captureKeptWarning() {
+    if (!captureKept() || !captureUncommitted() || !keptCapture_) return std::nullopt;
+    const char* then = keptCapture_->endedBy == CaptureEnd::EngineStop
+                           ? " was running when the engine stopped: it ended there and is kept "
+                             "uncommitted; launch.commit writes it"
+                       : keptCapture_->endedBy == CaptureEnd::Device
+                           ? " was running when the audio device restarted: it ended there and "
+                             "is kept uncommitted; launch.commit writes it"
+                           : " is kept uncommitted: launch.commit writes it";
+    return "launch: " + captureLine(*keptCapture_, then);
+}
+
+std::optional<std::string> EngineApp::captureReplaceWarning() {
+    if ((engine_ && engine_->launchCapturing()) || !captureUncommitted()) return std::nullopt;
+    return "launch: this capture replaces " +
+           captureLine(*launchCapture(),
+                       ", uncommitted, once it begins; launch.capture {on: false} before then, "
+                       "and launch.commit, keep it");
+}
+
+void EngineApp::keepEngineCapture() {
+    if (!engine_) return;
+    if (auto c = engine_->launchCapture(); c && captureBegun(*c))
+        keptCapture_ =
+            CaptureView{std::move(*c), engine_->config().sampleRate, true, CaptureEnd::None};
+}
+
+std::string EngineApp::captureLine(const CaptureView& c, std::string_view then) const {
+    // Worded from the view's fields, the ones a client in-process reads.
+    const CaptureView d = described(c);
+    const auto beat = [](double b) { return json::formatDouble(std::round(b * 1000) / 1000); };
+    const std::size_t n = d.capture.launches.size();
+    return "the capture from beat " + beat(d.startBeat) + " to " + beat(d.endBeat) + " (" +
+           std::to_string(n) + (n == 1 ? " launch" : " launches") + ", version " +
+           std::to_string(c.capture.version) + ")" + std::string(then);
+}
+
+void EngineApp::haltEngine(CaptureEnd why) {
     // A pass the halt interrupts is never finished (ADR-0061): its writes
     // must not come back as holds or a latch tail when a successor plays or
     // records (recording, unlike play, starts no new pass).
@@ -1904,10 +2060,17 @@ void EngineApp::haltEngine() {
     pendingSourceKey_.clear();
     preparationError_.clear();
     if (engine_) {
+        // The capture is kept (ADR-0097, revision 2026-11-24): a running one
+        // ended here, at the heard position, while the clock still reads.
+        const bool running = engine_->launchCapturing();
+        if (running) (void)engine_->captureLaunches(false);
+        if (auto c = engine_->launchCapture(); c && captureBegun(*c))
+            keptCapture_ = CaptureView{std::move(*c), engine_->config().sampleRate, true,
+                                       running ? why : CaptureEnd::None};
         engine_->stop();
         auto takes = engine_->stopRecording();
         engine_->service();
-        engine_.reset();
+        dropEngine();
         recordingFiles_.clear();
         recordingMasters_ = false;  // the engine that held them is gone
         if (takes) {
@@ -2152,12 +2315,17 @@ void EngineApp::beginRestart(std::string reason, double seconds) {
     restartBackoff_ = 0;
     restartUntil_ = serviceClockMs() + kRestartGiveUpMs;
     restartRetryAt_ = serviceClockMs();
+    // Playback stays stopped; the position and the loop are restored. The
+    // capture is kept; the event names it when it is uncommitted.
+    haltEngine(CaptureEnd::Device);
+    restarting_ = true;
     json::Value ev = json::Value::object();
     ev["reason"] = restartReason_;
+    if (const auto warning = captureKeptWarning()) {
+        ev["warnings"] = json::Value::array();
+        ev["warnings"].push_back(*warning);
+    }
     emit("engine.restarting", std::move(ev));
-    // Playback stays stopped; the position and the loop are restored.
-    haltEngine();
-    restarting_ = true;
 }
 
 void EngineApp::retryRestart() {
@@ -2167,6 +2335,10 @@ void EngineApp::retryRestart() {
         auto ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_.empty() ? "device restart deadline expired" : restartError_;
+        if (const auto warning = captureKeptWarning()) {
+            ev["warnings"] = json::Value::array();
+            ev["warnings"].push_back(*warning);
+        }
         emit("engine.error", std::move(ev));
         return;
     }
@@ -2204,6 +2376,11 @@ void EngineApp::retryRestart() {
         json::Value ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_;
+        // The same warning as the give-up above (review round 168 F3).
+        if (const auto warning = captureKeptWarning()) {
+            ev["warnings"] = json::Value::array();
+            ev["warnings"].push_back(*warning);
+        }
         emit("engine.error", std::move(ev));
         return;
     }
@@ -5733,6 +5910,9 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
         }
     } writing{autoWrite_, std::exchange(autoWriteRollback_, std::nullopt)};
     std::unique_ptr<model::EditTxn> t = std::move(txn_);
+    // launch.commit's mark counts only if this commits (review round 168
+    // re-check R3): any return before that drops it.
+    const auto commitMark = std::exchange(pendingCommit_, std::nullopt);
     mainWake_.notify();  // resume work deferred by this transaction
     auto changes = t->changes();
     if (changes.empty() && !t->projectChanged() && t->created().empty()) {
@@ -5748,6 +5928,7 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
                                std::move(created), clockMs());
     if (!v) return std::move(v).error();
     writing.committed = true;
+    if (commitMark) applyCommitMark(*commitMark, *v);
     json::Value ev = json::Value::object();
     ev["version"] = *v;
     ev["branch"] = versions_->branch();
@@ -5759,6 +5940,7 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
 Status EngineApp::rollbackTransaction(std::uint64_t id) {
     if (id == txnId_) {
         txn_.reset();
+        pendingCommit_.reset();  // its launch.commit did not happen
         if (autoWriteRollback_) autoWrite_ = std::move(*autoWriteRollback_);
         autoWriteRollback_.reset();
         mainWake_.notify();
@@ -5770,10 +5952,11 @@ Result<std::function<Status()>> EngineApp::invocationSavepoint() {
     if (!txn_) return std::function<Status()>{};
     auto scriptEvents = scripts_ ? scripts_->eventSavepoint() : std::function<void()>{};
     return std::function<Status()>([this, saved = *txn_, record = record_, writing = autoWrite_,
-                                    events = events_,
+                                    events = events_, mark = pendingCommit_,
                                     scriptEvents = std::move(scriptEvents)]() mutable {
         *txn_ = std::move(saved);
         record_ = std::move(record);
+        pendingCommit_ = mark;  // a launch.commit undone with its step
         autoWrite_ = std::move(writing);
         events_ = std::move(events);
         if (scriptEvents) scriptEvents();
@@ -6176,6 +6359,90 @@ struct Gain : Effect {
     if (fixture == "render_queued")  // + q1: the mix of the first beat
         run("render.queue.add",
             R"({"command": "render.mix", "args": {"end_beat": 1, "name": "queued"}})");
+}
+
+// The commands read view(); outside a transaction (the GUI's frames) that is
+// the head, read here without a copy. Each request is built from that
+// session, as the press builds it, and every refusal carries the path a
+// caller of the press receives (the bus puts /args before a command
+// error's path), so the answer is the press's error field for field
+// (round 145 B1, B2).
+std::optional<Error> EngineApp::clipRefusal(const model::Session& s, model::Id clip) const {
+    const model::Clip* c = s.clips.find(clip);
+    if (!c) return std::nullopt;  // the press: not a clip (an argument error)
+    if (const auto* track = s.tracks.find(c->track); track && track->freeze)
+        return trackFrozen(c->track, "/args/clip");
+    if (!engine_) return std::nullopt;  // launch.clip: engine.stopped
+    auto refused = engine_->launchRefusal({c->track, LaunchLogEntry::Action::Clip, clip, {}});
+    if (refused) refused->path = "/args/clip";
+    return refused;
+}
+
+std::optional<Error> EngineApp::launchRefusal(model::Id clip) const {
+    return txn_ ? clipRefusal(view(), clip) : clipRefusal(head(), clip);
+}
+
+EngineApp::LaunchRefusals EngineApp::launchRefusals() const {
+    LaunchRefusals out;
+    const auto all = [&](const model::Session& s) {
+        for (const auto& e : s.clips)
+            if (auto refused = clipRefusal(s, e.id)) out.clips.emplace(e.id, std::move(*refused));
+        if (!engine_) return;  // launch.scene: engine.stopped
+        // launch.scene's selection for every scene at once, the one the
+        // per-scene answer and the press take; each request's refusal is the
+        // clip's above (Engine::launchRefused does not read the scene).
+        const auto selections = sceneLaunches(s, engine_->clipsSkipped());
+        for (const auto& e : s.scenes) {
+            const auto selection = selections.find(e.id);
+            if (selection == selections.end() || selection->second.requests.empty()) {
+                Error none = sceneHasNoClip(e.id);
+                none.path = "/args/scene";
+                out.scenes.emplace(e.id, std::move(none));
+                continue;
+            }
+            for (const Engine::LaunchRequest& r : selection->second.requests)
+                if (const auto refused = out.clips.find(r.clip); refused != out.clips.end()) {
+                    Error first = refused->second;
+                    first.path = "/args/scene";
+                    out.scenes.emplace(e.id, std::move(first));
+                    break;
+                }
+        }
+    };
+    if (txn_)
+        all(view());
+    else
+        all(head());
+    return out;
+}
+
+std::uint64_t EngineApp::launchRefusalGeneration() const {
+    const RefusalInputs now{planBase_ + (engine_ ? engine_->planGeneration() : 0), head().version,
+                            projectGeneration(), engine_ != nullptr};
+    if (!(now == refusalInputs_)) {
+        refusalInputs_ = now;
+        ++refusalGeneration_;
+    }
+    return refusalGeneration_;
+}
+
+std::optional<Error> EngineApp::sceneLaunchRefusal(model::Id scene) const {
+    if (!engine_) return std::nullopt;
+    const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
+        const SceneLaunch selection = sceneLaunchRequests(s, scene, engine_->clipsSkipped());
+        if (selection.requests.empty()) {
+            Error none = sceneHasNoClip(scene);
+            none.path = "/args/scene";
+            return none;
+        }
+        for (const Engine::LaunchRequest& r : selection.requests)
+            if (auto refused = engine_->launchRefusal(r)) {
+                refused->path = "/args/scene";
+                return refused;
+            }
+        return std::nullopt;
+    };
+    return txn_ ? refusal(view()) : refusal(head());
 }
 
 }  // namespace supple::engine

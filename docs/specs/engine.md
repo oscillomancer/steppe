@@ -513,8 +513,11 @@ the same.*
   timelines.
 - **The queue is the engine's (L-b).** It has fixed capacity and holds one
   entry per track; a newer launch on a track replaces its pending entry.
-  Plans hold only the players, so an entry survives plan swaps and a plan
-  waiting for adoption.
+  *(An entry applied early, a clip chain's lead or an audio clip's warm-up
+  under a pitch-keeping rate, is no longer pending and is not replaced;
+  for a warm-up a later launch lands after its switch, §1.4.2's *Under a
+  playrate that keeps the pitch*.)* Plans hold only the players, so an
+  entry survives plan swaps and a plan waiting for adoption.
   - **Who applies it:** the executor that runs the track's node when its
     block reaches the target. It splits the block at the target, as at a
     loop wrap, and takes the entry by compare-and-swap, so a node handed
@@ -582,10 +585,154 @@ the same.*
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
-  Renders and the render dialog play the arrangement only, and the dialog
+  A plan that returns a track to the arrangement because it lacks the
+  clip the track plays (the clip removed, its track frozen, or past the
+  memory budget; or all its players gone while it held or stopped) is a
+  launch too, and the executors report it. `carryLaunch` marks the node
+  (`Node::launchReturned`); the executor that adopts the plan (the
+  in-callback cycle after its `carryMix`, the renderer in
+  `publishRendererPlan` before the callback can see the plan, the
+  callback after `adoptLive` for its live region) pushes one `LaunchAck`
+  per marked node to its own ack ring, with `returned`, the plan's
+  generation and its adoption stream frame on the node's timeline (the
+  stream less the node's `timelineShift`, where a launch's target is
+  placed: a latency-delayed node switches its input that much behind
+  the stream; round 176 F2), and clears the mark. The main thread logs
+  it as an arrangement launch (`Engine::logReturn`) at that frame, the
+  frame it was heard from, so a replay of the whole log equals live bit
+  for bit. Its song frame at unity is the epoch's start plus that frame;
+  under a master playrate the executor adopts at the plan's `handAt`,
+  and the song frame is the next whole song sample at `handAt` less the
+  node's shift (the launches' convention, below),
+  placed when the plan is published, before the song passes it, and
+  taken only by an ack in the same epoch at that frame; otherwise, and
+  where no clock serves, where an immediate `launch.arrangement` would
+  land. The log sorts by epoch and frame with a return first at a frame
+  it shares, since a launch there was applied after the adoption. A plan
+  the executors skip (at unity they take only the latest; a removal
+  undone before any executor block) returns nothing and logs nothing,
+  and a removal the executors took stays a return when it is undone. A
+  return logged twice (by track, epoch and generation) is dropped and
+  counted (`returnAcksDuplicated_`, never expected: the carries are
+  disjoint by class).
+  The anticipative renderer carries a node into the live region only
+  when it adopts a plan while playing (its continuable carry, recorded on
+  the plan as `Plan::liveCarried`, which a relocation does not clear);
+  such a join keeps its launch whatever the callback's handoff turns out
+  to be (a stop, a seek, a late adoption). A track that joins otherwise
+  (a monitor change while stopped), or leaves (only while stopped:
+  ADR-0014's keepLive defers a release to the stop), restarts on the
+  arrangement and its launched clip stops. The callback acks that as a
+  return, once, for a node whose state before was not the arrangement,
+  keyed on the node's class in the callback's own previous plan A
+  (`Engine::ackClassMoves` at the adoption, before `adoptLive`; round 176
+  F1, round 178 F1 and F2, round 180 F1). A node live in A is the
+  callback's own, which `adoptLive` carries on: it is a return only when
+  the adopted plan renders it (A's state). A node rendered in A is the
+  renderer's, judged along the renderer's plans: under a playrate the
+  callback skips a handoff of an old epoch (never adopted), and a node it
+  runs live for the first time since A is a return there, at the skipped
+  plan's epoch and hand, whatever the renderer carried, since nobody
+  plays a skipped plan's live region (`Engine::ackSkipped`, which marks
+  it in `Node::skipLive`, callback-only); else it is a return when the
+  adopted plan runs it live without the renderer's carry (the state in
+  the last skipped plan, or A's). The last skipped plan (`classBase_`)
+  is reset at the adoption and by `Engine::start()` and `stop()`, which
+  frees it (round 180 F2). Its own live nodes, and rendered ones the
+  renderer left when it adopted a newer plan, are the only states the
+  callback reads. The log, `launch.state` and the next capture agree.
+  Carrying the clip across instead would have the renderer read a live
+  node the callback is still running, so the clip's stop is a stated
+  limit (STATUS).
+  A full ring drops a return ack and counts it (`returnAcksDropped_`).
+  When the count moves the main thread logs a return for each track whose
+  newest launch the latest plan cannot play, where an immediate
+  `launch.arrangement` would land, warns, and marks a running capture
+  not as heard (`edited_during`), and a capture placed while such a
+  guessed return still lies ahead too (round 176 F4). `launch.state` never shows a clip the
+  plan lacks (it reports such a track on the arrangement). A dropped
+  return whose clip a later plan restored before the drop was seen is not
+  recovered: the track then reads as playing the clip. A ring holds 1,024
+  acks, so that takes a plan dropping clips on more than a thousand
+  tracks at once. Returns and launches share the two rings, so a burst
+  of returns can fill one before a launch ack arrives (about 770 tracks
+  returned in one adoption, fewer with launch acks waiting). A launch ack
+  that finds its ring full is dropped and counted (`launchAcksDropped_`,
+  the executor's only extra work). The log then misses a launch
+  that was heard, which no render can replay, and frame 0 of any later
+  capture may depend on it: when the count moves the main thread warns,
+  and a capture running then and every capture placed after it, for the
+  engine's life, is not as heard (`launch_unlogged`, §3.1), including
+  one that closes before that service (`captureFacts` reads the count
+  too, round 178 F3); `launch.state` then reports `unlogged: true` for
+  the engine's life, since its tracks' entries may be stale (round 178
+  F4: which launch was lost cannot be told exactly, so none is
+  restored). A new engine (Restart audio) starts clean.
+  A capture includes each return within its span in the log's order, and
+  one with a return is not as heard (`edited_during`, §3.1), for the
+  edit behind it alone: a return comes from a plan compiled for an edit
+  or for a change of the prepared sources (a clip past the memory
+  budget). The replay plays a logged return as heard: the whole log
+  replayed equals live, the executors' fade into the arrangement
+  included (round 176 F3). What each track played as a capture
+  began is its newest entry by the start, a return included, so removing
+  a clip later, in the capture
+  or after it, never drops what was heard: the capture keeps the clip's
+  stretch and the return, and `launch.commit` refuses the removed clip
+  with `launch.commit` at `/performance/launches/N/clip`, the capture
+  kept. Undoing the removal makes it committable as it was; the
+  capture's version rule is unchanged.
+  Renders and the render dialog play the arrangement only unless a
+  render is given a performance (§3.1), and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
   its logged running frames; the tests use it.
+- **A capture is kept (ADR-0097, revision 2026-11-24).** The engine holds
+  the capture it runs; `EngineApp` keeps the last one (`keptCapture_`,
+  `EngineApp::launchCapture`) across what destroys the engine: an engine
+  stop (`stopEngine`), an unrequested device restart and a device failure
+  the restart gives up on (both `beginRestart` → `haltEngine`). A capture
+  running then is ended at the heard position first, as
+  `launch.capture {on: false}` ends it (`CaptureView::endedBy`: the stop
+  or the device). The kept one is what `launch.commit` and `launch.state`
+  read until a newer capture has begun, heard a frame (one turned
+  off before that replaces nothing); `launch.capture {on: true}` warns
+  when it will replace an uncommitted one, naming its span, launches and
+  version (`LaunchCapture::version`, the session version as it began). It
+  stays committable with the engine stopped or started again, at any
+  device rate: launch.commit converts by its own `sample_rate`.
+  `engine.stop`'s answer, and the `engine.restarting` event or the
+  `engine.error` that gives up (either way), carry a warning naming an
+  uncommitted capture, said by what ended it; a client in-process reads the
+  same lines from `EngineApp::captureKeptWarning` and
+  `captureReplaceWarning`. A capture counts as committed while the head
+  reaches the version launch.commit wrote it in
+  (`LaunchCapture::committedIn`): by first parents, or through a merge of a
+  branch whose line holds it (a merge's replayed step stands for its
+  source, so a merge of a merge, or one undone only in part, counts). Where
+  a history squash has folded away a replay (into an ordinary step, under
+  a small history budget), or the source steps it names, the walk cannot
+  follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
+  and an edit after the undo leaves it uncommitted (`captureUncommitted`).
+  The mark is set only when the commit's transaction commits (a rolled-back
+  script's launch.commit leaves none), and the app pins that version
+  (`VersionStore::pin`), so a history squash or collection never loses it.
+  `EngineApp::CaptureView` carries as fields all that the warnings say,
+  for a client that words its own line: the span (`capture.startSample`
+  and `frames`, and `startBeat`/`endBeat` on the current time map), the
+  launches, `version`, `endedBy`, `kept`, `replacedOnBegin` (a newer
+  capture is armed and replaces it once it hears a frame), and `commit`:
+  `None` never written, `Committed`, or `Undone`, written and taken back,
+  which the GUI reads as declined.
+  `launch.state` says both at once: `capturing` for the engine's own
+  capture, armed or running, and `capture_kept` for a kept one beside it;
+  with the engine stopped it answers for a kept capture. The GUI's Capture
+  commits whatever is uncommitted, the take just ended or a kept one (a
+  take it committed, or whose commit was undone, is skipped), and a take
+  the user drops is forgotten
+  (`dropKeptCapture`). Replacing the project or quitting the app drops
+  it: the GUI's unsaved-work dialog is to count it
+  (`captureUncommitted`, not yet), and a headless app has no dialog.
 - **Capturing a performance (L4, L-f).** While `launch.capture` is on, the
   engine keeps the song sample where the capture began, the transport
   loop it runs under, what each track that was not following the
@@ -635,7 +782,10 @@ the same.*
   placement and at each service), ends the capture on that switch's
   boundary, the launch not in it, with a warning naming the track; MIDI
   launches on other tracks, and switches clear of a track's audio, are
-  captured (round 117 W1). That end goes with its switch: replaced before
+  captured (round 117 W1). A launched audio clip's switch queued while the
+  newest plan keeps the pitch ends it there as well, wherever the
+  arrangement's audio lies, with a warning that it launches an audio clip
+  (S3 step D: no committed item reads its converter's history). That end goes with its switch: replaced before
   its boundary (another launch on the track) or voided (an edit that leaves
   it nothing to play), it is dropped and the capture runs on; it is kept
   apart from a quantized end, the earlier of the two ending the capture,
@@ -675,7 +825,10 @@ the same.*
   performance kept (rule 7): a piece starting inside the fade-in (the
   capture's start or a loop wrap there), one a loop wrap ends inside the
   fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
-  wrap crosses.
+  wrap crosses. Its path, and that of `clip.unsupported` (a loop window an
+  item cannot express) and of `item.locked` (a locked item in the way), is
+  the launch whose stretch met it, `/performance/launches/N`, so a client
+  can name the place from the code and the index.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a
@@ -714,7 +867,11 @@ the same.*
     copy of the running rate timeline from the executor's published clock
     (with the scalar edits after it and the envelope), finds the quantize
     boundary from the floor's song position, and targets the first frame
-    whose unwrapped song position reaches it (`placeRateLaunch`). A rate
+    whose unwrapped song position reaches it (`placeRateLaunch`). With
+    quantize none the boundary is the next whole song sample at or after
+    the floor's position, so a launch switches at most 1/rate device
+    frames after its floor, on the frame a render of its song frame
+    switches on too (round 174 F1). A rate
     control still on its way to the executors answers `launch.later`. A
     scalar edit voids the pending launches past its frame
     (`voidRateLaunches`), and a plan with other rate controls those after
@@ -760,17 +917,143 @@ the same.*
     samples, and the arrangement's tape items read nothing past it after a
     switch away, nor before the anchor while a switch back fades them in
     (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
-    cut). Within the kernel's reach before a switch that lands on such a
-    clip's wrap, live reads the pass's end gated at the wrap while the
+    cut). While a clip holds the track, its items' stretch converters still
+    run every quantum, their output unused, so they are current when the
+    arrangement comes back: on a plan that keeps the pitch, and after a
+    switch to tape while the old converter is still read (until the switch
+    and through its crossfade). A skipped converter refused the jump and
+    failed every block after. Within the kernel's reach before a switch
+    that lands on such a clip's wrap, live reads the pass's end gated at the wrap while the
     commit reads on (the switch reaches the node at its frame): a stated
-    limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
-    player yet (step 1b): compile warns and its launch is refused with
-    `launch.playrate`. While a clip holds a track, its items' stretch
-    converters still run every quantum, their output unused, so they are
-    current when the arrangement comes back: on a plan that keeps the
-    pitch, and after a switch to tape while the old converter is still
-    read (until the switch and through its crossfade). A skipped converter
-    refused the jump and failed every block after.
+    limit, measured up to 0.011.
+  - *Under a playrate that keeps the pitch* (S3 step D) a launched audio
+    clip reads through a stretch converter. A node with audio clips has
+    three readers: 0 plays, 1 goes out (with its converter's history), 2
+    warms the next launch up. A launch reaches the node `launchWarm`
+    before its switch (the converter's output lookahead rounded up to
+    quanta, and one quantum to spare: 2944 frames, about 61 ms, at
+    48 kHz; `prewarm`; the switch's frame is kept as the slot's stream
+    target, without the node's shift, so a plan that moves the shift during
+    the warm-up keeps it, and is taken onto the trajectory's device frames
+    by the plan's `rateOrigin`, which a seek moves), and reader 2 seeks there for output from the
+    switch's quantum and primes once per 64 frames played (a frame
+    credit, at any block size), so the switch costs no burst. At the switch the
+    readers rotate (`applyLaunch`). Every prime position is a function of
+    the switch's quantum and the trajectory, not of when the prime runs,
+    so the warm-up is the replay's, which takes it as a third switch
+    entry. A reading runs every quantum in order from its start, a
+    quantum a block skipped (no weight there) before the next, up to 32
+    quanta. With no warm-up (a launch from stop, a relocation, a plan that
+    lost the converter) it seeks and primes at once: from its switch's
+    quantum, catching up, when that is at most 32 quanta back, so it plays
+    what a warm-up would, else at its own quantum; its loop cycle is the
+    switch frame's either way (`Node::launchSwitchAt`, set by the first
+    block after the switch, with its song phase, `launchSwitchPhase`,
+    taken there: the timeline's ring keeps about 11 s at 48 kHz, so a
+    restart long after the switch cannot read that frame back, and the
+    cycle is that phase's under the loop as it is then). The cycle matters
+    while the launch is anchored, before its first wrap, where the
+    converter reads ahead past the wrap; a reader is not reseeked when its
+    launch unanchors. The worst cold restart is 45 primes and 32
+    quanta of catch-up in one block (48 kHz). It reads the player's song
+    frames from the anchor, in loop cycles after the switch's; the switch
+    crossfade and
+    the clip's fades weight its output. Going out it plays on as the clip
+    repeats, without the tape path's held pass or cut at the crossfade's
+    end: its converter has read some 5000 song frames past a switch before
+    the switch is known, and no capture commits it (Q2 b). Placement keeps
+    an audio clip's launch `launchEarly` (the larger of the clip-chain
+    lead and `launchWarm`) ahead of the clock (MIDI clips, stops and
+    returns keep the clip-chain lead alone), and at least
+    `launchWarm` after the track's applied audio launch still to switch
+    (one warm-up at a time; a launch is applied from its warm-up's first
+    frame, so a later one does not replace it), and any other launch of the
+    track at least a frame after it, so the later press wins (round 139
+    S1). A plan swap that
+    keeps the rate controls hands the readers over with their converters
+    (`carryLaunchReaders`, §1.6). One that changes the trajectory (a
+    scalar, preserve pitch, an envelope; S3 step D4) switches launched
+    audio where the timeline's items switch, at `rateSwitchDevice` (S, a
+    device frame; in an executor's stream `handAt + S - rateHandDevice`,
+    as `rateSafeStream_`), and the same way:
+    - At adoption `carryLaunchAcross` (from `carryRateSources`) hands
+      each reading to the new reader's `previous`
+      (`PlayerReader::previous`, allocated at compile) and seeks the new
+      reader for output from S. The old reading plays on the old
+      trajectory (`previousTimelines`) until S and crossfades into the new
+      one over `smoothFrames`, as an item does, converting while it is
+      read. The new reader is primed at its first use by the executor that
+      runs the node (the renderer for a rendered node, the callback for a
+      live one): at most a warm-up's primes per reader in one block (45 at
+      48 kHz), so the block holding S primes 45 for each track with
+      launched audio under stretch, on the renderer within its
+      render-ahead, and inside the device callback for a live node or with
+      the in-callback executor (a known limit, STATUS). One first read more
+      than the catch-up (32 quanta) after S starts again where it is read,
+      as a primed reading does, rather than running every quantum since S
+      in one block. A warm-up switching after S
+      starts again on the new trajectory, primed as far as it had come, in
+      the adoption's block; only a warm-up switching at or before S goes on
+      in `previous`, and the reader rotated onto reader 2 at a switch drops
+      its `previous` (round 152 F1). A tape reader keeps no loop cycle, so
+      a reading handed on from one takes its switch's (`switchCycle`,
+      from `Node::launchSwitchPhase`, recorded in the switch's block while
+      the timeline still holds that frame; round 152 F2). A mirror that
+      primed those readers on the main thread at prepare (phase 2) was
+      built and taken out: it was dormant with the anticipative renderer,
+      the default (ADR-0097, revision 2026-11-24, "the mirror taken out").
+    - *A change of preserve pitch with a launch switching in (adoption,
+      S].* Stretch to tape: reader 2 holds a tape reader with no warm-up,
+      so the launch is not rotated in: the clip plays on tape from its own
+      switch, not on a stretched warm-up until S. Tape to stretch: a tape
+      plan warms nothing, so the clip plays on the new trajectory from its
+      switch, primed there (step D's cold start). Neither crossfades at S;
+      the launch's own crossfade covers its start (round 152 N2).
+    - A switch inside that crossfade, in (S, S + `smoothFrames`), rotates
+      the reader with its `previous` (`applyLaunch`): the outgoing side
+      plays both until S + `smoothFrames`. An outgoing reader still in
+      its own switch crossfade at S finishes it on the old trajectory.
+      Placement keeps a node's switches `launchWarm` apart, longer than a
+      crossfade (at most 960 frames, 240 song samples at 0.25), so one
+      extra reader state per node holds every case. A plan whose
+      `rateSourceAhead` exceeds `launchWarm` minus 960 minus 63 frames (a
+      take chain of 40 ms or more) gives each such node a second.
+      Both are allocated at compile.
+    - The old trajectory is kept until every reader that reads it is
+      done: when the outgoing or the incoming plan has audio players
+      under stretch (a switch to tape included), `rateSafeDevice` is
+      S + max(`smoothFrames`, ceil(`launchFadeFrames` / 0.25)) +
+      `rateSourceBehind` + 64, so the next change cannot be adopted while
+      an outgoing reader still reads the old trajectory (about 10 ms
+      later than items alone need, at 48 kHz).
+    - Nothing is freed on an audio executor: a primed reader the node
+      does not take, and an old state once its crossfade is over, are
+      swapped into the outgoing plan and released with it on the main
+      thread, as `carryRateSources` does for items.
+    - The read can be overtaken only by a launch already placed when it
+      ran and applied before the adoption (a live node's warm-up, which
+      the callback starts some `aheadFrames` after the renderer would),
+      or by one replaced or voided: a warming launch placed after the
+      read cannot switch at or before S (below), and any other only
+      takes the audio reading away. The key check catches every case,
+      and the miss path plays what a match would have.
+    - No launch target already acknowledged moves. A warming launch
+      placed from the prepare until the slowest executor that runs the
+      node (for a live node, the callback's played stream) has passed S
+      plus `smoothFrames` switches at least `smoothFrames` plus
+      `launchWarm` after S, so its warm-up runs on the new trajectory
+      alone. A quantized press can then land a whole boundary later.
+    A switch to tape plays the old stretch reader as `previous` through
+    the crossfade, converting while it is read. A switch from tape primes
+    the new reader and fades from the tape one, which keeps no history;
+    a launch the tape plan applied with no warm-up (tape has none) and
+    which switches after the adoption takes the miss path: the executor
+    primes it at adoption (for S, or as far as its warm-up's credit
+    stands), within 45 primes, or it warms as usual when its warm-up has
+    not begun, so it does not start cold at its switch.
+    An audio clip read through a take chain (take
+    FX or an active take envelope) still has no player there: compile
+    warns and its launch is refused with `launch.playrate`.
   - *Capture* runs in song time (above): placement gives each launch its
     song frame, the boundary's unwrapped song sample, and the capture
     counts song samples from the published rate clock, so a commit lays
@@ -933,7 +1216,15 @@ the same.*
   - An entry of another epoch is not applied by an executor in a newer
     one, except the remaining targets of an applied entry (above).
     `service()` places missed, voided and old-epoch entries again, alone,
-    from the current position. It drops, with a
+    from the current position. Per placement, a launch the renderer
+    overtook while it was placed lands at most one service interval (the
+    app's tick, or a headless host's own loop) plus the floor after it was
+    pressed when unquantized, and on the next boundary after that
+    otherwise. The floor is the render-ahead, a block, its lead or
+    warm-up, and at least a frame after the track's applied warming switch
+    (above). A re-placement can be overtaken in turn, so under sustained
+    overload the delay is a whole number of intervals; while relocating,
+    `launch.later` defers it to the next service. It drops, with a
   warning, any waiting entry whose track or clip the latest plan cannot
   play (frozen, removed, or a master playrate active), so an edit never
   leaves a launch to fire later. Applied entries come back
@@ -941,8 +1232,8 @@ the same.*
   `launchLog()` in running-frame order.
 - **Renders.** An offline render without `OfflineSettings::launches`
   compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
-  renders play the arrangement only, so a clip's warnings never reach a
-  render or block a freeze. A clip past the memory budget gets no player
+  a render without a performance (§3.1) plays the arrangement only, so a
+  clip's warnings never reach it or block a freeze. A clip past the memory budget gets no player
   either (`Engine::clipsSkipped()` names them; `launch.memory`).
 - **What a track plays, for the GUI and `launch.state`.**
   `Engine::launchState()` answers, on the main thread, from the log and
@@ -950,6 +1241,39 @@ the same.*
   entry not yet reached by the played stream is still queued, along with
   its pending slot. A track whose clip a later plan lacks is back on the
   arrangement from then on.
+- **What a press would be refused for, for the launcher pane** (step E).
+  `Engine::launchRefusal(request)` runs `launch()`'s checks of one
+  request against the latest published plan without placing anything,
+  and `launch()` runs the same function first: `launch.playrate` (an audio clip the
+  plan gave no player because it reads through a take chain while the
+  pitch is kept: `Plan::launchRefusedPlayrate`, recorded by compile),
+  `launch.memory` (`clipsSkipped`), `launch.clip` (no players on the
+  track, or the plan lacks the clip). The app builds each request from
+  the session the commands read, not the engine's (an edit can be on its
+  way, as while audio is prepared), and gives every refusal the path a
+  caller of the press receives, `/args/clip` or `/args/scene` (the bus
+  puts `/args` before a command error's path), so the answer is the
+  press's error field for field.
+  `EngineApp::launchRefusal(clip)` puts launch.clip's own `track.frozen`
+  check first, engine or not;
+  `EngineApp::sceneLaunchRefusal(scene)` makes launch.scene's selection
+  (`sceneLaunchRequests`: frozen tracks' and memory-skipped clips left
+  out) and answers `launch.scene` when it is empty, else the first
+  refusal among its clips. Transport-state refusals (`engine.stopped`,
+  `launch.later`, `launch.queue`) are not reported.
+  `EngineApp::launchRefusals()` gives every clip's and scene's answer in
+  one pass (`clips` and `scenes` maps, refused ones only), equal entry for
+  entry to the per-id calls: it reads `clipsSkipped` and the display order
+  once and takes every scene's selection from `sceneLaunches`, the one
+  function launch.scene and the per-scene answer also take theirs from
+  (round 149 S1), so a pane's recompute costs O(C log C + T), a scan of
+  the memory-skipped clips per clip, and each clip's plan check (round
+  147 F1).
+  `EngineApp::launchRefusalGeneration()` moves whenever an answer can
+  change: a published plan (each engine's count is folded into a base
+  that survives a restart), an engine starting or stopping, a session
+  version (track.freeze sets its flag before its plan arrives, an undo)
+  and a project opened. It never repeats a value.
 - **Plan swaps.** `carryMix` carries `Node::launch` by clip id
   (`carryLaunch`). A clip the new plan lacks, or a node with no players
   (a frozen track), returns its track to the arrangement at once, and its
@@ -1904,13 +2228,24 @@ first use, and no plug-in code runs early to warm it.
   - `render.settings` (query): `{effective, project, default, from: {field:
     "args"|"project"|"default"|"built-in"}}`; accepts the render arguments as
     overrides.
-  - `render.preset.list` (query): factory and user presets.
+  - `render.preset.list` (query): factory and user presets. A user preset
+    whose file cannot be read is listed in its place as `{name, factory:
+    false, damaged: {code, path}}`, with no `settings`. Its `code` and
+    `path` are what `render.preset.load {name}` answers: the file's own
+    codes (`file.*`, `json.parse.*`, and `schema.*` for a file that is not
+    a preset) at `/args/name` or a top-level member under it
+    (`/args/name/schema`), and a setting's at `/args/name/settings/…`
+    (round 186 F1). A link to nothing is such a file (`file.*`), for load
+    too (round 190 F1). The list itself is not refused for it.
   - `render.preset.save {name | default: true, settings?}` (action): saves
     the given settings, or the effective settings, without `stems.tracks`,
     `matrix` and custom bounds.
   - `render.preset.load {name}` (edit): replaces `project.render`.
   - `render.preset.delete {name | default: true}` (action). Factory presets
-    cannot be overwritten or deleted.
+    cannot be overwritten or deleted. It never reads the file, so a damaged
+    preset is removed as any other. No file answers `render.preset_unknown`;
+    a file that cannot be removed (a read-only folder, a file in use on
+    Windows) answers `render.preset_write` (round 183).
 
   Files are `<data>/<slug>/render-presets/<name>.json` (the user default is
   `default.json`), canonical `supple.render-preset/1.0`. Under `--workdir`
@@ -1940,6 +2275,184 @@ first use, and no plug-in code runs early to warm it.
 - Normalization rejects non-finite source samples, derived gains, or resulting
   float samples with `render.normalize` and a repair hint before applying gain.
   This is a representability check, with no additional dB target range policy.
+
+### 3.1 Rendering a launcher performance (ADR-0097, revision 2026-11-24)
+
+Built in the engine and the render commands (`render_performance.cpp`,
+`render_commands.cpp`); the render dialog's side is the GUI's (gui.md).
+`resolvePerformance` resolves the source to a `captured_performance` and
+checks it against the version without a plan; `applyPerformance` sets the
+render's range, loop and launches (`OfflineSettings::launches` with
+`launchesInSong`), and the offline pre-pass that walks the rate timeline
+converts each launch's song frame to the first stream frame whose song
+position reaches it. That is live placement's rule (§1.4.2, under
+a master playrate), which places a launch with quantize none on the next
+whole song sample too, so the two switch on the same stream frame. The capture's facts are recorded
+by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
+playrate change, live input, a dropout, a plug-in failure), fixed when
+the capture ends.
+
+**The selector.** `render.mix`, `render.stems`, `render.dry-run` and
+`render.queue.add` take an optional `performance`, one of:
+- `"captured"`: the capture `EngineApp::launchCapture()` returns (the
+  engine's own once it has heard a frame, else the one kept across an
+  engine stop, a device restart or failure, or beside a newer capture not
+  yet begun). A running capture renders its frames so far.
+- a `captured_performance` object: the schema `launch.commit` takes and
+  history records.
+- `{"from": "launcher", "start_beat": b, "end_beat": e}`: every track
+  playing a clip (Clip or Held) gets a clip launch at frame 0, anchored at
+  the start; a Stopped track gets a stop; a track following the
+  arrangement gets nothing. Queued launches are left out, and there is no
+  loop. With nothing playing or stopped (the launcher empty, or the engine
+  stopped, so every track follows the arrangement) it is not refused: the
+  render plays the arrangement over b..e, as an arrangement render of
+  that range would, and the result's performance has no launches.
+
+`as_heard` (boolean, default false) requires the property below.
+`version` keeps its meaning, the session version rendered; for
+`"captured"` it defaults to the capture's own (`capture_version`).
+Neither selector belongs to `project.render`, so presets and saved
+settings never hold one. `render.queue.add` stores the resolved object,
+never "captured" or "launcher", so a queued render does not grow. With a
+performance the range is the performance's: the saved `bounds` is not
+used, and a `bounds`, `start_beat` or `end_beat` in the call is
+refused. `tail_s`, `trim`,
+`handles_s`, outputs, normalize and analysis apply as usual.
+
+**The result.** The usual render result, plus:
+- `performance`: the object rendered, as canonical JSON, so it can be
+  rendered again as a given object: a `captured_performance`
+  (`sample_rate`, `start`, the song sample it starts at, `frames`, its
+  running length, `loop` when it ran under one, and `launches`). Captured
+  and launcher sources resolve into one; a given object comes back
+  canonicalized.
+- `range`: `{start_beat, end_beat}`, the performance's span on the
+  rendered version's time map, without the tail. For a looped
+  performance that ran past the loop's end it ends at the loop's end:
+  the song span it covers, which it plays as wraps (its running length
+  is `frames`).
+- `as_heard` (boolean), and `not_heard_because`, present when as_heard is
+  false: an array of these reasons, in this order:
+
+| Reason | When |
+| --- | --- |
+| `began_mid_run` | the capture did not begin at a play start |
+| `edited_during` | a plan compiled during it for anything but launches (any session edit) |
+| `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
+| `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
+| `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
+| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2) |
+| `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
+| `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
+| `other_version` | the version rendered is not the capture's own |
+| `given` | the source is a given object |
+| `from_launcher` | the source is "from launcher" |
+
+`given` and `from_launcher` are always present for those sources: they
+say only that the source is not a capture. With `as_heard: true` in the
+call, a false result is refused with `render.not_as_heard` (path
+`/performance`) and a hint for the first reason (`other_version`: render
+the version it was captured on; `began_mid_run`: capture from stop;
+`ended_by_engine`: capture again).
+
+**The dry run.** `render.dry-run` with a performance returns the same
+`performance`, `range`, `as_heard` and `not_heard_because` without
+rendering, and compiles no plan, decodes nothing and reads no media beyond
+what a dry run reads today. It resolves the source to an object, checks
+each launch against the version's model (tracks, clips, frame order, the
+cap, the sample rate, a loop under a playrate, and step E's refusal, a take
+chain under a pitch-keeping master playrate) and computes as_heard from
+the capture's recorded facts: linear in the launches. The one refusal it
+cannot see is `launch.memory` (a clip over the memory budget, or one the
+compiled plan skips), which needs the compile: only the render reports it.
+"Captured" resolves at each call, so a dry run during a running capture
+and the render after it can give different ranges; a client shows the
+render's own `range` and `performance`.
+
+**Refusals.** One code per cause; a client words a refusal from the code
+and the path's index, never from the hint, which names commands for
+command callers. Every `render.*` command (`render.mix`, `render.stems`,
+`render.regions`, `render.dry-run`, `render.settings`, the
+`render.queue.*` and `render.preset.*` commands) declares every code it
+answers, the resolvers' it passes through included (source preparation's
+`media.budget`, `warp.*` and `engine.stretch`, the offline pass's, the
+file and audio writers', and `cl.unknown` for a performance's clip), in
+its registry entry (`cmd::CommandInfo::errors`: code, when, hint;
+`skill/generated/engine/render.md` lists them), so a client's table of
+wordings can be checked against the registry alone. `render.queue.add`
+declares what planning a render answers, `render.queue.run` what a render
+does. Schema codes of a malformed argument are every command's and are
+not listed. A broken render default or preset file answers the `file.*`
+read codes, a schema code, or `json.parse.<what>` (the JSON parser's),
+declared as the family `json.parse.*` by every command that reads one: a
+client matches a family's code by its prefix. An error from reading the
+user's render default has its path under `/default`, in every command
+that loads it (the renders, the dry run, `render.queue.add` and `.run`,
+`render.settings`, `render.preset.list`, `render.preset.load` with
+`default`, and `render.preset.save` without `settings`): the file's own
+codes at `/args/default`, a member's at `/args/default/settings/…`. A
+named preset's, read by `render.preset.load` with `name`, are under
+`/name` the same way (`/args/name`, `/args/name/settings/…`). That tells
+a reader's `file.open` from a writer's, which share the code. A
+test lints the files these commands reach (the render sources, source
+preparation, the offline pass, the preset files, the JSON parser and the
+writers) per command: each render against the render sources, less the
+codes one render answers and another does not (`region.unknown`; a
+performance's codes, not `render.regions`'; the job's, not the dry
+run's); the preset commands and `render.settings` together against the
+preset files, and each command that reads a preset or the default
+against the reads, `render.preset.save` against the writes too and
+`render.settings` against its resolver's codes; and `render.queue.add`
+and `render.queue.run` against the dry run's and `render.mix`'s lists
+(round 178 F5, round 180 F3 and F4, round 183 F1, round 185 S1).
+
+| Case | Code | Path |
+| --- | --- | --- |
+| "captured" with none, or none with running time | `launch.capture` | `/performance` |
+| `sample_rate` other than the project's (a capture made at another device rate) | `render.performance.sample_rate` | `/performance/sample_rate` |
+| a looped performance under a master playrate | `render.loop` | `/performance/loop` |
+| a track or clip the version lacks | `track.unknown`, or launch.clip's clip code | `/performance/launches/N/...` |
+| a clip launch that names no clip | `render.performance.no_clip` | `/performance/launches/N/clip` |
+| a clip of another track | `render.performance.clip_track` | `/performance/launches/N/clip` |
+| a clip on a frozen track | `track.frozen` | `/performance/launches/N/clip` |
+| an audio clip the engine refuses on the version (step E) | `launch.playrate` | `/performance/launches/N/clip` |
+| a clip over the memory budget (render only) | `launch.memory` | `/performance/launches/N/clip` |
+| launches out of frame order, or past `frames` | `render.performance.launches` | `/performance/launches/N/frame` |
+| more than 100,000 launches (launch.commit's limit unchanged) | `render.performance.too_many` | `/performance/launches` |
+| `operation: "regions"`, or `bounds` in the call | `render.args` | `/performance` |
+| `start_beat` or `end_beat` in the call | `render.args` | `/start_beat` or `/end_beat` |
+| `seamless_loop`, given or saved (the effective setting) | `render.args` | `/seamless_loop` |
+| `frames` not above 0 | `render.empty` | `/performance/frames` |
+| the launcher's `end_beat` not after its `start_beat` | `render.empty` | `/performance/end_beat` |
+
+Two launches of one track on one frame are not an error: the last given
+holds, as in launch.commit. A given object's other defects keep the
+schema's own codes and paths.
+
+**Capture facts for clients.** `launch.state` gains `unlogged` (false
+until the engine has lost a launch ack, then true for its life: the
+tracks' entries may be stale; §1.4.2) and `capture_version`
+(the session version the capture began on) beside `capturing`,
+`capture_ends` and `capture_kept`, whenever there is a capture, and with
+the engine stopped for a kept one; `launch.capture`'s result gains
+`version` when it ends or reports a capture. In-process,
+`EngineApp::launchCapture()`'s `CaptureView` (§1.4.2) gives the span,
+version, rate, `kept`, `endedBy` and `commit` that a dialog shows before
+asking a dry run for as_heard.
+
+**Laws.** Offline equals what was heard, bit for bit, when as_heard is
+true, in both executors (third-party plug-ins that are not block-size
+invariant are the documented exception). Frames are in song time: under a
+playrate each launch converts to a stream frame by live placement's
+function, and equals the log's `runningFrame` when no rate edit fell in its
+span. Renders are deterministic for any worker count and across runs.
+What the offline replay cannot play exactly is refused, never
+approximated. Not rendered: plug-in state and tails from before the
+start (a cold start), edits and rate changes during a capture (one version;
+`as_heard` says so), a loop under a master playrate, a capture at a device
+rate other than the project's (launch.commit converts it), and a plug-in's
+hidden state.
 
 ## 4. Media, recording, device handling
 
@@ -3485,10 +3998,27 @@ integer input/output capacities, a numeric default rate, and boolean default
 input/output indicators. `{backend: dummy}`
 returns an empty list without library initialization. Linux portaudio requests
 return backend.unsupported, path /backend and a JACK/dummy hint; JACK device
-queries direct the caller to engine.inputs. Selection errors use backend.device
-and the relevant host_api/input_device/output_device path. Format/channel errors
-use backend.config or backend.open, with a corrective hint. Duplicate matching
-names are rejected. No numeric device index is persisted across restarts.
+queries direct the caller to engine.inputs. A failed start carries its cause
+in the code, set where the backend holds the PortAudio error number and host API
+(or the JACK client status), so callers switch on the code, never the message
+(the message stays the driver's text), each with a corrective hint:
+
+| Code | Cause |
+|---|---|
+| `backend.host_api.not_found` | no host API by that name (`/host_api`) |
+| `backend.device.not_found` | no device by that name, or no default (`/input_device`, `/output_device`) |
+| `backend.device.ambiguous` | two devices of the host API share the name |
+| `backend.device.no_inputs` | the input device is listed but has no inputs (an output-only device asked to record) |
+| `backend.device.channels` | fewer channels than asked (`/inputs`, `/outputs`) |
+| `backend.device.invalid` | `paInvalidDevice`: the device is gone, or (WASAPI) held in exclusive mode by another app |
+| `backend.busy` | `paDeviceUnavailable`: held by another stream of this process (ASIO), or taken over by another app (Core Audio hog mode) |
+| `backend.driver` | the driver or server did not start: on ASIO `paUnanticipatedHostError` (the driver failed to load or `ASIOInit`, as when another app holds a single-client driver); on JACK, no server answered |
+| `backend.rate` | `paInvalidSampleRate` only: the device does not run at the rate (`/rate`); on ASIO also an interface that is not present (`ASE_NotPresent` maps to it), which the engine cannot tell apart. An omitted rate is the project's, so the hint names engine.devices' `default_rate` |
+| `backend.unavailable` | the JACK library is missing or lacks the JACK API |
+| `backend.config` | an invalid rate, block or channel request, or an invalid stream rate returned |
+| `backend.open` | any other failure (another PortAudio error, port registration or activation on JACK, the device monitor) |
+
+Duplicate matching names are rejected. No numeric device index is persisted across restarts.
 
 Callbacks use non-interleaved float32 and paClipOff/paDitherOff. They call the
 engine in chunks no larger than blockSize; period reports the complete device

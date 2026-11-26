@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "rack_scene.h"
 
+#include "supple/views/object_name.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -132,7 +134,7 @@ rack::PanelLayout pluginFace(const rack::ModuleType& t, bool instrument) {
 
 std::string moduleTitle(const model::Session& s, const rack::Catalog& catalog, model::Id module) {
     const model::RackModule* m = s.modules.find(module);
-    if (!m) return module.str();
+    if (!m) return views::objectName(s, module);
     if (m->type == model::kPluginModule) {
         const model::FxInstance* fx = m->fx ? s.fx.find(*m->fx) : nullptr;
         return !m->label.empty()                ? m->label

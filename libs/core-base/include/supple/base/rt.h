@@ -21,6 +21,18 @@
 #define SUPPLE_RT
 #endif
 
+// SUPPLE_BLOCKING marks a function that waits (sleeps, blocks on a lock or event) so that
+// RealtimeSanitizer reports a call to it from a SUPPLE_RT function directly, whichever
+// system call it makes on the platform. Compilers without the attribute ignore it.
+#if defined(__clang__) && defined(__has_cpp_attribute)
+#if __has_cpp_attribute(clang::blocking)
+#define SUPPLE_BLOCKING [[clang::blocking]]
+#endif
+#endif
+#ifndef SUPPLE_BLOCKING
+#define SUPPLE_BLOCKING
+#endif
+
 #if defined(__has_feature)
 #if __has_feature(realtime_sanitizer)
 #include <sanitizer/rtsan_interface.h>

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <numeric>
 #include "../../../tests/file_platform.h"
+#include "../../../tests/precise_sleep.h"
 #include "carry_matches.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
@@ -109,7 +110,7 @@ void untilReady(const char* stage, Predicate ready) {
                       << " (no audio mismatch verdict), exit=124" << std::endl;
             std::_Exit(124);
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        supple::test::sleepFor(std::chrono::microseconds(100));
     }
 }
 
@@ -199,17 +200,21 @@ class ObservedDummy : public DummyBackend {
             const auto period = std::chrono::duration<double>(config.blockSize / config.sampleRate);
             while (running_.load()) {
                 // Driver pacing/parking is outside the annotated audio entry.
-                // The real callback never waits, locks or allocates.
+                // The real callback never waits, locks or allocates. The pauses
+                // use the high-resolution timer on Windows (tests/precise_sleep.h);
+                // nothing here decides pass or fail by their length: the parked
+                // checkpoints advance by permits, and misses are compared across
+                // a parked advance only.
                 const bool free = free_.load();
                 if (!free && permits_.load() == 0) {
                     parkSeen_.store(parkRequest_.load(), std::memory_order_release);
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    supple::test::sleepFor(std::chrono::microseconds(100));
                     continue;
                 }
                 if (!free) permits_.fetch_sub(1);
                 DummyBackend::run(1);
                 completed_.fetch_add(1, std::memory_order_release);
-                std::this_thread::sleep_for(period);
+                supple::test::sleepFor(period);
             }
         });
         return okStatus();

@@ -522,6 +522,8 @@ int frontendMain(int argc, char** argv) {
     appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
+    // The unsaved-work question finalizes and counts the launcher's take.
+    fileActions.setCapture(&shell.capture());
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
     // Unsaved projects earlier runs left behind: offered, never opened unasked
     // (ADR-0078).
@@ -753,9 +755,7 @@ int frontendMain(int argc, char** argv) {
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,
         [&](const gui::AudioDeviceSettings& audio) { return preferences.setAudioDevice(audio); });
-    audioDevice.onError = [](const std::string& message) {
-        std::fprintf(stderr, "%s\n", message.c_str());
-    };
+    gui::connectAudioDevice(audioDevice, shell);
     preferences.onAudioDevice = [&] { audioDevice.open(); };
     preferences.audioSummary = [&] { return audioDevice.summary(); };
     appActions.addUi("ui.audio.device", "Edit: audio device…", [&] { audioDevice.open(); });
@@ -777,6 +777,11 @@ int frontendMain(int argc, char** argv) {
     syncDialog.onTimecode = [&] { timecodeDialog.open(); };
     appActions.addUi("ui.sync.settings", "Transport: sync settings…", [&] { syncDialog.open(); });
     renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    // A refusal the dialog has no words for: in full to the log, as the audio
+    // device dialog's.
+    renderDialog.onLog = [](const std::string& detail) {
+        std::fprintf(stderr, "%s\n", detail.c_str());
+    };
     renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
     renderDialog.setOpenFolderWhenDone = [&](bool on) {
         if (auto set = preferences.setRenderOpenFolder(on); !set)
@@ -963,11 +968,13 @@ int frontendMain(int argc, char** argv) {
              std::vector<std::string> ids;
              for (model::Id id : clips) ids.push_back(id.str());
              if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
-                 appActions.onError("Clip launcher: " + r.error().message);
+                 appActions.onError("Clip launcher: " +
+                                    views::objectNames((*app)->head(), r.error()).message);
          },
          [&](bool on) {
              if (auto r = shell.capture().set(on); !r && appActions.onError)
-                 appActions.onError("Capture: " + r.error().message);
+                 appActions.onError("Capture: " +
+                                    views::objectNames((*app)->head(), r.error()).message);
          },
          [&](model::Id take) {
              if (auto r = fxWindow.openTake(take); !r && appActions.onError)
@@ -976,8 +983,9 @@ int frontendMain(int argc, char** argv) {
          // What a clip or scene laid on the timeline did with its key.
          [&shell](const std::string& notice) { shell.setStatus(notice); }});
     // A capture's commit at stop, or the next one's arming, refused.
-    shell.capture().onError = [&appActions](const Error& e) {
-        if (appActions.onError) appActions.onError("Capture: " + e.message);
+    shell.capture().onError = [&appActions, &app](const Error& e) {
+        if (appActions.onError)
+            appActions.onError("Capture: " + views::objectNames((*app)->head(), e).message);
     };
     // What a commit copied under another key (gui.md §4.15), as a lay says it.
     shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
@@ -1326,7 +1334,9 @@ int frontendMain(int argc, char** argv) {
         [&] {
             json::Value v = json::Value::object();
             v["panels"] = panelsSave();
-            v["arrange"] = arrangeSave();
+            // The scene menu's checks are a project choice, not layout: a
+            // screenset neither stores nor restores them.
+            v["arrange"] = shell.arrange()->saveScreenLayout();
             return v;
         },
         [&](const json::Value& v) {
@@ -1334,7 +1344,7 @@ int frontendMain(int argc, char** argv) {
             if (const json::Value* a = v.find("arrange")) {
                 // A layout's row heights replace the current ones entirely.
                 shell.arrange()->trackLayout().clearTrackHeights();
-                arrangeLoad(*a);
+                shell.arrange()->loadScreenLayout(*a);
             }
             root.damageAll();
         });

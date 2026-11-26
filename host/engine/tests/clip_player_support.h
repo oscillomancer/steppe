@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -28,6 +29,14 @@ namespace supple::engine {
 void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
 // The slots the executors still act on (Engine::launchesQueued_).
 std::uint32_t launchesQueuedForTests(const Engine& e);
+// The next `attempts` prepareRatePlan attempts count as late; see
+// EngineTestAccess::lateAttempts.
+void lateAttemptsForTests(Engine& e, int attempts);
+// The newest prepared trajectory change's switch S, a stream frame
+// (INT64_MIN: none, or a seek).
+std::int64_t preparedSwitchForTests(const Engine& e);
+// The transport's epoch (a seek starts a new one).
+std::uint64_t epochForTests(const Engine& e);
 }  // namespace supple::engine
 
 namespace clip_player_test {
@@ -133,6 +142,7 @@ using Loop = std::optional<std::pair<double, double>>;
 // decided after bar 2 finds its next bar past the loop end: the song wraps
 // before that anchor too, and it lands on bar 2 of the next pass.
 inline const Loop kWrapBeforeAnchor = std::pair{1.0, 3.0};
+// A step with no requests and no load only services the engine.
 struct Step {
     std::int64_t cycle;
     std::vector<Engine::LaunchRequest> requests;
@@ -220,6 +230,7 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
             REQUIRE(engine.load(*step.load, dir));
             continue;
         }
+        if (step.requests.empty()) continue;  // a service alone, as the app's tick
         auto placed = engine.launch(step.requests, step.quantize);
         REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
         report += "\n  step at frame " + std::to_string(step.cycle * block) + ": placed epoch " +
@@ -428,6 +439,14 @@ struct AppLive {
           backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames}) {
         REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block}, options));
     }
+    // An engine still running stops before its backend goes with this
+    // object, so a test cannot leave the app stopping it through a freed
+    // backend later (round 168 recheck 3).
+    ~AppLive() {
+        if (p.app->engine()) p.app->stopEngine();
+    }
+    AppLive(const AppLive&) = delete;
+    AppLive& operator=(const AppLive&) = delete;
     // Runs until `frame` of the stream has played.
     void until(std::int64_t frame) {
         const std::int64_t n = frame / block - cycles;
@@ -439,6 +458,18 @@ struct AppLive {
             cycles += n;
         }
         p.app->tick();
+    }
+    // The renderer as far ahead as it goes, where it stays until more is
+    // played (by condition, no clock): an edit prepared now finds the
+    // frontier fixed, so no attempt is late and its switch S is the one an
+    // unloaded run gets. until() leaves it catching up, and an attempt it
+    // overtakes prepares again with S later. The in-callback executor's
+    // frontier is what has played: fixed already. Says so while it waits,
+    // so a renderer that never fills is not a silent hang.
+    void settle() {
+        if (!options.anticipative) return;
+        while (!p.app->engine()->awaitRendered(std::numeric_limits<std::int64_t>::max()))
+            MESSAGE("the renderer has not settled yet");
     }
     std::vector<float> stop() {
         CHECK(p.app->engine()->anticipationMisses() == 0);
@@ -518,6 +549,42 @@ inline CommitResidual commitResidual(const std::vector<float>& heard, std::uint3
         worst = std::max(worst, d);
     }
     return r;
+}
+
+// A run's output across a playrate change (S3 step D4).
+struct ChangeRun {
+    std::vector<float> heard;
+    std::uint32_t latency = 0;
+};
+// The loudest sample over [a, b) of the stream.
+inline double loudest(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k)
+        m = std::max(m, std::fabs(double(r.heard[static_cast<std::size_t>(k + r.latency)])));
+    return m;
+}
+// The largest step between neighbouring samples over [a, b) of the stream.
+inline double largestStep(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k) {
+        const auto i = static_cast<std::size_t>(k + r.latency);
+        m = std::max(m, std::fabs(double(r.heard[i + 1]) - double(r.heard[i])));
+    }
+    return m;
+}
+
+// Service-only steps every 1024 frames over [from, to), merged in order. The
+// app services its engine on every tick, and service() places a launch the
+// renderer overtook while it was placed again from there (engine.md
+// §1.4.2): an unquantized launch near the render horizon can be overtaken,
+// under ThreadSanitizer's slowness above all, and without a service before
+// the next step it would wait there unplaced.
+inline std::vector<Step> serviced(std::vector<Step> steps, std::int64_t from, std::int64_t to,
+                                  std::uint32_t block) {
+    for (std::int64_t f = from; f < to; f += 1024) steps.push_back({f / block, {}});
+    std::stable_sort(steps.begin(), steps.end(),
+                     [](const Step& a, const Step& b) { return a.cycle < b.cycle; });
+    return steps;
 }
 
 }  // namespace clip_player_test
