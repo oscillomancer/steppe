@@ -2269,10 +2269,11 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   always a rack's Mod Out, so the case cannot arise.
 - **Moves.** A command that moves a take to another track keeps its
   routes: `item.move`, `clip.move`, `take.extract` and
-  `item.explode-takes {mode: tracks}`.
+  `item.explode-takes {mode: tracks}`; so does `fx.move` of a track-chain
+  FX to another track (review round 193 R2).
   - A move that would close a cycle is refused with `modulation.cycle`,
     naming the route, with a hint to remove the route or choose another
-    track. The path is `/track`, the argument that moves the take there.
+    track. The path is `/track`, the argument that moves the take or FX there.
     For `item.explode-takes` it is `/item`. `take.extract` without `track`
     stays on its track and cannot close one.
   - No route is dropped by a move. A move in time hears its sources at its

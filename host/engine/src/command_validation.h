@@ -101,11 +101,12 @@ inline std::string copiedPath(std::string_view command) {
     if (command == "take.add") return "/from";
     return "";
 }
-// The commands that move a take to another track, whose cycle refusal is at
-// the track that moves it (ADR-0096 M5).
-inline bool movesTakes(std::string_view command) {
+// The commands that move a route's target to another track (a take, ADR-0096
+// M5; a track-chain FX, review round 193 R2), whose cycle refusal is at the
+// track it moves to.
+inline bool movesTargets(std::string_view command) {
     return command == "item.move" || command == "clip.move" || command == "take.extract" ||
-           command == "item.explode-takes";
+           command == "item.explode-takes" || command == "fx.move";
 }
 }  // namespace detail
 
@@ -123,8 +124,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
     if (!detail::copiedPath(command.name).empty())
         declare({"modulation.limit", "the copy's routes would pass the project's route limit",
                  "remove routes first (modulation.list), for instance the copied chain's"});
-    if (detail::movesTakes(command.name))
-        declare({"modulation.cycle", "the move puts a modulated take where its rack hears it",
+    if (detail::movesTargets(command.name))
+        declare({"modulation.cycle", "the move puts a modulated take or FX where its rack hears it",
                  "remove the route, or choose another track"});
     if (command.kind != cmd::Kind::Query) {
         auto original = std::move(command.run);
@@ -205,7 +206,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                 livesOn.insert(livesOn.end(), joined.begin(), joined.end());
                 // A move that closes a cycle is refused, never mended by
                 // dropping a route: a move must not change what sounds.
-                if (detail::movesTakes(name) && !before.modulations.empty()) {
+                if (detail::movesTargets(name) && !before.modulations.empty()) {
                     Status ok = model::checkInvariants(app.txn().preview());
                     if (!ok && ok.error().code == "modulation.cycle") {
                         Error e = ok.error();

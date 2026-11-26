@@ -1112,7 +1112,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Errors
 
-- `modulation.cycle`: the move puts a modulated take where its rack hears it Hint: remove the route, or choose another track
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 

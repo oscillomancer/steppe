@@ -906,9 +906,12 @@ void registerModulationCommands(cmd::Registry& registry) {
                              "rack": "rk_1", "module": "mo_3", "mod_out": "mo_2",
                              "input": "in_1"})"),
                        "song_with_mod_out"}};
-        // Its route goes through modulation.add, so it answers what that does;
-        // a follower on a track the target feeds is its own cycle.
+        // Its route goes through modulation.add, so it answers what that does
+        // but modulation.envelope (it adds the envelope first); a follower on
+        // a track the target feeds is its own cycle.
         c.errors = routeErrors(true);
+        std::erase_if(c.errors,
+                      [](const cmd::ErrorSpec& e) { return e.code == "modulation.envelope"; });
         for (cmd::ErrorSpec& e : c.errors)
             if (e.code == "modulation.cycle")
                 e = {"modulation.cycle",
