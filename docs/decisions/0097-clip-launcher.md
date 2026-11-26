@@ -1403,6 +1403,14 @@ service read in time. The key is the one set at the switch; a shift change betwe
 its switch, or between the executors' switches, marks the capture rather than being approximated, and
 so does a capture begun over the frames a late renderer leave rendered before it settled.
 
+Review round 205 (same date) found that waiting for a slot's log entries to be judged held every
+launch's slot until its epoch ended (the 257th launch in one play was refused), and that a slot whose
+ack was not read could be reused, dropping a heard launch. Decided, as the simpler lifetime: a slot is
+taken again only once its switch is known heard (in its epoch, played past; after it, by its verdict),
+the launch reads the acks first and settles the slot's entries as heard as it takes it; an unheard
+slot is voided and placed again, never reused. A seeded sequence test of launches, stops, seeks,
+services and captures on both executors holds these invariants (test_launch_sequence.cpp).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

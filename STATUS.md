@@ -431,9 +431,16 @@ instructions are in `docs/guides/installing.md`.
       the frames that renderer rendered before it settled, or one whose
       epoch end no service read before its ring entry was reused (64
       epochs without a service); a launch's verdict is made once, so a
-      heard launch stays heard however many epochs follow (round 203);
-      the GUI's as-heard line does not word
-      `launch_unsettled` yet (gui-lead).
+      heard launch stays heard however many epochs follow (round 203),
+      and a slot is free again once its launch is heard, so a long play
+      never runs out (round 205); the GUI's as-heard line does not word
+      `launch_unsettled` yet (gui-lead). Known gaps, found by the seeded
+      sequence test (round 205) and not yet decided: a capture is as
+      heard but its replay differs when it begins (A) after a seek back
+      before the anchor of a loop clip that plays on (live plays it by its
+      phase, the replay is silent until the anchor), or (B) inside a
+      switch's 5 ms crossfade, including the crossfade of launches placed
+      at the play start (the replay fades in from silence).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

@@ -1568,6 +1568,12 @@ class Engine {
     std::vector<LogMeta> launchMeta_;
     // Whether entry `i` was heard: nullopt while its verdict is not in.
     std::optional<bool> entryHeard(std::size_t i) const;
+    // The executors' acks into the log (unsorted); whether any came.
+    bool readLaunchAcks();
+    void serviceLaunchesRest();
+    bool launchAcksAdded_ = false;  // acks came since the last service
+    bool slotReusable(const LaunchSlot& s, std::uint64_t st, std::uint64_t current,
+                      const detail::Plan* plan) const;
     // Main thread: each ended epoch's hearing end, copied from the ring the
     // first time a service reads it (absent: the ring entry was reused
     // before any service read it, taken as unheard); epochs from

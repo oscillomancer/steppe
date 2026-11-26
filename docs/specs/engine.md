@@ -693,13 +693,24 @@ the same.*
     in (`settleLeave`); what it renders meanwhile may still hold an unheard
     switch, so a capture in the epoch it went on in that began before it
     settled is not as heard (`launch_unsettled`, round 203 F2), and so is
-    one running across the leave, pending or placed. A slot is voided and
-    placed again only once every executor has left its epoch and taken
-    back (`LaunchSlot::left`). A record applied as a relocation in a later
-    epoch is judged by its frame there against that epoch's end.
+    one running across the leave, pending or placed. A relocation while
+    such a leave is still pending leaves that epoch too (it applied
+    nothing there) and moves the late span on to the epoch it goes on in
+    (round 205 F3). A record applied as a relocation in a later epoch is
+    judged by its frame there against that epoch's end.
+  - **A slot's lifetime** (round 205): a launch takes a free slot, or one
+    whose launch every executor is done with and whose switch is known
+    heard: in its epoch once the callback has played past its key, after
+    it by its verdict. A launch reads the executors' acks first, and taking
+    such a slot settles its log entries as heard, so no entry is ever
+    judged against a reused slot. A slot whose switch was not heard is not
+    taken: it is voided and placed again once every executor has left its
+    epoch and taken back (`LaunchSlot::left`). So a long play reuses slots
+    as their launches are heard, and many epochs without a service lose
+    no heard launch.
   - The main thread judges each log entry once: a slot's entry by the
-    slot's verdict (the slot is not reused until its entries are judged),
-    a return by its epoch's end, which it copies from the ring the first
+    slot's verdict, or as heard when its slot is taken (above), a return
+    by its epoch's end, which it copies from the ring the first
     time a service reads it. An entry judged heard is never looked at
     again; `launch.state` reads the same stored verdicts. "Unknown, so
     unheard" applies only to an epoch whose end no service read before its
@@ -707,7 +718,8 @@ the same.*
     capture.
   - The key is the target plus the track's channel shift (`timelineShift`)
     as of the switch (`LaunchSlot::key`, round 203 F3): an early half sets
-    it from its plan's shift, the first switch sets it again from its own;
+    it from its plan's shift, the first target to switch sets it again
+    from its own;
     each executor records it, each ack carries it, and the log keeps it
     with its entry, so a plan published after the switch with another
     shift changes no verdict. A switch whose shift differs from its early

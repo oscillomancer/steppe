@@ -86,6 +86,57 @@ struct EngineTestAccess {
     }
     static void endWrite(Engine& e, std::uint64_t seq) { e.xportSeq_.store(seq + 2); }
     static std::uint64_t epoch(const Engine& e) { return e.epoch_.load(); }
+    // The launch slots a new launch could not take (round 205): waiting, or
+    // applied and not yet known heard.
+    static std::size_t slotsHeld(const Engine& e) {
+        const std::uint64_t current = e.epoch_.load();
+        const detail::Plan* plan = e.latestPlan_.load();
+        std::size_t n = 0;
+        for (const Engine::LaunchSlot& s : *e.launchSlots_)
+            n += !e.slotReusable(s, s.state.load(), current, plan);
+        return n;
+    }
+    // The slots whose switch is still ahead: waiting to apply, or applied in
+    // the running epoch at or past what the callback has played.
+    static std::size_t slotsAhead(const Engine& e) {
+        const std::uint64_t current = e.epoch_.load();
+        const detail::Plan* plan = e.latestPlan_.load();
+        const std::int64_t played = e.playedStream(current);
+        std::size_t n = 0;
+        for (const Engine::LaunchSlot& s : *e.launchSlots_) {
+            const std::uint64_t status = s.state.load() & 7;
+            n += status == Engine::LaunchSlot::kPending ||
+                 status == Engine::LaunchSlot::kCommitted ||
+                 (status == Engine::LaunchSlot::kApplied && s.epoch.load() == current &&
+                  e.slotKey(s, plan) >= played);
+        }
+        return n;
+    }
+    // Each held slot: its state word, epoch, verdict, done/required/left
+    // bits and key, against the epoch running and what was played there.
+    static std::string heldSlots(const Engine& e) {
+        const std::uint64_t current = e.epoch_.load();
+        const detail::Plan* plan = e.latestPlan_.load();
+        std::string out = "epoch " + std::to_string(current) + ", played " +
+                          std::to_string(e.playedStream(current)) + ":";
+        for (const Engine::LaunchSlot& s : *e.launchSlots_) {
+            const std::uint64_t st = s.state.load();
+            if (e.slotReusable(s, st, current, plan)) continue;
+            out += " [status " + std::to_string(st & 7) + " gen " + std::to_string(st >> 3) +
+                   " track " + std::to_string(s.track.load()) + " epoch " +
+                   std::to_string(s.epoch.load()) + " verdict " +
+                   std::to_string(int(s.verdict.load())) + " done " +
+                   std::to_string(int(s.done.load())) + "/" +
+                   std::to_string(int(s.required.load())) + " left " +
+                   std::to_string(int(s.left.load())) + " key " + std::to_string(s.key.load()) +
+                   " target " + std::to_string(s.target.load()) + "]";
+        }
+        return out;
+    }
+    // The epoch a late renderer leave went on in (UINT64_MAX: none yet).
+    static std::uint64_t launchLateEpoch(const Engine& e) { return e.launchLateEpoch_.load(); }
+    // Where in that epoch's stream the renderer settled (INT64_MAX: not yet).
+    static std::int64_t launchLateEnd(const Engine& e) { return e.launchLateEnd_.load(); }
     static std::uint64_t rtEpoch(const Engine& e) { return e.rtEpoch_; }
     static LoopRange rtLoop(const Engine& e) { return e.loopC_; }
     static std::uint64_t rendererEpoch(const Engine& e) { return e.epochDone_.load(); }

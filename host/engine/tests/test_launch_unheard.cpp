@@ -890,3 +890,132 @@ TEST_CASE(
         }
     }
 }
+
+TEST_CASE("a long play without a stop never runs out of launch slots (round 205 F1)" *
+          doctest::description("rt")) {
+    // cl_1 and cl_2 launched on tr_1 in turn on sixteenths, 400 cycles (more
+    // than a sixteenth and the render-ahead span) and a service after each, 300 times in one play:
+    // a heard launch's slot is free again while its epoch runs on (the 257th was refused with
+    // launch.queue at e9aabe53). Both executors.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 82);
+        e.engine.play();
+        e.run(20);
+        int refused = 0;
+        for (int i = 0; i < 300; ++i) {
+            e.engine.service();
+            const Engine::LaunchRequest r = request("tr_1", i % 2 ? "cl_2" : "cl_1");
+            const auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::Sixteenth);
+            if (!placed) {
+                INFO("launch " << i + 1 << ": " << placed.error().toString());
+                CHECK(placed);
+                if (++refused > 3) break;
+            }
+            e.run(e.done + 400);
+        }
+        e.engine.service();
+        CHECK(refused == 0);
+        CHECK(e.engine.launchLog().size() == 300);
+        CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
+        e.engine.stop();
+    }
+}
+
+TEST_CASE("a launch made after many unserviced seeks keeps a heard launch (round 205 F2)" *
+          doctest::description("rt")) {
+    // cl_1 heard on bar 2, no service from there (its ack unread), then 70
+    // seeks of one cycle each (epoch 0's ring entry reused), then cl_2
+    // launched on the next bar before any service: the launch reads the
+    // acks first, and the heard
+    // launch's slot, reused, has its entry settled as heard. The log keeps
+    // cl_1, launch.state and the node agree, and a capture started then
+    // lists cl_1. Controls: 62 seeks, and 70 with a service before the
+    // launch. Both executors.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true})
+        for (const auto& [seeks, serviced] :
+             {std::pair{70, false}, std::pair{62, false}, std::pair{70, true}}) {
+            INFO((ahead ? "anticipative, " : "in-callback, ")
+                 << seeks << " seeks" << (serviced ? ", serviced" : ""));
+            Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                     48000 * 8);
+            e.engine.play();
+            e.run(20);
+            (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+            e.run(3100);  // heard; no service from here, so its ack is not read
+            for (int i = 0; i < seeks; ++i) {
+                e.engine.seek(2.5);
+                e.run(e.done + 1);
+            }
+            if (serviced) e.engine.service();
+            const Engine::LaunchRequest r = request("tr_1", "cl_2");
+            REQUIRE(e.engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));
+            e.engine.service();
+            REQUIRE(e.engine.captureLaunches(true));
+            e.run(e.done + 50);
+            e.engine.service();
+            std::size_t cl1 = 0;
+            for (const LaunchLogEntry& le : e.engine.launchLog()) cl1 += le.clip == id("cl_1");
+            CHECK(cl1 == 1);
+            CHECK(e.plays() == "clip cl_1");
+            CHECK(e.node() == e.plays());
+            const auto capture = e.engine.launchCapture();
+            REQUIRE(capture);
+            REQUIRE(capture->launches.size() == 1);
+            CHECK(capture->launches[0].clip == id("cl_1"));
+            CHECK(capture->facts == Engine::CaptureFacts{});
+            e.engine.stop();
+        }
+}
+
+TEST_CASE("a seek while a late renderer leave is pending moves the late span on (round 205 F3)" *
+          doctest::description("rt")) {
+    // cl_1 applied ahead and unheard (2990 cycles); the renderer's leave
+    // late at a seek to 2.5 s, then a second seek to 3 s while it is still
+    // pending. A capture started in the second epoch, over frames the
+    // renderer rendered before it settled, is not as heard; the launch is
+    // placed again and logged once. In-callback, the same capture is as
+    // heard.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative, its leave late" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 8);
+        e.engine.play();
+        e.run(20);
+        (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+        e.run(2990);
+        e.engine.service();
+        EngineTestAccess::rendererLeaveLate(e.engine, ahead);
+        e.engine.seek(2.5);
+        e.run(e.done + 1);
+        e.engine.seek(3.0);
+        REQUIRE(e.engine.captureLaunches(true));
+        e.run(e.done + 1);
+        e.engine.service();
+        EngineTestAccess::rendererLeaveLate(e.engine, false);
+        e.run(e.done + 400);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        REQUIRE(capture->placed);
+        CHECK(capture->facts.launchUnsettled == ahead);
+        e.run(e.done + 3000);
+        e.engine.service();
+        std::size_t cl1 = 0;
+        for (const LaunchLogEntry& le : e.engine.launchLog()) cl1 += le.clip == id("cl_1");
+        CHECK(cl1 == 1);
+        CHECK(e.node() == e.plays());
+        CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
+        e.engine.stop();
+    }
+}

@@ -2784,7 +2784,14 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         leftEnd = heardEnd(previous);
     if (launchLeavePending_ != UINT64_MAX) {
         // Still waiting for an earlier leave's verdicts: it applied nothing
-        // since, so its records are that epoch's (settled first).
+        // since, so its records are that epoch's (settled first). It left
+        // this one too, having applied nothing there (round 205 F3); the
+        // late span moves on to the epoch it goes on in.
+        markLeft(1, previous, epoch);
+        launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+        launchLateEpoch_.store(epoch, std::memory_order_release);
+        launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+        notifyMain();
     } else if (leftEnd) {
         launchLeftEpoch_[0] = previous;
         launchLeftEnd_[0] = *leftEnd;
