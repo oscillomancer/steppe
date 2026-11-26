@@ -5790,7 +5790,9 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
                                                   {"item.heal", ""},
                                                   {"fx.move", ""},
                                                   {"route.add", ""},
-                                                  {"track.move", ""}};
+                                                  {"route.set", ""},
+                                                  {"track.move", ""},
+                                                  {"track.set", ""}};
     // Those that declare one and the GUI does not run with routes to copy:
     // take.add {from} only in the --generate demo, the consolidation's commit
     // inside its job (its refusal is the job's, said as item.consolidate's),
@@ -5801,29 +5803,10 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
     const char* text = "engine text tr_3 it_4";
     const char* hint = "a hint for command callers";
     const model::Session s = f.app->head();
-    // TODO(round 195 F2): route.add and track.move answer modulation.cycle
-    // without declaring it. They have words now (the mixer, the routing
-    // matrix and the track panel run them); once the lead declares the code,
-    // take them off this list and the walk checks them as the rest.
-    const std::set<std::string> undeclared{"route.add", "track.move"};
-    for (const std::string& name : undeclared) {
-        INFO(name << " (answers modulation.cycle undeclared)");
-        const cmd::CommandInfo* info = f.registry.find(name);
-        REQUIRE(info);
-        bool declares = false;
-        for (const cmd::ErrorSpec& e : info->errors) declares |= m5.contains(e.code);
-        CHECK_FALSE(declares);  // declared now: take it off `undeclared`
-        const auto words = views::modulationRefusalWords(
-            s, name, Error("modulation.cycle", text, "/modulations/mr_1", hint));
-        REQUIRE(words);
-        CHECK(words->find("would loop its modulation") != std::string::npos);
-        CHECK(words->find("take") == std::string::npos);
-        CHECK(words->find("Remove modulation") != std::string::npos);
-    }
     // A command not known here keeps its caller's words for every M5 code
     // (round 196 F1: a generic verb worded a send as a take's move).
     for (const char* code : {"modulation.limit", "modulation.cycle", "item.heal_fx"})
-        for (const char* other : {"track.set", "route.set", "item.merge", "clip.remove"}) {
+        for (const char* other : {"track.add", "route.remove", "item.merge", "clip.remove"}) {
             INFO(other << " " << code);
             CHECK_FALSE(views::modulationRefusalWords(s, other, Error(code, text, "", hint)));
         }
@@ -5838,10 +5821,16 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
         if (!runByGui) continue;
         for (const cmd::ErrorSpec& e : command->errors) {
             if (!m5.contains(e.code)) continue;
-            const std::string path = e.code == "modulation.limit" ? runs.at(command->name)
-                                     : e.code == "item.heal_fx"   ? "/items"
-                                     : command->name == "item.explode-takes" ? "/item"
-                                                                             : "/track";
+            // The argument each answers at (command_validation.h, cyclePath).
+            const std::map<std::string, std::string> cycleAt{{"item.explode-takes", "/item"},
+                                                             {"route.add", "/to"},
+                                                             {"route.set", "/to"},
+                                                             {"track.move", "/parent"},
+                                                             {"track.set", "/parent_send"}};
+            const std::string path = e.code == "modulation.limit"      ? runs.at(command->name)
+                                     : e.code == "item.heal_fx"        ? "/items"
+                                     : cycleAt.contains(command->name) ? cycleAt.at(command->name)
+                                                                       : "/track";
             INFO(e.code << " at " << path);
             const auto words = views::modulationRefusalWords(
                 s, command->name, Error(e.code, text, "/args" + path, hint));
@@ -5870,8 +5859,8 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
           "clip.duplicate", "scene.capture", "scene.insert", "arrangement.build", "track.duplicate",
           "launch.commit"})
         CHECK_MESSAGE(worded.contains(std::string(copy) + " modulation.limit"), copy);
-    for (const char* move :
-         {"item.move", "clip.move", "take.extract", "item.explode-takes", "fx.move"})
+    for (const char* move : {"item.move", "clip.move", "take.extract", "item.explode-takes",
+                             "fx.move", "route.add", "route.set", "track.move", "track.set"})
         CHECK_MESSAGE(worded.contains(std::string(move) + " modulation.cycle"), move);
     // A track's plug-in moved is no take's.
     const auto fxMove = views::modulationRefusalWords(
@@ -5879,6 +5868,14 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
     REQUIRE(fxMove);
     CHECK(fxMove->starts_with("Moving the plug-in there would loop its modulation"));
     CHECK(fxMove->find("take") == std::string::npos);
+    // Nor is a send's, a track's move or a parent send (round 196 F1).
+    for (const char* edit : {"route.add", "route.set", "track.move", "track.set"}) {
+        INFO(edit);
+        const auto words =
+            views::modulationRefusalWords(s, edit, Error("modulation.cycle", text, "", hint));
+        REQUIRE(words);
+        CHECK(words->find("take") == std::string::npos);
+    }
     CHECK(worded.contains("item.heal item.heal_fx"));
     // The lists against the GUI's sources (round 194): a file that names a
     // declaring command runs it through the words (it includes
@@ -5911,9 +5908,16 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
             ++scanned;
             const bool words = source.find("supple/views/modulation_words.h") != std::string::npos;
             for (const auto& [name, path] : runs) {
+                // track.set raises modulation.cycle only for its parent_send,
+                // which the next check follows; its other fields are many.
+                if (name == "track.set") continue;
                 if (source.find("\"" + name + "\"") == std::string::npos) continue;
                 INFO(file << " names " << name);
                 CHECK((words || through.contains(file)));
+            }
+            if (source.find("[\"parent_send\"] =") != std::string::npos) {
+                INFO(file << " sets track.set's parent_send");
+                CHECK(words);
             }
             for (const auto& [name, at] : notRunAt)
                 if (source.find("\"" + name + "\"") != std::string::npos) {
@@ -6350,19 +6354,25 @@ TEST_CASE("modulation words: a send or a track move that would loop says so as i
     target["param"] = key;
     REQUIRE(f.run("modulate",
                   f.args({{"target", target}, {"source", "follower"}, {"from", listened}})));
-    const std::map<std::string, std::pair<json::Value, std::string>> edits{
-        {"route.add", {f.args({{"from", keys.str()}, {"to", listened}}), "The send would loop"}},
+    struct Edit {
+        json::Value args;
+        std::string at, says;
+    };
+    const std::map<std::string, Edit> edits{
+        {"route.add",
+         {f.args({{"from", keys.str()}, {"to", listened}}), "/to", "The send would loop"}},
         {"track.move",
-         {f.args({{"track", keys.str()}, {"parent", listened}}),
+         {f.args({{"track", keys.str()}, {"parent", listened}}), "/parent",
           "Moving the track there would loop"}}};
     for (const auto& [command, edit] : edits) {
         INFO(command);
-        auto r = f.run(command.c_str(), edit.first);
+        auto r = f.run(command.c_str(), edit.args);
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path.ends_with(edit.at));  // declared, at its argument (round 195 F2)
         const Error said = views::modulationRefusal(f.app->head(), command, r.error());
         INFO(said.message);
-        CHECK(said.message.starts_with(edit.second));
+        CHECK(said.message.starts_with(edit.says));
         CHECK(said.message.find("take") == std::string::npos);
         CHECK(said.message.find("mr_") == std::string::npos);
         CHECK(said.message.find("tr_") == std::string::npos);
@@ -6455,66 +6465,41 @@ TEST_CASE("modulation words: a macro's refused step is worded by the step's comm
     CHECK(wrapped.error().message == own);
 }
 
-TEST_CASE("modulation words: every reason session-model lists has its own words") {
-    // Round 196 F3: a warning's reason has words of its own, never the plain
-    // fallback, for every reason the spec lists (session-model.md, "Each
-    // warning that has more than one cause carries reason"), so a reason
-    // added there fails here until it is worded.
-    // TODO(round 195 F4): read the engine's one list of reasons in code
-    // instead of the spec's prose once the lead's head has it.
+TEST_CASE("modulation words: every route warning reason has its own words") {
+    // Round 196 F3, round 195 F4: a warning's reason has words of its own,
+    // never the plain fallback, for every reason the engine has
+    // (model::kRouteWarningReasons, the one list its emitters and the
+    // record.warning schema use), so a reason added there fails here until
+    // it is worded.
     Fixture f;
     if (!f.ok) {
         MESSAGE("skipped: no offscreen GL");
         return;
     }
-    const std::filesystem::path spec = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR)
-                                           .parent_path()
-                                           .parent_path()
-                                           .parent_path()
-                                           .parent_path() /
-                                       "docs" / "specs" / "session-model.md";
-    std::ifstream in(spec);
-    REQUIRE(in);
-    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    const auto at = text.find("Each warning that has more than one cause carries `reason`");
-    REQUIRE(at != std::string::npos);
-    const auto end = text.find("\n- ", text.find("- `modulation.stacked`", at));
-    REQUIRE(end != std::string::npos);
-    const std::string list = text.substr(at, end - at);
-    // A reason is a backticked word followed by " (" or " or " in its code's
-    // bullet: "`source` (the copy's …", "`source_removed` or …".
-    std::map<std::string, std::set<std::string>> reasons;
-    std::string code;
-    for (std::size_t i = 0; (i = list.find('`', i)) != std::string::npos;) {
-        const auto close = list.find('`', i + 1);
-        if (close == std::string::npos) break;
-        const std::string word = list.substr(i + 1, close - i - 1);
-        if (list.compare(i - 2, 2, "- ") == 0)
-            code = word;
-        else if (!code.empty() &&
-                 (list.compare(close + 1, 2, " (") == 0 || list.compare(close + 1, 4, " or ") == 0))
-            reasons[code].insert(word);
-        i = close + 1;
-    }
-    INFO(list);
-    REQUIRE(reasons["modulation.not_copied"].size() >= 3);
-    REQUIRE(reasons["modulation.removed"].size() >= 4);
-    CHECK_FALSE(reasons.contains("modulation.stacked"));
     const model::Session s = f.app->head();
-    for (const auto& [listed, words] : reasons)
-        for (const std::string& reason : words) {
-            INFO(listed << " reason " << reason);
-            const auto with =
-                views::modulationWarningWords(s, "item.paste", listed, "/modulations/mr_1", reason);
-            const auto without =
-                views::modulationWarningWords(s, "item.paste", listed, "/modulations/mr_1", "");
-            REQUIRE(with);
-            REQUIRE(without);
-            // removed's two "removed" reasons share the plain "went with it"
-            // on purpose: the route went with what the delete took.
-            if (reason == "source_removed" || reason == "target_removed")
-                CHECK(*with == *without);
-            else
-                CHECK(*with != *without);
-        }
+    std::size_t checked = 0;
+    for (const auto& [reason, word] : model::kRouteWarningReasons) {
+        // Source, Cycle and Limit are modulation.not_copied's; the rest
+        // modulation.removed's (session.h).
+        const bool notCopied = reason == model::RouteWarningReason::Source ||
+                               reason == model::RouteWarningReason::Cycle ||
+                               reason == model::RouteWarningReason::Limit;
+        const char* code = notCopied ? "modulation.not_copied" : "modulation.removed";
+        INFO(code << " reason " << word);
+        const auto with =
+            views::modulationWarningWords(s, "item.paste", code, "/modulations/mr_1", word);
+        const auto without =
+            views::modulationWarningWords(s, "item.paste", code, "/modulations/mr_1", "");
+        REQUIRE(with);
+        REQUIRE(without);
+        // removed's two "removed" reasons share the plain "went with it" on
+        // purpose: the route went with what the delete took.
+        if (reason == model::RouteWarningReason::SourceRemoved ||
+            reason == model::RouteWarningReason::TargetRemoved)
+            CHECK(*with == *without);
+        else
+            CHECK(*with != *without);
+        ++checked;
+    }
+    CHECK(checked >= 7);
 }

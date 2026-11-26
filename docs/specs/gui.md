@@ -375,8 +375,11 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `route.add`, "The send would loop its modulation: where it goes feeds the
   rack that modulates the sending track. …", and a track moved into a
   folder or buss, `track.move`, "Moving the track there would loop its
-  modulation: it would feed the rack that modulates it. …", where the
-  mixer, the routing matrix and the track panel run them; any other
+  modulation: it would feed the rack that modulates it. …", and the
+  parent send turned on, `track.set`, "The parent send would loop its
+  modulation: the parent feeds the rack that modulates the track. …",
+  where the mixer, the routing matrix and the track panel run them
+  (`route.set` as `route.add`); any other
   command keeps its own words), and `item.heal_fx` from **Heal splits**
   ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
   them match (…), or consolidate them instead."). The warnings, which have
@@ -421,14 +424,14 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   scans the GUI's sources: a file that names such a command includes the
   words or is listed with the path it runs it by (the gestures through
   their runner, the launcher through `runLauncher`, and the files whose
-  `item.add` copies no route), and a command listed as not run is named
-  only where that holds (`take.add` in the demo generator). A command
-  named through a variable, or a listed file that skips the words at one
-  call site, it cannot see, nor a code a command raises without declaring
-  it: `route.add` and `track.move` raise `modulation.cycle` undeclared, so
-  they are listed apart until they declare it. Another test reads
-  session-model's reasons and checks each has words other than the plain
-  sentence.
+  `item.add` copies no route; `track.set` is followed by where it sets
+  `parent_send`, its one field that can loop), and a command listed as
+  not run is named only where that holds (`take.add` in the demo
+  generator). A command named through a variable, a listed file that
+  skips the words at one call site, or a code a command raises without
+  declaring it, it cannot see. Another test takes every reason in
+  `model::kRouteWarningReasons` and checks each has words other than the
+  plain sentence.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved

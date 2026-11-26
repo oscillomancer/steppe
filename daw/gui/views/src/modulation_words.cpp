@@ -69,10 +69,14 @@ std::optional<std::string> modulationRefusalWords(const model::Session&, std::st
                std::string(kRemove) + "); a copied chain brings its routes with it.";
     }
     if (e.code == "modulation.cycle") {
-        if (command == "route.add")
+        if (command == "route.add" || command == "route.set")
             return "The send would loop its modulation: where it goes feeds the rack that "
                    "modulates the sending track. Send it elsewhere, or remove the modulation "
                    "first (" +
+                   std::string(kRemove) + ").";
+        if (command == "track.set")  // its parent_send, the only field that can loop
+            return "The parent send would loop its modulation: the parent feeds the rack that "
+                   "modulates the track. Leave it off, or remove the modulation first (" +
                    std::string(kRemove) + ").";
         if (command == "track.move")
             return "Moving the track there would loop its modulation: it would feed the rack "
