@@ -1041,6 +1041,7 @@ bool Engine::seekToPlayStart() {
     // next boundary).
     playStart_.emplace(seekEpoch_.load(std::memory_order_acquire),
                        seekSample_.load(std::memory_order_acquire));
+    takeBackUnheard();  // what the stop left unheard is placed there too
     placeLaunchesAgain();
     playStart_.reset();
     return true;
@@ -2206,6 +2207,20 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         loopC_ = xport.loop;
     }
     if (xportNew && xport.epoch != rtEpoch_) {
+        // Where the epoch it leaves stopped being heard (ADR-0097, dated
+        // 2026-11-26): everything it processed there was handed to the device.
+        const std::int64_t heard =
+            rtPosEpoch_.load(std::memory_order_relaxed) == rtEpoch_ ? rtStream_.load() : 0;
+        // Both classes (it runs every node): the slots' verdicts, written
+        // before the end is published (a renderer settling by it reads
+        // them), then what it applied there and was not heard goes back,
+        // here at the leave (round 203 F1).
+        leaveLaunchEpoch(3, plan, rtEpoch_, heard, true, xport.epoch);
+        noteHeardEnd(rtEpoch_, xport.epoch, heard);
+        launchLeftEpoch_[1] = rtEpoch_;
+        launchLeftEnd_[1] = heard;
+        if (plan) takeBackNodes(*plan, -1, rtEpoch_, heard);
+        markLeft(3, rtEpoch_, xport.epoch);
         // The callback's own meter coordinates (P5.3c). With no anticipation it
         // is both renderer and player, so what it processes is what is heard;
         // the anticipative path keeps these in pullAhead/liveRender.
@@ -2708,9 +2723,27 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
     TransportSnapshot t;
     if (!readTransport(t, kRendererTransportTries)) return previous;
     const std::uint64_t epoch = t.epoch;
+    // What it applied ahead of the listener in `previous` (ADR-0097, dated
+    // 2026-11-26): the frames heard there are final once the callback has
+    // entered the new epoch, so it waits for that here on a seek as well
+    // (bounded, as for a pause below); a manual backend's callback runs only
+    // when its caller says, so its count is final already.
+    const bool undos =
+        plan_ && std::any_of(plan_->nodes.begin(), plan_->nodes.end(),
+                             [](const detail::Node& n) { return n.launchUndoCount > 0; });
     if (t.seekSeq != seekSeen_) {
         seekSeen_ = t.seekSeq;
         pos_ = t.seekSample;
+        if (undos && backend_->ownsThread() &&
+            !rendererLeaveLateForTests_.load(std::memory_order_relaxed)) {
+            const auto deadline = std::chrono::steady_clock::now() + rendererSafetyTimeout();
+            for (;;) {
+                const auto event = rendererEvent_.load(std::memory_order_acquire);
+                if (rtEpochSeen_.load(std::memory_order_acquire) >= epoch || rendererQuit_.load())
+                    break;
+                if (!rt::waitUntil(rendererEvent_, event, deadline)) break;
+            }
+        }
     } else {
         // Paused: resume where the listener is. Once the callback has seen
         // the new epoch it plays nothing older, so its position is final. (A
@@ -2736,6 +2769,45 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
             }
         }
         pos_ = playedPosition(previous, epochStartLocal_);
+    }
+    // Where hearing ended in the epoch left: the callback's end once it has
+    // left it; with a manual backend, whose callback runs only when told,
+    // what it consumed is final already. Unknown (the wait timed out, or the
+    // test hook): settled once the callback's end is known, nothing applied
+    // or taken back until then (settleLeave; round 201 F2).
+    std::optional<std::int64_t> leftEnd;
+    if (rendererLeaveLateForTests_.load(std::memory_order_relaxed))
+        leftEnd = std::nullopt;
+    else if (!backend_->ownsThread())
+        leftEnd = playedStream(previous);
+    else
+        leftEnd = heardEnd(previous);
+    if (launchLeavePending_ != UINT64_MAX) {
+        // Still waiting for an earlier leave's verdicts: it applied nothing
+        // since, so its records are that epoch's (settled first). It left
+        // this one too, having applied nothing there (round 205 F3); the
+        // late span moves on to the epoch it goes on in.
+        markLeft(1, previous, epoch);
+        launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+        launchLateEpoch_.store(epoch, std::memory_order_release);
+        launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+        notifyMain();
+    } else if (leftEnd) {
+        launchLeftEpoch_[0] = previous;
+        launchLeftEnd_[0] = *leftEnd;
+        leaveLaunchEpoch(1, plan_, previous, *leftEnd);
+        if (plan_) takeBackNodes(*plan_, 0, previous, *leftEnd);
+        markLeft(1, previous, epoch);
+    } else {
+        launchLeavePending_ = previous;
+        // What it renders meanwhile may still hold a switch that was not
+        // heard: a capture over it, or over those frames, is not as heard.
+        if (undos) {
+            launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+            launchLateEpoch_.store(epoch, std::memory_order_release);
+            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+            notifyMain();
+        }
     }
     if (plan_) {
         detail::locateClass(*plan_, pos_, false);
@@ -3210,6 +3282,15 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             clickAge_ = -1;
             clickSeekSeen_ = xport.seekSeq;
         }
+        // Where the epoch it leaves stopped being heard: what it consumed of
+        // it (ADR-0097, dated 2026-11-26), before it plays anything newer.
+        const std::int64_t heard = playedStream(rtEpoch_);
+        leaveLaunchEpoch(2, livePlan_, rtEpoch_, heard, true, xport.epoch);  // first (above)
+        noteHeardEnd(rtEpoch_, xport.epoch, heard);
+        launchLeftEpoch_[1] = rtEpoch_;
+        launchLeftEnd_[1] = heard;
+        if (livePlan_) takeBackNodes(*livePlan_, 1, rtEpoch_, heard);
+        markLeft(2, rtEpoch_, xport.epoch);
         rtEpoch_ = xport.epoch;
         rtOffset_ = 0;
         rtPrimed_ = false;

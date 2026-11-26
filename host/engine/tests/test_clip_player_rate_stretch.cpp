@@ -522,3 +522,59 @@ TEST_CASE("after a seek a launched audio clip under a pitch-keeping rate plays a
         CHECK(from >= 60000);  // the same until the switch
     }
 }
+
+TEST_CASE(
+    "a shift that moves between a launch's warm-up and its switch marks the capture "
+    "(round 203 F3, round 205)" *
+    doctest::description("rt")) {
+    // As the warm-up test above: tr_3's cl_3 launched on bar 2 under a
+    // pitch-keeping playrate, its warm-up (the early half) from 125056, and
+    // a latent gain added to tr_3 inside it takes tr_3's shift to 0, so the
+    // switch's key differs from the early half's. Whether the switch was
+    // heard is then not judged exactly: a capture running across is not as
+    // heard (launch_unsettled). The control adds a gain without latency (the
+    // shift stays): not marked. Both executors.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const bool moved : {true, false}) {
+            INFO("anticipative " << options.anticipative << ", shift moved " << moved);
+            Project p;
+            twoTracks(p);
+            p.run("track.add", R"({"name": "Clips"})");  // tr_3
+            auto args = j(R"({"track": "tr_3", "scene": "sc_1"})");
+            args["audio_file"] = p.ramp("clip3.wav", 48000).string();
+            p.runArgs("clip.add", args);  // cl_3
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 6);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            REQUIRE(p.app->engine()->captureLaunches(true));
+            p.run("launch.clip", R"({"clip": "cl_3"})");  // bar 2: running frame 128000
+            const std::int64_t lag = options.anticipative ? 9793 : 9601;
+            live.until((128000 - lag - 1500) / 128 * 128);
+            const auto shiftOf = [&] {
+                const detail::Plan& plan = EngineTestAccess::latestPlan(*p.app->engine());
+                return std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                    [](const auto& n) { return n.id == id("tr_3"); })
+                    ->timelineShift;
+            };
+            const std::int64_t before = shiftOf();
+            p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
+            if (moved)
+                p.run("fx.patch.merge",
+                      R"({"fx": "fx_3", "patch": {"params": {"latency": "short"}}})");
+            const std::int64_t handAt = EngineTestAccess::latestPlan(*p.app->engine()).handAt;
+            INFO("tr_3's shift " << before << " then " << shiftOf() << ", handed over at "
+                                 << handAt);
+            CHECK(before > 0);
+            CHECK((shiftOf() == 0) == moved);
+            CHECK(handAt > 128000 - 2944);
+            CHECK(handAt < 128000);
+            live.until(140000 / 128 * 128);
+            const auto capture = p.app->engine()->launchCapture();
+            REQUIRE(capture);
+            const auto log = p.app->engine()->launchLog();
+            REQUIRE(log.size() == 1);
+            CHECK(capture->facts.launchUnsettled == moved);
+            (void)live.stop();
+        }
+}

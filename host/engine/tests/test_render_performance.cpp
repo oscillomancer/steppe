@@ -455,9 +455,10 @@ TEST_CASE("a launch ack lost to a full ring leaves every later capture not as he
     REQUIRE(p.app->transport("play"));
     live.until(20 * kBlock);
     CHECK_FALSE(p.run("launch.state", "{}")["unlogged"].asBool());
-    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
     p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
-    live.backend.run(760 - 20);                   // past it, with no service
+    // Filled after the launch, which reads the acks first (round 205 F2).
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    live.backend.run(760 - 20);  // past it, with no service
     live.cycles = 760;
     CHECK(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
     EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler
@@ -743,9 +744,10 @@ TEST_CASE("a launch ack lost just before the capture ends still marks it (round 
     p.run("launch.capture", R"({"on": true})");
     REQUIRE(p.app->transport("play"));
     live.until(20 * kBlock);
-    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
     p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
-    live.backend.run(760 - 20);                   // past it, with no service
+    // Filled after the launch, which reads the acks first (round 205 F2).
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    live.backend.run(760 - 20);  // past it, with no service
     live.cycles = 760;
     REQUIRE(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
     EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler

@@ -371,7 +371,7 @@ int playerOf(const Node& n, Id clip) SUPPLE_RT {
     return -1;
 }
 
-void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
+void applyLaunch(Node& n, const LaunchAction& a, bool* warmSwapped) SUPPLE_RT {
     // Its readers rotate (S3 step D): what played goes out on reader 1, and
     // a launch warmed up on reader 2 comes in on reader 0 with its
     // converter's history; else reader 0 takes the one that was going out
@@ -383,6 +383,7 @@ void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
             r[2].player == &n.players[static_cast<std::size_t>(a.player)] &&
             r[2].anchor == a.anchorSample && r[2].startQuantum != INT64_MIN) {
             std::swap(r[0], r[2]);
+            if (warmSwapped) *warmSwapped = true;
             // What went out before is over (switches are a warm-up apart):
             // reader 2 starts the next warm-up with no previous reading
             // (round 152 F1).
@@ -423,6 +424,72 @@ void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     n.launchFresh = true;
     n.launchSwitchPending = true;
 }
+
+namespace {
+// `player` of `from`'s players (or of a feed's), as `to`'s index by clip.
+template <class From, class To>
+int remapPlayer(const From& from, const To& to, int player) SUPPLE_RT {
+    if (player < 0 || static_cast<std::size_t>(player) >= from.players.size()) return player;
+    return playerOf(to, from.players[static_cast<std::size_t>(player)].clip);
+}
+// A record's state as the new plan has it: what it plays and fades from by
+// clip; a clip the plan lacks is the arrangement, as carryLaunch does.
+template <class From, class To>
+void remapUndo(const From& from, const To& to, LaunchUndo& u) SUPPLE_RT {
+    LaunchState& L = u.launch;
+    if (L.kind == LaunchState::Kind::Clip) {
+        L.player = remapPlayer(from, to, L.player);
+        if (L.player < 0) L = LaunchState{};
+    }
+    if (L.fadeFrom >= 0) {
+        L.fadeFrom = remapPlayer(from, to, L.fadeFrom);
+        if (L.fadeFrom < 0) L.fadeFrom = -2;
+    }
+    if (L.fadeFrom == -3) L.fadeFrom = -2;  // a retiring player belongs to the old plan
+    if (u.nextValid && u.next.kind == LaunchState::Kind::Clip) {
+        u.next.player = remapPlayer(from, to, u.next.player);
+        u.nextValid = u.next.player >= 0;
+    }
+    if (u.warmValid && u.warmNext.kind == LaunchState::Kind::Clip) {
+        u.warmNext.player = remapPlayer(from, to, u.warmNext.player);
+        u.warmValid = u.warmNext.player >= 0;
+    }
+    if (u.entryValid && u.entry.kind == LaunchState::Kind::Clip) {
+        u.entry.player = remapPlayer(from, to, u.entry.player);
+        u.entryValid = u.entry.player >= 0;
+    }
+}
+// The records of `old` carried to `n` (carryLaunch): a feed's by its module.
+void carryLaunchUndos(const Node& old, Node& n) SUPPLE_RT {
+    n.launchUndoCount = 0;
+    n.launchUndoLostKey = old.launchUndoLostKey;
+    n.launchUndoLostEpoch = old.launchUndoLostEpoch;
+    for (std::size_t i = 0; i < old.launchUndoCount; ++i) {
+        LaunchUndo u = old.launchUndos[i];
+        if (u.feed < 0) {
+            remapUndo(old, n, u);
+        } else {
+            const NotesFeed* was =
+                old.rack && static_cast<std::size_t>(u.feed) < old.rack->notes.size()
+                    ? &old.rack->notes[static_cast<std::size_t>(u.feed)]
+                    : nullptr;
+            int index = -1;
+            if (was && n.rack)
+                for (std::size_t f = 0; f < n.rack->notes.size(); ++f)
+                    if (n.rack->notes[f].id == u.feedId && n.rack->notes[f].source == was->source)
+                        index = static_cast<int>(f);
+            if (index < 0) {  // the feed is gone, or follows another track now
+                n.launchUndoLostKey = std::max(n.launchUndoLostKey, u.key);
+                n.launchUndoLostEpoch = u.epoch;
+                continue;
+            }
+            u.feed = index;
+            remapUndo(*was, n.rack->notes[static_cast<std::size_t>(index)], u);
+        }
+        n.launchUndos[n.launchUndoCount++] = u;
+    }
+}
+}  // namespace
 
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     LaunchState L = old.launch;
@@ -486,6 +553,10 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
         n.launchWarmNext.player = remap(n.launchWarmNext.player);
         n.launchWarmValid = n.launchWarmNext.player >= 0;
     }
+    n.launchNextKey = old.launchNextKey;
+    n.launchWarmKey = old.launchWarmKey;
+    n.launchEntryKey = old.launchEntryKey;
+    carryLaunchUndos(old, n);
     // A rack's Notes feeds, by module and clip: one whose source changed, or
     // whose clip the new plan lacks, follows the arrangement again.
     if (!n.rack || !old.rack) return;
@@ -1386,6 +1457,114 @@ void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT {
     n.launchWarmNext = a;
     n.launchWarmAt = at;
     n.launchWarmValid = true;
+}
+
+LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch,
+                           int slot) SUPPLE_RT {
+    if (n.launchUndoCount == kLaunchUndos) {  // drop the oldest (most likely heard)
+        const LaunchUndo& lost = n.launchUndos[0];
+        if (lost.epoch == epoch) {
+            n.launchUndoLostKey = std::max(n.launchUndoLostKey, lost.key);
+            n.launchUndoLostEpoch = epoch;
+        }
+        for (std::size_t i = 1; i < kLaunchUndos; ++i) n.launchUndos[i - 1] = n.launchUndos[i];
+        --n.launchUndoCount;
+    }
+    LaunchUndo& u = n.launchUndos[n.launchUndoCount++];
+    u = LaunchUndo{};
+    u.epoch = epoch;
+    u.key = key;
+    u.feed = feed;
+    u.slot = slot;
+    if (feed >= 0) {
+        const NotesFeed& f = n.rack->notes[static_cast<std::size_t>(feed)];
+        u.feedId = f.id;
+        u.launch = f.launch;
+        u.releaseHeld = f.releaseHeld;
+        u.launchFresh = f.launchFresh;
+        return &u;
+    }
+    u.launch = n.launch;
+    u.next = n.launchNext;
+    u.nextValid = n.launchNextValid;
+    u.warmNext = n.launchWarmNext;
+    u.warmValid = n.launchWarmValid;
+    u.warmAt = n.launchWarmAt;
+    u.nextKey = n.launchNextKey;
+    u.warmKey = n.launchWarmKey;
+    u.entry = n.launchEntry;
+    u.entryValid = n.launchEntryValid;
+    u.entryKey = n.launchEntryKey;
+    u.releaseHeld = n.releaseHeld;
+    u.launchFresh = n.launchFresh;
+    u.switchPending = n.launchSwitchPending;
+    u.switchAt = n.launchSwitchAt;
+    u.switchPhase = n.launchSwitchPhase;
+    return &u;
+}
+
+bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
+                      bool* inexact) SUPPLE_RT {
+    bool any = false;
+    for (std::size_t i = n.launchUndoCount; i-- > 0;) {
+        const LaunchUndo& u = n.launchUndos[i];
+        if (u.epoch != epoch || !u.undo) continue;  // heard: it stays
+        any = true;
+        if (u.feed >= 0) {
+            if (!n.rack || static_cast<std::size_t>(u.feed) >= n.rack->notes.size()) continue;
+            NotesFeed& f = n.rack->notes[static_cast<std::size_t>(u.feed)];
+            f.launch = u.launch;
+            f.releaseHeld = u.releaseHeld;
+            f.launchFresh = u.launchFresh;
+            continue;
+        }
+        // The clip chain's entry, as the early half and the switch both
+        // change it (preenter sets it; prelaunch and the switch clear it).
+        n.launchEntry = u.entry;
+        n.launchEntryValid = u.entryValid;
+        n.launchEntryKey = u.entryKey;
+        if (u.early) {  // only what its preenter, prelaunch or prewarm set
+            n.launchNext = u.next;
+            n.launchNextValid = u.nextValid;
+            n.launchNextKey = u.nextKey;
+            n.launchWarmNext = u.warmNext;
+            n.launchWarmValid = u.warmValid;
+            n.launchWarmAt = u.warmAt;
+            n.launchWarmKey = u.warmKey;
+            continue;
+        }
+        if (u.rotated) {  // applyLaunch's rotation, backwards
+            auto& r = n.launchReaders;
+            if (u.warmSwapped) std::swap(r[0], r[2]);
+            std::swap(r[0], r[1]);
+        }
+        n.launch = u.launch;
+        n.launchNext = u.next;
+        n.launchNextValid = u.nextValid;
+        n.launchWarmNext = u.warmNext;
+        n.launchWarmValid = u.warmValid;
+        n.launchWarmAt = u.warmAt;
+        n.launchNextKey = u.nextKey;
+        n.launchWarmKey = u.warmKey;
+        n.releaseHeld = u.releaseHeld;
+        n.launchFresh = u.launchFresh;
+        n.launchSwitchPending = u.switchPending;
+        n.launchSwitchAt = u.switchAt;
+        n.launchSwitchPhase = u.switchPhase;
+    }
+    // A launch that reached the node early and whose switch was heard is no
+    // longer coming: its early half, restored with an older record, goes
+    // (launches closer together than their lead).
+    if (any) {
+        if (n.launchNextValid && n.launchNextKey < heardEnd) n.launchNextValid = false;
+        if (n.launchWarmValid && n.launchWarmKey < heardEnd) n.launchWarmValid = false;
+        if (n.launchEntryValid && n.launchEntryKey < heardEnd) n.launchEntryValid = false;
+        if (inexact && n.launchUndoLostEpoch == epoch && n.launchUndoLostKey >= heardEnd)
+            *inexact = true;
+        launchRelocated(n);
+    }
+    clearLaunchUndos(n);
+    return any;
 }
 
 namespace {

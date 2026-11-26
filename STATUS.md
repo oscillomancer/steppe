@@ -419,7 +419,28 @@ instructions are in `docs/guides/installing.md`.
       while a device cycle is in flight, so a launch made while stopped,
       or a capture armed, in that moment starts that much early (review
       round 74 F3; the renderer waits for that cycle, the main thread's
-      reading does not).
+      reading does not);
+    - a launch applied ahead (by the anticipative renderer, or its early
+      half in callback) and not heard before a pause or seek is taken
+      back and placed again at the next play, and leaves the log
+      (ADR-0097, revision 2026-11-26); a capture read before the
+      callback has left the stopped epoch (about one device period) is
+      not as heard while it lists a launch of that epoch whose verdict is
+      not in (`launch_unsettled`), and so is one over a renderer leave
+      that came before the callback's (a timed-out wait), one begun over
+      the frames that renderer rendered before it settled, or one whose
+      epoch end no service read before its ring entry was reused (64
+      epochs without a service); a launch's verdict is made once, so a
+      heard launch stays heard however many epochs follow (round 203),
+      and a slot is free again once its launch is heard, so a long play
+      never runs out (round 205); the GUI's as-heard line does not word
+      `launch_unsettled` yet (gui-lead). Known gaps, found by the seeded
+      sequence test (round 205) and not yet decided: a capture is as
+      heard but its replay differs when it begins (A) after a seek back
+      before the anchor of a loop clip that plays on (live plays it by its
+      phase, the replay is silent until the anchor), or (B) inside a
+      switch's 5 ms crossfade, including the crossfade of launches placed
+      at the play start (the replay fades in from silence).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
@@ -974,7 +995,12 @@ instructions are in `docs/guides/installing.md`.
   but the tests' memoryless gain cannot prove the early entry after a wrap
   by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
-  pressed within 32 more frames of its boundary takes the next. A route
+  pressed within 32 more frames of its boundary takes the next. Open
+  (found by the launch sequence test at the F6 merge): playing from a song
+  position off the 32-frame grid (a seek, a pause and play there), a
+  modulated take chain's frames up to the next grid point differ between
+  live and the offline replay (1 frame from 145375, 16 from 145360), so a
+  render or capture from there is not exact while saying as heard. A route
   into a take that does not play is idle (`modulation.list` says `inert:
   "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same

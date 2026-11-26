@@ -301,11 +301,15 @@ inline const CycleRow* cycleRow(std::string_view command, const json::Value& fie
                                 const model::Session* before = nullptr) {
     const CycleRow* fallback = nullptr;
     const CycleRow* given = nullptr;
+    const CycleRow* anyGiven = nullptr;  // as given, the stored value aside
     for (const CycleRow& r : kCycleRows) {
         if (r.by != CycleBy::Wrapper || r.command != command) continue;
         if (r.field.empty()) {
             if (!fallback) fallback = &r;
-        } else if (makesEdge(r, fields) && !(before && leavesStored(r, fields, *before))) {
+            continue;
+        }
+        if (makesEdge(r, fields) && !anyGiven) anyGiven = &r;
+        if (makesEdge(r, fields) && !(before && leavesStored(r, fields, *before))) {
             if (!given) given = &r;
             if (!after) continue;
             std::vector<model::CycleEdge> mine;
@@ -314,7 +318,10 @@ inline const CycleRow* cycleRow(std::string_view command, const json::Value& fie
             if (!mine.empty() && !model::hasCycleWithout(*after, mine)) return &r;
         }
     }
-    return given ? given : fallback;
+    // Never none once the check ran (round 206): it runs only when this pick
+    // without `before` found a row, so `anyGiven` or `fallback` is set even
+    // when every given argument left its value as it was.
+    return given ? given : fallback ? fallback : anyGiven;
 }
 // The edges `after` has that `before` lacks.
 inline std::vector<model::CycleEdge> addedCycleEdges(const model::Session& before,
