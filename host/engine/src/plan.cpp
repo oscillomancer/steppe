@@ -720,10 +720,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Input FX (channels only): run on the record input, see processNode.
         if (t.type == model::StripType::Channel)
             for (Id fxId : t.inputChain) n.inputChain.push_back(makeStage(fxId));
-        // Takes with FX or envelopes play through a chain of their own (gap log #22).
+        // Takes with FX or envelopes play through a chain of their own (gap log #22),
+        // for each take the engine plays (model::takeFxPlays, which modulation.list's
+        // inert "take" reads too, ADR-0096 M5), unless the node drops its items.
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
+            if (it.track != n.id || !it.activeTake || n.dropItems ||
+                !model::takeFxPlays(s, {*it.activeTake, e.id, it.track}))
+                continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take) continue;
             const bool enveloped =
@@ -744,7 +748,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (t.type == model::StripType::Channel)
             for (const auto& e : s.clips) {
                 const model::Clip& clip = *e.value;
-                if (clip.track != n.id || !clip.activeTake) continue;
+                if (clip.track != n.id || !clip.activeTake ||
+                    !model::takeFxPlays(s, {*clip.activeTake, e.id, clip.track}))
+                    continue;
                 const model::Take* take = s.takes.find(*clip.activeTake);
                 if (!take) continue;
                 const bool enveloped =

@@ -312,9 +312,9 @@ struct TakeFxOwner {
 std::optional<TakeFxOwner> takeFxOwner(const Session& s, Id fx);
 // Whether the engine plays that take (ADR-0096 M5): it is its item's active
 // take and the item is not muted, or its clip's active take. The plan
-// compiles a take chain for no other (plan.cpp, the take chains), and a
-// route into the FX of a take it does not play is inert, reported by
-// modulation.list as `take`. What the plan adds at run time (a lane mute,
+// compiles take chains by it (plan.cpp, the take chains), and a route into
+// the FX of a take it does not play is inert, reported by modulation.list
+// as `take`. What the plan adds at run time (a lane mute,
 // a recording's silence, a render without launches) is not the model's.
 bool takeFxPlays(const Session& s, const TakeFxOwner& owner);
 // The track that holds the item or clip whose take's chain holds `fx`, if any.
