@@ -1020,8 +1020,9 @@ instructions are in `docs/guides/installing.md`.
   plain CLAP plug-in. With M4 a parameter reached through its envelope
   (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
   inert route draws idle, with the reason in the parameter menu. A
-  modulated plug-in shows "~" on its mixer slot and on its chain's "fx"
-  (track panel and mixer). A lane's header names the parameter first and
+  modulated plug-in shows "~" on its mixer slot, after its name in the FX
+  window's chain list, and on its chain's "fx" (track panel and mixer),
+  dimmed while its routes are off or its track is frozen. A lane's header names the parameter first and
   has a "mod" cell (a modulation-only lane gets title, mod and hide). The
   inspector lists one track's routes (past four, "N routes"), and the
   controls' menus have Show modulation source; each opens the rack window

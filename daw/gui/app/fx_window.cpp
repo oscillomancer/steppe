@@ -410,32 +410,27 @@ class PresetMenu : public ui::List {
 };
 
 // A chain row's plug-in name. When a parameter of it is modulated
-// (ADR-0096), the mixer slot's mark follows the name, in `signal-cv` or
-// dimmed while every route is off, and the accessible text says so as the
-// slot's does.
+// (ADR-0096), the mixer slot's mark follows the name (ui::Label::setMark),
+// dimmed as the slot's is: while every route is off, or on a frozen track.
+// The accessible text says so as the slot's does.
 class RowName : public ui::Label {
   public:
     RowName(std::string id, std::string text, std::string color)
         : Label(std::move(id), std::move(text), ui::Font::Ui, "small", std::move(color)) {}
-    bool modulated = false;
-    bool modulationOn = true;
+    void setModulation(bool modulated, bool on, bool frozen) {
+        modulated_ = modulated;
+        on_ = on;
+        setMark(modulated ? std::string(views::kModMark) : std::string(),
+                on && !frozen ? "signal-cv" : "ink-faint");
+    }
     std::string valueText() const override {
-        return text() + (!modulated     ? std::string()
-                         : modulationOn ? std::string(" (modulated)")
-                                        : std::string(" (modulation off)"));
+        return text() + (!modulated_ ? std::string()
+                         : on_       ? std::string(" (modulated)")
+                                     : std::string(" (modulation off)"));
     }
-    void paint(ui::Canvas& c) override {
-        Label::paint(c);
-        if (!modulated) return;
-        const ui::Theme& t = c.theme();
-        const float size = t.type("small");
-        const ui::Rect b = bounds();
-        const std::string mark(views::kModMark);
-        const float w = c.textWidth(mark, ui::Font::UiBold, size);
-        const float x = std::min(b.x + c.textWidth(text(), ui::Font::Ui, size) + 4, b.right() - w);
-        c.text({x, b.y, w + 1, b.h}, mark, ui::Font::UiBold, size,
-               t.color(modulationOn ? "signal-cv" : "ink-faint"), ui::kLeft | ui::kMiddle);
-    }
+
+  private:
+    bool modulated_ = false, on_ = true;
 };
 
 ui::Node& line(ui::Node& row, const std::string& id) {
@@ -1319,8 +1314,9 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         auto& name = l1.emplace<RowName>(prefix + "name." + id, nameOf(fx),
                                          isDisabled ? "ink-quiet" : "ink");
         name.layout.width = ui::SizeRule::fixed(110);
-        name.modulated = views::fxModulated(app_.head(), fx);
-        name.modulationOn = views::fxModulationOn(app_.head(), fx);
+        const model::Track* owner = app_.head().tracks.find(track_);
+        name.setModulation(views::fxModulated(app_.head(), fx),
+                           views::fxModulationOn(app_.head(), fx), owner && owner->freeze);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
         latency.layout.width = ui::SizeRule::fixed(64);
