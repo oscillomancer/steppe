@@ -2228,13 +2228,22 @@ first use, and no plug-in code runs early to warm it.
   - `render.settings` (query): `{effective, project, default, from: {field:
     "args"|"project"|"default"|"built-in"}}`; accepts the render arguments as
     overrides.
-  - `render.preset.list` (query): factory and user presets.
+  - `render.preset.list` (query): factory and user presets. A user preset
+    whose file cannot be read is listed in its place as `{name, factory:
+    false, damaged: {code, path}}`, with no `settings`. Its `code` and
+    `path` are what `render.preset.load {name}` answers: the file's own
+    codes (`file.*`, `json.parse.*`, and `schema.*` for a file that is not
+    a preset) at `/args/name` or a top-level member under it
+    (`/args/name/schema`), and a setting's at `/args/name/settings/…`
+    (round 186 F1). A link to nothing is such a file (`file.*`), for load
+    too (round 190 F1). The list itself is not refused for it.
   - `render.preset.save {name | default: true, settings?}` (action): saves
     the given settings, or the effective settings, without `stems.tracks`,
     `matrix` and custom bounds.
   - `render.preset.load {name}` (edit): replaces `project.render`.
   - `render.preset.delete {name | default: true}` (action). Factory presets
-    cannot be overwritten or deleted. No file answers `render.preset_unknown`;
+    cannot be overwritten or deleted. It never reads the file, so a damaged
+    preset is removed as any other. No file answers `render.preset_unknown`;
     a file that cannot be removed (a read-only folder, a file in use on
     Windows) answers `render.preset_write` (round 183).
 
