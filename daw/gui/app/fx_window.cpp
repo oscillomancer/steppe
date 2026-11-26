@@ -19,6 +19,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/object_name.h"
 #include "supple/views/track_layout.h"
 
@@ -406,6 +407,35 @@ class PresetMenu : public ui::List {
     Hooks hooks_;
     std::vector<Entry> rows_;
     std::optional<std::size_t> hoverDelete_, pressedDelete_;
+};
+
+// A chain row's plug-in name. When a parameter of it is modulated
+// (ADR-0096), the mixer slot's mark follows the name, in `signal-cv` or
+// dimmed while every route is off, and the accessible text says so as the
+// slot's does.
+class RowName : public ui::Label {
+  public:
+    RowName(std::string id, std::string text, std::string color)
+        : Label(std::move(id), std::move(text), ui::Font::Ui, "small", std::move(color)) {}
+    bool modulated = false;
+    bool modulationOn = true;
+    std::string valueText() const override {
+        return text() + (!modulated     ? std::string()
+                         : modulationOn ? std::string(" (modulated)")
+                                        : std::string(" (modulation off)"));
+    }
+    void paint(ui::Canvas& c) override {
+        Label::paint(c);
+        if (!modulated) return;
+        const ui::Theme& t = c.theme();
+        const float size = t.type("small");
+        const ui::Rect b = bounds();
+        const std::string mark(views::kModMark);
+        const float w = c.textWidth(mark, ui::Font::UiBold, size);
+        const float x = std::min(b.x + c.textWidth(text(), ui::Font::Ui, size) + 4, b.right() - w);
+        c.text({x, b.y, w + 1, b.h}, mark, ui::Font::UiBold, size,
+               t.color(modulationOn ? "signal-cv" : "ink-faint"), ui::kLeft | ui::kMiddle);
+    }
 };
 
 ui::Node& line(ui::Node& row, const std::string& id) {
@@ -1286,9 +1316,11 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         std::snprintf(number, sizeof number, "%zu.", index + 1);
         l1.emplace<ui::Label>(prefix + "number." + id, number, ui::Font::Mono, "caption",
                               "ink-quiet");
-        auto& name = l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small",
-                                           isDisabled ? "ink-quiet" : "ink");
+        auto& name = l1.emplace<RowName>(prefix + "name." + id, nameOf(fx),
+                                         isDisabled ? "ink-quiet" : "ink");
         name.layout.width = ui::SizeRule::fixed(110);
+        name.modulated = views::fxModulated(app_.head(), fx);
+        name.modulationOn = views::fxModulationOn(app_.head(), fx);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
         latency.layout.width = ui::SizeRule::fixed(64);

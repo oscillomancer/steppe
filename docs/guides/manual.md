@@ -1281,7 +1281,8 @@ descriptions lists its parameters in the FX window; those it lets you
 modulate have a slider there.
 
 A violet "~" says that something is modulated. It appears at the right of
-a plug-in in the mixer when one of its parameters is, and after "fx" on
+a plug-in in the mixer and after its name in the FX window when one of its
+parameters is, and after "fx" on
 the track (in the track list and the mixer) when any plug-in in its chain
 is. Selecting the track shows a **Modulation** row in the inspector: each
 modulated parameter with its source ("Marram · Filter 1 Cutoff ~ LFO"), or
