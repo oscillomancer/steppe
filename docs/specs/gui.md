@@ -333,14 +333,21 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   and one row per route for several ("Show modulation source: LFO
   (Modulators)"; `gui::modSourceItems`), then **Remove modulation: LFO
   (Modulators)**, one row per route by source, each one
-  `modulation.remove` and one undo step (`gui::modRemoveItems`; a refusal,
-  such as a frozen track's, shows in the status line). Both menus take the
-  rows from `gui::modRouteItems`, so they list the same. In any menu of
-  routes (these and a lane's **mod**), no two rows read the same: two
-  sources that would (two LFOs in one rack; `modulate`'s Random is an LFO)
-  each add their Mod Out input, "LFO (Modulators) · Mod 2", and two racks
-  that read the same (a name given twice, two unnamed racks on one track)
-  then add each rack's place among the racks so named, "· Mod 1 · rack 2".
+  `modulation.remove` and one undo step (`gui::modRemoveItems`). The row
+  of a route in a frozen track's print is greyed (`model::frozenOwner` of
+  the route, the engine's rule); a fader's route acts after the print and
+  stays removable. A refusal shows in the status line in the GUI's own
+  words, with no id (`gui::removeRefusalWords`): `track.frozen` reads
+  "Keys is frozen: unfreeze it to change its modulation", `mr.unknown` at
+  `/args/modulation` (the route went another way while the menu was open)
+  "That modulation is already gone", anything else "The modulation could
+  not be removed". Both menus take the rows from `gui::modRouteItems`, so
+  they list the same. In any menu of routes (these and a lane's **mod**),
+  no two rows read the same: two sources that would (two LFOs in one rack;
+  `modulate`'s Random is an LFO) each add their Mod Out input, "LFO
+  (Modulators) · Mod 2", and two racks that read the same (a name given
+  twice, two unnamed racks on one track) then add each rack's place among
+  the racks so named, "· Mod 1 · rack 2".
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
