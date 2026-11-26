@@ -399,7 +399,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   here. They are
   said where the GUI runs those commands: the timeline's gestures (one
   runner for every item edit), the launcher (`ArrangeView::runLauncher`)
-  and Capture as scene, the bound actions (Item: split, explode takes),
+  and Capture as scene, the bound actions (Item: split, explode takes) and
+  a macro's bound steps (worded by the step's command; a built-in, alone
+  or as a step, words its own),
   track duplication, the clip paste, the capture's commit and the
   consolidation's job; and where it deletes what a route reaches: the FX
   window's and the mixer's Remove (a plug-in), the mixer's and the routing

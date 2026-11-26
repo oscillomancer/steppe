@@ -758,10 +758,12 @@ actions::Context AppActions::context(std::vector<std::string> sections) const {
 void AppActions::sayModulation(const actions::Action& action, const model::Session& before,
                                Result<json::Value>& r) {
     if (!r) {
-        // A built-in or a macro (no command of its own) words its own
-        // refusals, with the verb of what it ran: they stand.
-        if (!action.command.empty())
-            r = views::modulationRefusal(before, action.command, r.error());
+        // A built-in words its own refusals, with the verb of what it ran:
+        // they stand. A bound action's, or a macro step's, is worded by the
+        // command that refused it.
+        if (action.builtin) return;
+        if (const std::string& command = runner_.refusedCommand(); !command.empty())
+            r = views::modulationRefusal(before, command, r.error());
         return;
     }
     // Worded on the session from before, so a route a delete took with it

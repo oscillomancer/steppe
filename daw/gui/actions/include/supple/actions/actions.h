@@ -103,6 +103,10 @@ class Runner {
     Result<json::Value> run(std::string_view id, const Context& context);
     // Resolves "$…" placeholders in `args`.
     static Result<json::Value> resolve(const json::Value& args, const Context& context);
+    // The command the last run's refused step ran ("" when no command
+    // refused it: a built-in, a prompt, a selection), so a macro's refusal
+    // can be worded by its step's command.
+    const std::string& refusedCommand() const { return refused_; }
 
   private:
     Result<json::Value> step(const Action& action, const Context& context,
@@ -110,6 +114,7 @@ class Runner {
     const ActionRegistry& registry_;
     cmd::Dispatcher& dispatcher_;
     int depth_ = 0;  // macro nesting while a step runs
+    std::string refused_;
 };
 
 // --- keys

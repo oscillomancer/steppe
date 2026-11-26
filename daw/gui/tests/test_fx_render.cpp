@@ -6368,3 +6368,89 @@ TEST_CASE("modulation words: a send or a track move that would loop says so as i
         CHECK(said.message.find("tr_") == std::string::npos);
     }
 }
+
+TEST_CASE("modulation words: a macro's refused step is worded by the step's command") {
+    // Round 196 F2: a macro words nothing itself, so its refused step is
+    // worded by the command that refused it (actions::Runner::
+    // refusedCommand); a built-in's own words stand, alone or as a step.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    const model::Id drums = f.addTrack("Drums");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = firstModulatable(f, fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    REQUIRE(f.run("modulate",
+                  f.args({{"target", target}, {"source", "follower"}, {"from", drums.str()}})));
+    actions::Action move;  // a bound move with its track given, as a keymap binds one
+    move.id = "test.move_to_drums";
+    move.name = "Item: move to Drums";
+    move.command = "item.move";
+    move.args = json::Value::object();
+    move.args["item"] = "$selection.item";
+    move.args["track"] = drums.str();
+    f.actions->registry().add(move);
+    actions::Action macro;
+    macro.id = "macro:send_over";
+    macro.name = "Send over";
+    macro.steps = {"test.move_to_drums"};
+    f.actions->registry().add(macro);
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    const std::string words = "Moving the item there would loop its modulation";
+    for (const char* id : {"test.move_to_drums", "macro:send_over"}) {
+        INFO(id);
+        said.clear();
+        f.ui.selectedItems = {item};
+        const auto version = f.app->head().version;
+        auto r = f.actions->run(id);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().message.starts_with(words));
+        REQUIRE(said.size() == 1);
+        INFO(said.back());
+        CHECK(said.back().find(words) != std::string::npos);
+        CHECK(said.back().find("mr_") == std::string::npos);
+        CHECK(said.back().find("tr_") == std::string::npos);
+        CHECK(f.app->head().version == version);
+    }
+    // A built-in as a macro's step keeps its own words.
+    const std::string own =
+        "Duplicating the track would make more than 4096 modulation routes, the most a "
+        "project holds.";
+    actions::Action builtin;
+    builtin.id = "test.duplicate_step";
+    builtin.name = "Test: duplicate";
+    builtin.builtin = [own](const actions::Context&) -> Result<json::Value> {
+        return Error("modulation.limit", own, "/args/tracks");
+    };
+    f.actions->registry().add(builtin);
+    actions::Action wrapping;
+    wrapping.id = "macro:duplicate";
+    wrapping.name = "Duplicate macro";
+    wrapping.steps = {"test.duplicate_step"};
+    f.actions->registry().add(wrapping);
+    auto wrapped = f.actions->run("macro:duplicate");
+    REQUIRE_FALSE(wrapped);
+    CHECK(wrapped.error().message == own);
+}
