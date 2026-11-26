@@ -852,7 +852,9 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 if (!chain && !warm) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
-                (void)detail::noteLaunchUndo(n, -1, key, epoch);  // taken back unheard
+                // Taken back unheard: only what this early half sets.
+                if (detail::LaunchUndo* undo = detail::noteLaunchUndo(n, -1, key, epoch))
+                    undo->early = true;
                 if (chain) {
                     detail::prelaunch(n, a);
                     n.launchNextKey = key;

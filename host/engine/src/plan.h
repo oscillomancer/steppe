@@ -998,6 +998,10 @@ struct LaunchUndo {
     // applyLaunch rotated the node's readers (and swapped in reader 2's
     // warm-up), to be rotated back.
     bool rotated = false, warmSwapped = false;
+    // An early half's (prelaunch, prewarm): undone, it restores only what
+    // that half set (next, warm), not what a switch made after it set
+    // (review round 201 F1).
+    bool early = false;
 };
 inline constexpr std::size_t kLaunchUndos = 16;
 

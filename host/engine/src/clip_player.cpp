@@ -1485,6 +1485,16 @@ bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
             f.launchFresh = u.launchFresh;
             continue;
         }
+        if (u.early) {  // only what its prelaunch or prewarm set
+            n.launchNext = u.next;
+            n.launchNextValid = u.nextValid;
+            n.launchNextKey = u.nextKey;
+            n.launchWarmNext = u.warmNext;
+            n.launchWarmValid = u.warmValid;
+            n.launchWarmAt = u.warmAt;
+            n.launchWarmKey = u.warmKey;
+            continue;
+        }
         if (u.rotated) {  // applyLaunch's rotation, backwards
             auto& r = n.launchReaders;
             if (u.warmSwapped) std::swap(r[0], r[2]);

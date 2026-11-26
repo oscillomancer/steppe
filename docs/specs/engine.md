@@ -688,10 +688,14 @@ the same.*
     and is not placed again.
   - Each node keeps undo records of what an apply changed (`LaunchUndo`,
     16 per node, carried by `carryLaunch`): its launch state, the prelaunch
-    and prewarm halves, the reader rotation, a feed's state. On leaving an
-    epoch an executor undoes, newest first, the records whose key is at or
-    past the heard end, so a node with several unheard switches goes back
-    to its state at the heard frame. A full ring drops its oldest record
+    and prewarm halves, the reader rotation, a feed's state. An early
+    half's record restores only what that half set (the next and warm-up
+    halves), never the launch state, because a heard switch may have come
+    after it: two launches closer together than the channel's lead record
+    the second's early half before the first's switch (round 201 F1). On
+    leaving an epoch an executor undoes, newest first, the records whose
+    key is at or past the heard end, so a node with several unheard
+    switches goes back to its state at the heard frame. A full ring drops its oldest record
     and is counted (`launchUndoLost_`, warned; never expected).
   - The main thread removes the unheard entries of an ended epoch from the
     log (a return so removed is logged again at the start of the epoch it

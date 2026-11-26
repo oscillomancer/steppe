@@ -401,3 +401,155 @@ TEST_CASE("a dropped ack for an unheard launch is not a launch unlogged (F6)" *
         CHECK(ah.unlogged == (stop * 32 > 96000));
     }
 }
+
+namespace {
+
+// An engine on a manual backend, driven cycle by cycle (review round 201's
+// probes).
+struct Manual {
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend;
+    Engine engine;
+    bool anticipative;
+    std::uint32_t block;
+    std::int64_t done = 0;
+    Manual(const model::Session& s, const fs::path& dir, const EngineOptions& o, std::uint32_t blk,
+           std::int64_t frames)
+        : backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames}),
+          engine(pool, media, o),
+          anticipative(o.anticipative),
+          block(blk) {
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = blk}));
+        REQUIRE(engine.load(s, dir));
+    }
+    void run(std::int64_t until) {
+        if (until <= done) return;
+        if (anticipative)
+            runAheadOnState(engine, backend, until - done, block);
+        else
+            backend.run(until - done);
+        done = until;
+    }
+    std::int64_t place(const Engine::LaunchRequest& r, model::LaunchQuantize q) {
+        engine.service();
+        const auto placed = engine.launch(std::span(&r, 1), q);
+        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+        return placed->stream;
+    }
+    // What launch.state says tr_1 plays, and what its node holds.
+    std::string plays() const {
+        for (const auto& t : engine.launchState())
+            if (t.track == id("tr_1"))
+                return t.plays == Engine::TrackLaunch::Plays::Clip          ? "clip " + t.clip.str()
+                       : t.plays == Engine::TrackLaunch::Plays::Arrangement ? "arrangement"
+                                                                            : "other";
+        return "?";
+    }
+    std::string node() const {
+        for (const detail::Node& n : EngineTestAccess::latestPlan(engine).nodes)
+            if (n.id == id("tr_1") && !n.players.empty()) {
+                const auto& L = n.launch;
+                if (L.kind == detail::LaunchState::Kind::Clip && L.player >= 0)
+                    return "clip " + n.players[std::size_t(L.player)].clip.str();
+                return L.kind == detail::LaunchState::Kind::Arrangement ? "arrangement" : "other";
+            }
+        return "?";
+    }
+};
+
+}  // namespace
+
+TEST_CASE(
+    "two launches closer than the channel's lead, stopped between their switches: the heard "
+    "one plays on (round 201 F1)" *
+    doctest::description("rt")) {
+    // cl_2's take has 40 latent gains: tr_1's lead is 2560 frames, at 300
+    // BPM more than a 1/16. A (cl_1 on a 1/32) has its early half applied,
+    // then B (cl_2 on the next 1/16) is made, its early half recorded
+    // before A's switch; the stop falls 64 frames after A's switch. Taking
+    // back B's early half must leave A playing: after the stop the node
+    // plays what launch.state says, and from the resume the channel sounds
+    // as the run without B until B's switch placed again, or from A where
+    // B's fade starts at the play start (the in-callback executor; the
+    // renderer's horizon places B past A's lead).
+    Project p;
+    twoAudioClips(p);
+    for (int i = 0; i < 40; ++i) {
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+        fx["take"] = takeOf(p, "cl_2");
+        const std::string fxId = p.runArgs("fx.add", fx)["fx"].asString();
+        auto patch = j(R"({"patch": {"params": {"latency": "short"}}})");
+        patch["fx"] = fxId;
+        p.runArgs("fx.patch.merge", patch);
+    }
+    p.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 300}]})");
+    const model::Session s = p.app->head();
+    for (const Interrupt how : {Interrupt::Locate, Interrupt::Pause}) {
+        INFO(std::string(how == Interrupt::Locate ? "locate" : "pause"));
+        struct Out {
+            std::vector<float> out;
+            std::uint32_t latency = 0;
+            std::vector<LaunchLogEntry> log;
+            std::int64_t resumed = 0;
+            std::string plays, node;
+        };
+        const auto once = [&](bool withB) {
+            Out o;
+            Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 4);
+            e.engine.play();
+            e.run(200);
+            std::int64_t kA = e.place(request("tr_1", "cl_1"), model::LaunchQuantize::ThirtySecond);
+            for (int i = 0; i < 3 && (kA / 1200) % 2 == 0; ++i) {  // an odd 32nd
+                e.run(e.done + 38);
+                kA = e.place(request("tr_1", "cl_1"), model::LaunchQuantize::ThirtySecond);
+            }
+            REQUIRE((kA / 1200) % 2 == 1);
+            e.run((kA - 2560) / 32 + 2);  // A's early half applied
+            if (withB) (void)e.place(request("tr_1", "cl_2"), model::LaunchQuantize::Sixteenth);
+            e.run((kA + 64 + 31) / 32);  // 64 frames past A's switch
+            e.engine.service();
+            if (how == Interrupt::Locate) {
+                e.engine.seek(0.25);
+                e.run(e.done + 2);
+            } else {
+                e.engine.pause();
+                e.run(e.done + 200);
+            }
+            e.engine.service();
+            if (how != Interrupt::Locate) e.engine.play();
+            o.resumed = e.done;
+            e.run(e.done + 2);
+            e.engine.service();
+            o.plays = e.plays();
+            o.node = e.node();
+            e.run(48000 * 4 / 32 - 200);
+            e.engine.service();
+            o.latency = e.engine.outputLatency();
+            o.log = e.engine.launchLog();
+            e.engine.stop();
+            o.out = e.backend.capture().channels[0];
+            return o;
+        };
+        const Out b = once(true), a = once(false);
+        INFO("with B log:" << describe(b.log));
+        // After a locate A plays until B's switch placed again; after a
+        // pause B is placed again at the play start, its fade from A.
+        CHECK(b.plays == (how == Interrupt::Locate ? "clip cl_1" : "clip cl_2"));
+        CHECK(b.node == b.plays);
+        // From the resume to B's switch placed again (or the resume's fade).
+        std::int64_t bAgain = -1;
+        for (const LaunchLogEntry& e : b.log)
+            if (e.clip == id("cl_2") && e.epoch > b.log.front().epoch) bAgain = e.runningFrame;
+        const std::size_t from = std::size_t(b.resumed * 32);
+        // (B's own switch fades out A over 64 frames before its frame.)
+        const std::size_t n =
+            how == Interrupt::Locate && bAgain > 64 ? std::size_t(bAgain) - 64 : 1;
+        const std::vector<float> control(a.out.begin() + a.latency + from,
+                                         a.out.begin() + a.latency + from + n);
+        INFO("with B against A alone from the resume: " << differences(b.out, b.latency + from,
+                                                                       control, n));
+        CHECK(maxDiff(b.out, b.latency + from, control, n) == 0.0);
+        CHECK(std::any_of(control.begin(), control.end(), [](float v) { return v != 0.0f; }));
+    }
+}
