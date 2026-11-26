@@ -11,6 +11,8 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <regex>
+#include <set>
 #include <string>
 
 #include "../../../tests/file_platform.h"
@@ -1029,6 +1031,53 @@ TEST_CASE(
     CHECK((*done)[0].warnings->front().message.find("another take") != std::string::npos);
 }
 
+TEST_CASE(
+    "the route warnings' reason words are one list: the code's, the schema's and the spec's "
+    "(round 195 F4)") {
+    // Every emitter writes a model::RouteWarningReason, as its word
+    // (reasonWord); the recording warning's schema exports the same words;
+    // and session-model.md lists exactly these under the warnings that
+    // carry a reason, each word once.
+    std::vector<std::string> code;
+    for (const auto& [reason, word] : model::kRouteWarningReasons) {
+        CHECK(model::reasonWord(reason) == word);
+        code.emplace_back(word);
+    }
+    CHECK(std::set<std::string>(code.begin(), code.end()).size() == code.size());
+    std::vector<std::string> exported;
+    const json::Value schema = routeWarningReasonSchema().jsonSchema();
+    REQUIRE(schema.find("enum"));
+    for (const json::Value& w : schema.find("enum")->asArray()) exported.push_back(w.asString());
+    CHECK(exported == code);
+    // The spec: from "carries `reason`" to the warning that carries none.
+    const fs::path spec =
+        fs::path(__FILE__).parent_path().parent_path().parent_path().parent_path() / "docs" /
+        "specs" / "session-model.md";
+    std::ifstream in(spec);
+    REQUIRE(in);
+    std::string line, text;
+    bool inList = false;
+    while (std::getline(in, line)) {
+        if (line.find("carries `reason`") != std::string::npos) inList = true;
+        if (inList && line.find("- `modulation.stacked`") != std::string::npos) break;
+        if (inList) text += line + "\n";
+    }
+    REQUIRE_FALSE(text.empty());
+    std::vector<std::string> documented;
+    static const std::regex word("`([a-z_]+)`");
+    for (std::sregex_iterator i(text.begin(), text.end(), word), e; i != e; ++i) {
+        const std::string w = (*i)[1];
+        if (w == "reason" || w == "recording_warning") continue;  // the field, the schema
+        documented.push_back(w);
+    }
+    const std::set<std::string> inCode(code.begin(), code.end()),
+        inSpec(documented.begin(), documented.end());
+    CHECK(inSpec.size() == documented.size());  // each once
+    for (const std::string& w : code) CHECK_MESSAGE(inSpec.count(w), "not in the spec: " << w);
+    for (const std::string& w : documented)
+        CHECK_MESSAGE(inCode.count(w), "not in the code: " << w);
+}
+
 TEST_CASE("an overdub past the route limit says why in its record.warning event (round 194)") {
     // The item's take has a gain modulated from the rack's Mod Out; the
     // project holds the most routes it may. The overdub's copy of the take
@@ -1088,7 +1137,7 @@ TEST_CASE("an overdub past the route limit says why in its record.warning event 
     CHECK(warnings[0].find("track")->asString() == "tr_1");
     // The commit's own reply says the same.
     REQUIRE((*done)[0].warnings);
-    CHECK((*done)[0].warnings->front().reason == std::optional<std::string>("limit"));
+    CHECK((*done)[0].warnings->front().reason == model::RouteWarningReason::Limit);
     CHECK(f.app->head().modulations.size() == model::kMaxModulations);
 }
 

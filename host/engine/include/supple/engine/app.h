@@ -264,9 +264,9 @@ struct EngineStatus {
 
 struct RecordingWarning {
     std::string code, message, path, hint, track, file;
-    // A fixed word for the cause, where the code names its causes
-    // (modulation.not_copied: session-model.md).
-    std::optional<std::string> reason = std::nullopt;
+    // The cause, where the code names its causes (modulation.not_copied:
+    // session-model.md), written as its word.
+    std::optional<model::RouteWarningReason> reason = std::nullopt;
 };
 
 struct RecordedInfo {
@@ -1489,7 +1489,8 @@ void copyRoutesInto(const model::Session& source, model::EditTxn& txn,
 // limit; `message` names it, the copy's FX and the remedy.
 struct RouteNotCopied {
     model::Id original, copy;
-    std::string reason, message;
+    model::RouteWarningReason reason = model::RouteWarningReason::Source;
+    std::string message;
 };
 // Once a command has placed its copies: removes each copied route whose
 // source the destination lacks, then each that closes a cycle, in creation

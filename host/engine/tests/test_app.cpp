@@ -6449,18 +6449,24 @@ TEST_CASE(
 
 TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)") {
     // A client words a refusal from the registry entry of the command it ran:
-    // the route commands, the copies and moves addChecked refuses for (by
-    // its own lists, detail::copiedPath and movesTargets), item.heal and the
-    // stale bakes. In modulation_commands.cpp each code is checked against
-    // the command that raises it, and each modulation code a route command
-    // declares against what it can raise (review round 193 R2). Warnings
-    // are not in the registry (session-model.md lists them).
+    // the route commands, the copies and moves and other edges addChecked
+    // refuses for (by its own lists, detail::copiedPath and closesCycle),
+    // item.heal and the stale bakes. In every *_commands.cpp each modulation
+    // code raised is checked against the command that raises it, and each
+    // modulation code a route command declares against what it can raise
+    // (review round 193 R2, round 195 F2). Warnings are not in the registry
+    // (session-model.md lists them; their reasons, model::kRouteWarningReasons).
     //
-    // What it cannot see: a code a command reaches through the model
-    // (checkInvariants' modulation.cycle) or another file is listed here by
-    // hand, by the wrapper's lists above; a helper's callers (checkRoute and
-    // checkCycle: modulation.add and modulation.set, and modulate through
-    // modulation.add) are listed by hand too.
+    // What it covers, exactly: a modulation code written as refused("…"),
+    // Error("…") or code = "…" in a command file, charged to the section
+    // from one `c.name = "…"` to the next; the wrapper's codes, against its
+    // lists. What it cannot see: a code a command reaches through the model
+    // (checkInvariants' modulation.cycle), which closesCycle lists by the
+    // model's edge kinds (a route, a parent send, a target's track) and this
+    // test by hand; a helper's callers (checkRoute and checkCycle:
+    // modulation.add and modulation.set, and modulate through
+    // modulation.add), listed by hand; a code built another way (a
+    // variable, Error{…}), of which there is none.
     cmd::Registry registry;
     registerEngineCommands(registry);
     const auto declared = [&](const char* name) {
@@ -6486,33 +6492,70 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
         CHECK_MESSAGE(detail::movesTargets(name), name);
         need(name, "modulation.cycle");
     }
+    // The edits that make the model's other edges (round 195 F2): a route,
+    // a parent send.
+    for (const char* name : {"route.add", "route.set", "track.move", "track.set"}) {
+        CHECK_MESSAGE(detail::closesCycle(name), name);
+        need(name, "modulation.cycle");
+    }
     need("item.heal", "item.heal_fx");
     need("item.consolidate", "item.consolidate_stale");
     need("item.consolidate.commit", "item.consolidate_stale");
     need("item.mix-to-track", "item.mix_stale");
     need("item.mix-to-track.commit", "item.mix_stale");
-    // modulation_commands.cpp by command: a code raised there (refused,
-    // Error, or a code assigned) belongs to the command whose section (from
-    // its `c.name = "..."` to the next) holds it; one before the first
-    // command is a helper's. checkCycle passes on the model's cycle.
+    // Every command file by command: a code raised there (refused, Error, or
+    // a code assigned) belongs to the command whose section (from its
+    // `c.name = "..."` to the next) holds it; one before the file's first
+    // command is a helper's. Only modulation_commands.cpp has helpers that
+    // raise one (checkRoute, checkCycle; checkCycle passes on the model's
+    // cycle); another file's would need its callers tied here.
     const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "src";
     const std::set<std::string> notErrors = {"modulation.add",       "modulation.set",
                                              "modulation.remove",    "modulation.list",
                                              "modulation.telemetry", "modulation.stacked",
                                              "modulation.removed",   "modulation.not_copied"};
     std::map<std::string, std::set<std::string>> raisedBy;  // "": the helpers
-    {
-        std::ifstream in(src / "modulation_commands.cpp");
+    static const std::regex name(R"re(c\.name = "([a-z.\-]+)")re");
+    static const std::regex code(R"re((refused\(|Error\(|code = )"(modulation\.[a-z_]+)")re");
+    std::size_t files = 0;
+    std::vector<std::string> strayHelpers;
+    for (const auto& entry : fs::directory_iterator(src)) {
+        const std::string file = entry.path().filename().string();
+        if (!file.ends_with("_commands.cpp")) continue;
+        ++files;
+        std::ifstream in(entry.path());
         REQUIRE(in);
-        static const std::regex name(R"re(c\.name = "([a-z.\-]+)")re");
-        static const std::regex code(R"re((refused\(|Error\(|code = )"(modulation\.[a-z_]+)")re");
+        const bool helpersHere = file == "modulation_commands.cpp";
         std::string section, line;
         while (std::getline(in, line)) {
             std::smatch m;
             if (std::regex_search(line, m, name)) section = m[1];
-            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i)
-                if (!notErrors.count((*i)[2])) raisedBy[section].insert((*i)[2]);
+            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i) {
+                if (notErrors.count((*i)[2])) continue;
+                if (section.empty() && !helpersHere)
+                    strayHelpers.push_back(file + ": " + std::string((*i)[2]));
+                else
+                    raisedBy[section].insert((*i)[2]);
+            }
         }
+    }
+    CHECK(files > 20);  // the directory was read
+    std::string stray;
+    for (const std::string& h : strayHelpers) stray += h + "\n";
+    INFO("a helper's modulation code outside modulation_commands.cpp:\n" << stray);
+    CHECK(strayHelpers.empty());
+    // The wrapper (command_validation.h) raises only what it declares: its
+    // own lists, checked above.
+    {
+        std::ifstream in(src / "command_validation.h");
+        REQUIRE(in);
+        std::set<std::string> raised;
+        std::string line;
+        while (std::getline(in, line))
+            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i)
+                raised.insert((*i)[2]);
+        for (const std::string& c : raised)
+            CHECK_MESSAGE((c == "modulation.limit" || c == "modulation.cycle"), c);
     }
     REQUIRE(raisedBy.count(""));
     raisedBy[""].insert("modulation.cycle");  // checkCycle: the model's (checkInvariants)
@@ -6844,6 +6887,74 @@ TEST_CASE("modulation commands: fx.move onto a track the rack hears is refused (
     CHECK(std::find(chain.begin(), chain.end(), *model::Id::parse(gain)) != chain.end());
 }
 
+TEST_CASE(
+    "modulation commands: a send or parent send into what the rack hears is refused "
+    "(round 195 F2)") {
+    // A gain on tr_1 modulated by a follower of the buss Listened. Each edit
+    // that would feed Listened from tr_1 closes a cycle (tr_1 -> Listened ->
+    // the rack -> tr_1): a send (route.add, route.set re-targeted), tr_1
+    // moved under Listened with its parent send on, and the parent send
+    // turned on under it. Each is refused with the declared
+    // modulation.cycle at the argument that makes the edge, and changes
+    // nothing.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string listened =
+        run("track.add", j(R"({"name": "Listened", "type": "buss"})"))["track"].asString();
+    const std::string gain =
+        run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+            .asString();
+    json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+    modulate["from"] = listened;
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const auto refused = [&](const char* name, const json::Value& args, const char* path,
+                             const char* hintWord) {
+        INFO(name << " " << json::writeCompact(args));
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+        const std::string before = model::serializeProject(app->view());
+        const auto r = d.execute({name, args, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path == std::string("/args") + path);
+        CHECK(r.error().hint.find(hintWord) != std::string::npos);
+        CHECK(model::serializeProject(app->view()) == before);
+    };
+    json::Value send = j(R"({"from": "tr_1"})");
+    send["to"] = listened;
+    refused("route.add", send, "/to", "send to another track");
+    // A send to the master, then re-targeted at Listened.
+    const std::string route =
+        run("route.add", j(R"({"from": "tr_1", "to": "tr_0"})"))["id"].asString();
+    json::Value retarget = json::Value::object();
+    retarget["route"] = route;
+    retarget["to"] = listened;
+    refused("route.set", retarget, "/to", "send to another track");
+    json::Value move = j(R"({"track": "tr_1"})");
+    move["parent"] = listened;
+    refused("track.move", move, "/parent", "another parent");
+    // Under Listened with the parent send off: no edge, so it moves. Turned
+    // on there, the parent send closes the cycle.
+    run("track.set", j(R"({"track": "tr_1", "parent_send": false})"));
+    run("track.move", move);
+    refused("track.set", j(R"({"track": "tr_1", "parent_send": true})"), "/parent_send",
+            "parent send off");
+}
+
 TEST_CASE("modulation commands: exploding takes onto tracks may not close a cycle (M5, G2)") {
     Root root;
     auto app = makeApp(root.path);
@@ -6955,7 +7066,7 @@ TEST_CASE(
     const auto dropped = settleCopiedRoutes(t, true);
     REQUIRE(dropped.size() == 1);
     CHECK(dropped[0].original == original);
-    CHECK(dropped[0].reason == "limit");
+    CHECK(dropped[0].reason == model::RouteWarningReason::Limit);
     CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
     CHECK_FALSE(t.exists<model::Modulation>(made));
     CHECK(t.preview().modulations.size() == model::kMaxModulations);
@@ -6969,6 +7080,6 @@ TEST_CASE(
     u.copiedRoute(strayCopy, original);
     const auto unsourced = settleCopiedRoutes(u, false);
     REQUIRE(unsourced.size() == 1);
-    CHECK(unsourced[0].reason == "source");
+    CHECK(unsourced[0].reason == model::RouteWarningReason::Source);
     CHECK_FALSE(u.exists<model::Modulation>(strayCopy));
 }

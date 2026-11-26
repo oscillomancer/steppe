@@ -934,6 +934,39 @@ TEST_CASE("item.mix-to-track is not stale for an edit its render does not read (
     CHECK(status.find("status")->asString() == "done");
 }
 
+TEST_CASE(
+    "item.mix-to-track is stale when a warp peer of its take changes during it "
+    "(round 195 F3)") {
+    // it_1 and its copy it_2, moved onto Peer (tr_2), quantized together:
+    // tk_1 and tk_2 are warp peers, and the render of it_1 reads tk_2's
+    // bundle (offline.cpp keeps a selected take's peers). tr_2 is outside
+    // the mix's closure, so only the peers' hashing sees an edit to tk_2's
+    // transients; without it the mix committed over the edit.
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        f.run("track.add", R"({"name":"Peer"})");  // tr_2
+        f.run("take.hits.set", R"({"take":"tk_1","positions":[0.3,0.8]})");
+        f.run("item.duplicate", R"({"item":"it_1","to":0})");
+        f.run("item.move", R"({"item":"it_2","track":"tr_2"})");
+        f.run("audio.quantize", R"({"items":["it_1","it_2"],"grid":0.25})");
+        const model::Session before = f.app->head();
+        REQUIRE(before.takes.find({model::Kind::Take, 1})->warpPeers.size() == 2);
+        REQUIRE(before.items.find({model::Kind::Item, 2})->track ==
+                model::Id{model::Kind::Track, 2});
+        const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+        if (edited) f.run("take.hits.set", R"({"take":"tk_2","positions":[0.2,0.6]})");
+        const auto status = settled(f, job);
+        INFO(json::writeCompact(status));
+        if (edited) {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.mix_stale") != std::string::npos);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
 TEST_CASE("item.mix-to-track is stale when the route's source changed during it (round 192 F4)") {
     for (const bool edited : {false, true}) {
         INFO("edited " << edited);

@@ -108,6 +108,50 @@ inline bool movesTargets(std::string_view command) {
     return command == "item.move" || command == "clip.move" || command == "take.extract" ||
            command == "item.explode-takes" || command == "fx.move";
 }
+// Every edit that can close a modulation cycle, by the model's edges
+// (checkInvariants): a route (route.add, route.set), a parent send
+// (track.move, track.set's parent_send) and a modulated target's track (the
+// moves above). Each is refused at the argument that closes it, with the
+// code declared (review round 195 F2). A module's source makes no audio
+// edge: a Notes module hears notes upstream of the FX they reach.
+struct CycleRefusal {
+    std::string message, hint;
+};
+inline std::optional<CycleRefusal> closesCycle(std::string_view command) {
+    if (command == "item.explode-takes")
+        return CycleRefusal{"the move puts a modulated take or FX where its rack hears it",
+                            "remove the route, or use mode serial"};
+    if (movesTargets(command))
+        return CycleRefusal{"the move puts a modulated take or FX where its rack hears it",
+                            "remove the route, or choose another track"};
+    if (command == "route.add" || command == "route.set")
+        return CycleRefusal{"the send feeds a rack what it modulates",
+                            "remove the modulation route first (modulation.remove), or send to "
+                            "another track"};
+    if (command == "track.move")
+        return CycleRefusal{"the track's parent send would feed a rack what it modulates",
+                            "remove the modulation route first (modulation.remove), or choose "
+                            "another parent"};
+    if (command == "track.set")
+        return CycleRefusal{"the parent send would feed a rack what it modulates",
+                            "remove the modulation route first (modulation.remove), or leave the "
+                            "parent send off"};
+    return std::nullopt;
+}
+// The argument a cycle refusal names: the one that makes the new edge.
+inline std::string cyclePath(std::string_view command, const json::Value& fields) {
+    if (command == "item.explode-takes") return "/item";
+    if (movesTargets(command)) return "/track";
+    if (command == "route.add") return fields.find("fx") ? "/fx" : "/to";
+    if (command == "route.set") {
+        for (const char* key : {"to", "fx", "from"})
+            if (fields.find(key)) return std::string("/") + key;
+        return "/route";
+    }
+    if (command == "track.move") return "/parent";
+    if (command == "track.set") return "/parent_send";
+    return "";
+}
 }  // namespace detail
 
 // Validate derived edit values before the invocation succeeds, so a caught Lua
@@ -124,9 +168,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
     if (!detail::copiedPath(command.name).empty())
         declare({"modulation.limit", "the copy's routes would pass the project's route limit",
                  "remove routes first (modulation.list), for instance the copied chain's"});
-    if (detail::movesTargets(command.name))
-        declare({"modulation.cycle", "the move puts a modulated take or FX where its rack hears it",
-                 "remove the route, or choose another track"});
+    if (const auto cycle = detail::closesCycle(command.name))
+        declare({"modulation.cycle", cycle->message, cycle->hint});
     if (command.kind != cmd::Kind::Query) {
         auto original = std::move(command.run);
         auto encoded = command.args;
@@ -186,7 +229,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             if (app.inTransaction()) {
                 for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
                     ctx.warn("modulation.not_copied", d.message, "/modulations/" + d.original.str(),
-                             d.reason);
+                             std::string(model::reasonWord(d.reason)));
                 const std::size_t routes = app.txn().preview().modulations.size();
                 if (routes > model::kMaxModulations && routes > before.modulations.size())
                     return Error("modulation.limit",
@@ -204,16 +247,16 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                                      "the copied chain, which the copy duplicates");
                 const auto& joined = app.txn().routesLivingOn();
                 livesOn.insert(livesOn.end(), joined.begin(), joined.end());
-                // A move that closes a cycle is refused, never mended by
-                // dropping a route: a move must not change what sounds.
-                if (detail::movesTargets(name) && !before.modulations.empty()) {
+                // An edit that closes a cycle is refused at its argument,
+                // never mended by dropping a route: it must not change what
+                // sounds.
+                if (const auto cycle = detail::closesCycle(name);
+                    cycle && !before.modulations.empty()) {
                     Status ok = model::checkInvariants(app.txn().preview());
                     if (!ok && ok.error().code == "modulation.cycle") {
                         Error e = ok.error();
-                        const bool explode = name == "item.explode-takes";
-                        e.path = explode ? "/item" : "/track";
-                        e.hint = explode ? "remove the route, or use mode serial"
-                                         : "remove the route, or choose another track";
+                        e.path = detail::cyclePath(name, fields);
+                        e.hint = cycle->hint;
                         return e;
                     }
                 }
@@ -225,12 +268,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             // whose target stopped fitting (a send turned MIDI) goes here.
             if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
                 const auto removed = [&](model::Id route, const model::Modulation& m,
-                                         const std::string& why, const char* reason) {
+                                         const std::string& why, model::RouteWarningReason reason) {
                     ctx.warn("modulation.removed",
                              route.str() + " (" + m.source.module.str() + "." + m.source.input +
                                  " to " + m.target.object.str() + " " + m.target.param +
                                  ") was removed: " + why,
-                             "/modulations/" + route.str(), reason);
+                             "/modulations/" + route.str(), std::string(model::reasonWord(reason)));
                 };
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
@@ -240,14 +283,13 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     const model::Modulation& m = *e.value;
                     if (after.modules.contains(m.source.module))
                         removed(e.id, m, "its target " + m.target.object.str() + " was removed",
-                                "target_removed");
+                                model::RouteWarningReason::TargetRemoved);
                     else
                         removed(e.id, m, "its source " + m.source.module.str() + " was removed",
-                                "source_removed");
+                                model::RouteWarningReason::SourceRemoved);
                 }
                 for (const model::StrandedModulation& d : model::strandedModulations(after)) {
-                    removed(d.route, *after.modulations.find(d.route), d.why,
-                            d.atSource ? "source_unfit" : "target_unfit");
+                    removed(d.route, *after.modulations.find(d.route), d.why, d.reason());
                     app.txn().remove<model::Modulation>(d.route);
                 }
             }

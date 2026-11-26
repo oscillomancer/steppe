@@ -970,9 +970,9 @@ instructions are in `docs/guides/installing.md`.
   depend on the block size (a plug-in that smooths its parameters still
   hears the grid values from the entry, which falls on a block boundary,
   so its output after the onset can depend on the block size and, after an
-  off-grid loop wrap, on the pass; the tests' memoryless gain cannot prove
-  the early entry after a wrap or a switch's by a red run, only cover it:
-  the round 187 question, open); on a track whose clip chain is modulated an
+  off-grid loop wrap, on the pass; a switch's entry is proved by red runs,
+  but the tests' memoryless gain cannot prove the early entry after a wrap
+  by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
   pressed within 32 more frames of its boundary takes the next. A route
   into a take that does not play is idle (`modulation.list` says `inert:
@@ -991,7 +991,12 @@ instructions are in `docs/guides/installing.md`.
   whose routes match. All four bakes print the modulation exactly; a
   consolidate or mix-to-track is refused as stale when anything its render
   read changed before its commit, a route's source and the tracks feeding
-  it included (a freeze's hash leaves the source racks out, by design). A
+  it included (a freeze's hash leaves the source racks out, by design).
+  That check costs main-thread time at a bake's start, its commit and its
+  publish, a known cost not yet optimised: on the 96-track capacity
+  session, item.mix-to-track's start (one fingerprint and the job's
+  set-up) took 24.7 ms, and a fingerprint over all 96 tracks 48 ms
+  (review round 193, a dev build on Linux). A
   plug-in's offset is signal
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer

@@ -4,10 +4,12 @@
 // edited only through EditTxn, validated by invariants, diffable.
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -334,10 +336,39 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
 // unfit (a removed module, FX, track or route; a send turned MIDI), with the
 // reason and which end it is, in id order. Commands remove them and warn
 // modulation.removed (source_unfit or target_unfit).
+// Why a route warning's route went: its `reason`, one fixed word each
+// (session-model.md lists them by warning; review round 195 F4).
+// modulation.not_copied: Source, Cycle, Limit; modulation.removed: the rest.
+enum class RouteWarningReason : std::uint8_t {
+    Source,
+    Cycle,
+    Limit,
+    SourceRemoved,
+    TargetRemoved,
+    SourceUnfit,
+    TargetUnfit,
+};
+inline constexpr std::array<std::pair<RouteWarningReason, std::string_view>, 7>
+    kRouteWarningReasons{{{RouteWarningReason::Source, "source"},
+                          {RouteWarningReason::Cycle, "cycle"},
+                          {RouteWarningReason::Limit, "limit"},
+                          {RouteWarningReason::SourceRemoved, "source_removed"},
+                          {RouteWarningReason::TargetRemoved, "target_removed"},
+                          {RouteWarningReason::SourceUnfit, "source_unfit"},
+                          {RouteWarningReason::TargetUnfit, "target_unfit"}}};
+constexpr std::string_view reasonWord(RouteWarningReason r) {
+    for (const auto& [reason, word] : kRouteWarningReasons)
+        if (reason == r) return word;
+    return {};
+}
+
 struct StrandedModulation {
     Id route;
     bool atSource = false;  // else its target
     std::string why;
+    RouteWarningReason reason() const {
+        return atSource ? RouteWarningReason::SourceUnfit : RouteWarningReason::TargetUnfit;
+    }
 };
 std::vector<StrandedModulation> strandedModulations(const Session& s);
 // Of the routes in `ordered`, those that close a cycle, taken in that order:
