@@ -381,8 +381,10 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Add a take to an item or clip, optionally copied from one of its takes.";
         c.description =
-            "from: copy that take of the same item or clip, its FX included; the copy keeps the "
-            "modulation routes into its FX (ADR-0096 M5), in the same undo step.";
+            "from: copy that take of the same item or clip as every take copy is made: its FX, "
+            "the envelopes on the take and on its FX (with their automation items) and the "
+            "modulation routes into its FX (ADR-0096 M5), in the same undo step; the copy is in "
+            "no warp bundle.";
         c.tags = {"take"};
         c.args = schema::object<TakeAddArgs>("take_add_args")
                      .field("item", &TakeAddArgs::item, ownerIdArg())
@@ -396,7 +398,8 @@ void registerTakeCommands(cmd::Registry& registry) {
             auto item = existingOwner(s, a.item, "/item");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item));
-            model::Take copy;
+            auto& txn = app(ctx).txn();
+            Id fresh;
             if (a.from) {
                 auto source = existing<model::Take>(s, *a.from, "/from");
                 if (!source) return std::move(source).error();
@@ -407,25 +410,25 @@ void registerTakeCommands(cmd::Registry& registry) {
                         "choose a from take in the destination item; take.list lists its takes");
                 auto takeSource = dangling<model::Take>(s, *source, "/from");
                 if (!takeSource) return std::move(takeSource).error();
-                copy = **takeSource;
-                // A clip's takes hold none of the four; an item's copy keeps them (ADR-0098).
-                if (item->kind == model::Kind::Clip)
-                    model::fitTakeContext(copy, model::TakeHome::Clip);
-                unpoolCopiedSource(copy, s, app(ctx).txn());
-                copy.chain.clear();
-                std::map<Id, Id> copies;
                 for (Id fx : (*takeSource)->chain) {
                     auto chained = dangling<model::FxInstance>(s, fx, "/takes");
                     if (!chained) return std::move(chained).error();
-                    copy.chain.push_back(app(ctx).txn().create(**chained));
-                    copies.emplace(fx, copy.chain.back());
                 }
-                // The routes into its FX too (ADR-0096 M5), settled once the
-                // command returns (addChecked).
-                copyRoutesInto(s, app(ctx).txn(), copies);
+                model::Take copy = **takeSource;
+                // A clip's takes hold none of the four; an item's copy keeps them (ADR-0098).
+                if (item->kind == model::Kind::Clip)
+                    model::fitTakeContext(copy, model::TakeHome::Clip);
+                unpoolCopiedSource(copy, s, txn);
+                // A copy like any other (copyTake): its FX, the envelopes on
+                // the take and its FX with their automation items, and the
+                // routes into its FX (ADR-0096 M5, settled in addChecked).
+                // It stands alone: no warp peers.
+                auto made = copyTake(s, txn, *source, std::move(copy));
+                if (!made) return std::move(made).error();
+                fresh = *made;
+            } else {
+                fresh = txn.create(model::Take{});
             }
-            auto& txn = app(ctx).txn();
-            Id fresh = txn.create(std::move(copy));
             modifyOwnerTakes(txn, *item, [&](std::vector<Id>& takes, std::optional<Id>& active) {
                 takes.push_back(fresh);
                 if (!active) active = fresh;

@@ -2198,9 +2198,11 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   - `scene.insert`, `arrangement.build`, `track.duplicate` and
     `launch.commit`;
   - the new take of a MIDI overdub, and `item.consolidate`'s MIDI merge;
-  - `take.add {from}`, which copies a take within its item or clip, FX
-    included, and copies the routes into those FX (`copyRoutesInto`, as
-    `copyTake` does; the co-director's ruling of 2026-11-26).
+  - `take.add {from}`, which copies a take within its item or clip through
+    `copyTake` like the rest: its FX, the envelopes on the take and on its
+    FX with their automation items, and the routes into its FX; the copy is
+    in no warp bundle (the co-director's rulings of 2026-11-26; before them
+    it copied the FX alone).
 - **`track.duplicate`.** It copies every route whose target is on the
   duplicated track: its volume, pan and width; the level of each send it
   copies (onto the copy's new send); and its chain, input-chain and take

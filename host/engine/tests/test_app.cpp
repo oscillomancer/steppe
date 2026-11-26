@@ -6336,6 +6336,100 @@ TEST_CASE("modulation commands: take.add {from} copies the routes into the FX it
 }
 
 TEST_CASE(
+    "modulation commands: take.add {from} copies the take's envelopes, so a route through one "
+    "stays live (M5)") {
+    // The copy is a copy like any other (copyTake): its FX and take carry
+    // their envelopes, so a route into a parameter reached through its
+    // envelope (the fixed gain's gain, ADR-0096 M4) plays on the copy too,
+    // and the whole survives a save and reopen.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string lfo =
+        run("module.add", j(R"({"rack": "rk_1", "type": "lfo"})")).find("module")->asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    run("cable.add", cable);
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    const auto takeFx = [&](const char* plugin) {
+        json::Value args = json::Value::object();
+        args["take"] = take;
+        args["plugin"] = plugin;
+        return run("fx.add", args).find("fx")->asString();
+    };
+    takeFx("com.suppleaudio.test.sine");  // an instrument, for the take envelope
+    const std::string gain = takeFx("com.suppleaudio.test.fixed-gain");
+    json::Value fxEnv = j(R"({"param": "0", "points": [{"bar": 1, "value": 0.5}]})");
+    fxEnv["fx"] = gain;
+    run("env.add", fxEnv);
+    json::Value takeEnv = j(R"({"param": "volume", "points": [{"beat": 0, "value": -6}]})");
+    takeEnv["take"] = take;
+    run("env.add", takeEnv);
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.1})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = gain;
+    add["target"]["param"] = "0";
+    run("modulation.add", add);
+    const std::size_t envelopes = app->view().envelopes.size();
+
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = take;
+    const auto second = model::Id::parse(run("take.add", copy).find("id")->asString());
+    REQUIRE(second);
+    {
+        const model::Session s = app->view();
+        CHECK(s.envelopes.size() == envelopes + 2);
+        const model::Take* made = s.takes.find(*second);
+        REQUIRE(made);
+        REQUIRE(made->chain.size() == 2);
+        std::size_t onTake = 0, onGain = 0;
+        for (const auto& e : s.envelopes) {
+            if (e.value->target.object == *second) ++onTake;
+            if (e.value->target.object == made->chain[1]) ++onGain;
+        }
+        CHECK(onTake == 1);
+        CHECK(onGain == 1);
+        CHECK(model::modulationsInto(s, made->chain[1]).size() == 1);
+    }
+    // The copy made active, its route plays through the copied envelope (not
+    // inert: envelope), and the original's waits for its take: here and
+    // after a save and reopen.
+    json::Value activate = json::Value::object();
+    activate["item"] = item;
+    activate["take"] = second->str();
+    run("take.activate", activate);
+    const auto inert = [](cmd::Dispatcher& on) {
+        auto r = on.execute({"modulation.list", j("{}"), kTest});
+        REQUIRE(r);
+        std::vector<std::string> out;
+        for (const auto& row : r->find("modulations")->asArray()) {
+            const json::Value* why = row.find("inert");
+            out.push_back(why ? why->asString() : "");
+        }
+        return out;
+    };
+    CHECK(inert(d) == std::vector<std::string>{"take", ""});
+    run("project.save", j(R"({"path": "copied.json"})"));
+    auto reopened = makeApp(root.path);
+    cmd::Dispatcher d2(registry, *reopened);
+    REQUIRE(d2.execute({"project.open", j(R"({"path": "copied.json"})"), kTest}));
+    CHECK(model::serializeProject(reopened->head()) == model::serializeProject(app->head()));
+    CHECK(inert(d2) == std::vector<std::string>{"take", ""});
+}
+
+TEST_CASE(
     "modulation commands: a take FX is a target, and copies of its take keep its routes (M5)") {
     Root root;
     auto app = makeApp(root.path);

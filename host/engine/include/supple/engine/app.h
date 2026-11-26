@@ -1478,7 +1478,8 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
 // that FX's copy, its value (ADR-0096 M5): the same source, parameter,
 // depth, enabled and lane, in the originals' id order, each noted on the
 // transaction (EditTxn::copiedRoute) for settleCopiedRoutes. Keys that are
-// not FX are skipped. copyTake and take.add {from} use it.
+// not FX are skipped. copyTake's last step (take.add {from} copies through
+// copyTake).
 void copyRoutesInto(const model::Session& source, model::EditTxn& txn,
                     const std::map<model::Id, model::Id>& fx);
 // A route a copy could not keep (ADR-0096 M5): `reason` is source, cycle or
