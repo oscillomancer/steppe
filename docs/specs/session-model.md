@@ -2278,6 +2278,14 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     stays on its track and cannot close one.
   - No route is dropped by a move. A move in time hears its sources at its
     new time.
+- **Sends and parent sends.** An edit that would feed a rack what it
+  modulates closes a cycle too, and is refused the same way, at the
+  argument that makes the new edge (review round 195 F2): `route.add` at
+  `/to` (or `/fx` for a key route), `route.set` at `/to`, `/fx` or
+  `/from`, `track.move` at `/parent` (its parent send carried under the
+  new parent) and `track.set` at `/parent_send`, each with a hint to
+  remove the modulation route first. A module's source makes no such
+  edge: a Notes module hears notes upstream of the FX they reach.
   - `item.explode-takes {mode: tracks}` can close one (round 188 G2).
     Its new channels get the default parent send, so under a parent the
     original does not feed (its parent send off) they feed what it did
@@ -2360,13 +2368,16 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.add`, `modulation.set` and `modulate` their route checks
   (`modulate` not `modulation.envelope`: it adds the envelope itself);
   every command that copies routes (M5) `modulation.limit`, and every one
-  that moves a take or a track-chain FX to another track
+  that moves a take or a track-chain FX to another track, or makes a send
+  or parent send (`route.add`, `route.set`, `track.move`, `track.set`),
   `modulation.cycle`, both declared by the edit wrapper that raises them;
   `item.heal` `item.heal_fx`; and the background bakes and their commits
   `item.consolidate_stale` and `item.mix_stale`. A test keeps the
-  declarations and the raised codes together: in the route commands'
-  source each code against the command that raises it, and each declared
-  route code against what that command can raise. Warnings have no
+  declarations and the raised codes together: in every command file each
+  modulation code against the command that raises it, and each declared
+  route code against what that command can raise; the codes reached
+  through the model are tied by the wrapper's list of the edits that make
+  each kind of edge. Warnings have no
   registry: `modulation.not_copied`, `modulation.stacked` and
   `modulation.removed` are listed here only. The warning
   `modulation.not_copied` (M5) carries no hint, so its message holds the

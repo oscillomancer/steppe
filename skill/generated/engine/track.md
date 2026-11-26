@@ -815,6 +815,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 ### Errors
 
 - `tr.cycle`: the destination is inside the track Hint: choose another parent
+- `modulation.cycle`: the track's parent send would feed a rack what it modulates Hint: remove the modulation route first (modulation.remove), or choose another parent
 
 ### Examples
 
@@ -953,6 +954,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `track.record_input`: choose one input: audio, MIDI or rack Hint: provide one non-null input field; it replaces the previous input
+- `modulation.cycle`: the parent send would feed a rack what it modulates Hint: remove the modulation route first (modulation.remove), or leave the parent send off
 
 ### Examples
 

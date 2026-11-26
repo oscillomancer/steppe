@@ -871,8 +871,11 @@ void registerTrackCommands(cmd::Registry& registry) {
                 if (before != after) app.recordAutomation(*id, "pan_boost", after ? 1 : 0);
             }
             if (a.mute) app.recordAutomation(*id, "mute", *a.mute ? 1.0 : 0.0);
+            // A modulation cycle is the edit wrapper's, declared with its own
+            // hint (review round 195 F2).
             if (a.parentSend && *a.parentSend && !s.tracks.find(*id)->parentSend.enabled)
-                if (auto valid = model::checkInvariants(app.view()); !valid)
+                if (auto valid = model::checkInvariants(app.view());
+                    !valid && valid.error().code != "modulation.cycle")
                     return Error(
                         "route.cycle", "the parent send would feed back: " + valid.error().message,
                         "/parent_send", "remove the send from the parent to this track first");
