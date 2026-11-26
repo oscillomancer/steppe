@@ -936,6 +936,10 @@ class Engine {
         // A launch ack lost to a full ring while it ran, or at any time
         // before it began: the log misses a launch that was heard.
         bool launchUnlogged = false;
+        // A launch it lists whose switch is not yet known to have been
+        // heard: its epoch ended and that epoch's verdicts are not in
+        // (round 201; launch_unsettled).
+        bool launchUnsettled = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {
@@ -1302,6 +1306,9 @@ class Engine {
     int lateAttemptsForTests_ = 0;
     // Tests: the renderer's launch acks are dropped as by a full ring.
     std::atomic<bool> dropRendererAcksForTests_{false};
+    // The renderer's leave of an epoch acts as when its wait for the callback
+    // timed out (round 201 F2), without a clock.
+    std::atomic<bool> rendererLeaveLateForTests_{false};
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -1347,6 +1354,11 @@ class Engine {
         std::atomic<std::uint64_t> scene{0};  // a scene launch's scene id number; 0: none
         std::atomic<std::uint8_t> action{0}, done{0}, required{0};
         std::atomic<std::int64_t> target{0}, anchorSample{0}, songFrame{0};
+        // Its switch frame as heard (target plus the channel's shift), set
+        // once by the first executor to apply it (INT64_MIN until then):
+        // the one key every executor records and the main thread judges
+        // (review round 201 F2).
+        std::atomic<std::int64_t> key{INT64_MIN};
         std::atomic<double> anchorBeat{0};
         // Main thread only: what to re-place after a miss or a new epoch.
         LaunchRequest request;
@@ -1356,6 +1368,7 @@ class Engine {
         std::uint64_t track = 0, clip = 0, epoch = 0, scene = 0;
         std::uint8_t action = 0;
         std::int64_t stream = 0, anchorSample = 0, songFrame = 0;
+        std::int64_t key = 0;  // its switch frame as heard (LaunchSlot::key)
         double anchorBeat = 0;
         // A return to the arrangement carryLaunch made at the adoption of
         // plan `generation`, at `stream` (no slot, clip or song frame: the
@@ -1425,22 +1438,38 @@ class Engine {
     // past it was not heard: what an executor applied for it is taken back,
     // its log entry goes, and it is placed again. Written by the callback
     // as it leaves an epoch (an epoch it skipped: 0), by epoch number
-    // modulo the size; read by the main thread and the executors.
+    // modulo the size; read by the main thread and the executors. An entry
+    // reused before it was read (64 epochs on) is not guessed heard: what it
+    // held counts as unheard and marks the capture (round 201 F2).
     struct HeardEnd {
         std::atomic<std::uint64_t> epoch{UINT64_MAX};
         std::atomic<std::int64_t> end{0};
     };
-    std::array<HeardEnd, 8> heardEnds_{};
+    std::array<HeardEnd, 64> heardEnds_{};
     std::atomic<std::uint64_t> heardEndsEntered_{0};  // the newest epoch the callback entered
     void noteHeardEnd(std::uint64_t left, std::uint64_t entered, std::int64_t end) SUPPLE_RT;
     // Where `epoch`'s hearing ended; absent while the callback is still in
-    // it, or once its entry was reused (8 epochs on).
+    // it, or once its entry was reused (64 epochs on).
     std::optional<std::int64_t> heardEnd(std::uint64_t epoch) const SUPPLE_RT;
     // Executor-private, by class: the epoch it last left and where its
     // hearing ended, as that executor took it (the callback as it leaves
     // the epoch, the renderer in relocate once the callback has left it).
     std::array<std::uint64_t, 2> launchLeftEpoch_{UINT64_MAX, UINT64_MAX};
     std::array<std::int64_t, 2> launchLeftEnd_{};
+    // Renderer-private: an epoch it left before the callback had (its wait
+    // timed out), whose hearing end it waits for before it applies or takes
+    // back anything (round 201 F2); UINT64_MAX: none.
+    std::uint64_t launchLeavePending_ = UINT64_MAX;
+    // The renderer's pending leave settled once the callback's end for it is
+    // known: its unheard slots done, its nodes taken back. False while
+    // still unknown.
+    bool settleLeave(detail::Plan& p, int liveClass) SUPPLE_RT;
+    // Counted where a verdict came late or had to be taken as unheard (a
+    // renderer that went on before the callback left the epoch, an end
+    // reused before it was read): a capture over it is not as heard
+    // (launch_unsettled).
+    std::atomic<std::uint64_t> launchUnsettled_{0};
+    std::uint64_t launchUnsettledSeen_ = 0;
     std::optional<std::int64_t> launchHeardEnd(std::size_t c, std::uint64_t epoch) const SUPPLE_RT;
     // Executors, at their first launchesAt of a new epoch: each of this
     // class's nodes takes back what it applied in the epoch it left that
@@ -1482,6 +1511,9 @@ class Engine {
     // The switch frame of `track`'s launches in `plan` (its target plus the
     // channel's shift, as launch.state and the take-back compare).
     static std::int64_t launchShift(const detail::Plan* plan, model::Id track);
+    // A slot's key (LaunchSlot::key), or, before any executor set it, its
+    // target plus the channel's shift in `plan`.
+    static std::int64_t slotKey(const LaunchSlot& s, const detail::Plan* plan) SUPPLE_RT;
     std::unique_ptr<SpscRing<LaunchAck, 1024>> rendererLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
@@ -1492,6 +1524,9 @@ class Engine {
     // track's clip (carryLaunch): at a frame it shares with a launch it
     // sorts first, since a launch there was applied after the adoption.
     std::vector<std::uint8_t> launchIsReturn_;
+    // Each entry's switch frame as heard (its ack's key; a return the main
+    // thread logs: its frame plus the channel's shift), in the log's order.
+    std::vector<std::int64_t> launchKeys_;
     // Main thread: the returns logged, by track, epoch and plan generation:
     // one acked twice is logged once.
     struct ReturnKey {

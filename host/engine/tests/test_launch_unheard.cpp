@@ -161,6 +161,56 @@ void twoAudioClips(Project& p, std::size_t frames = 36000) {
     }
 }
 
+// tr_2, with no audio, gets a latent track FX: tr_1's channel is shifted
+// by 64 frames (its launches switch 64 frames behind their target).
+void shiftedChannel(Project& p) {
+    p.run("track.add", R"({"name": "Latent"})");
+    p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string fx = p.app->head().tracks.find(id("tr_2"))->chain.front().str();
+    p.run("fx.patch.merge",
+          R"({"fx": ")" + fx + R"(", "patch": {"params": {"latency": "short"}}})");
+}
+
+// The offline replay of `log` from `start` seconds (a capture's render).
+std::vector<float> replay(const model::Session& s, const fs::path& dir,
+                          const std::vector<LaunchLogEntry>& log, std::size_t frames,
+                          double start = 0.0) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.startSeconds = start;
+    settings.endSeconds = start + double(frames) / 48000 + 0.05;
+    settings.blockSize = 32;
+    settings.projectDir = dir;
+    settings.launches = log;
+    auto r = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
+// The run sounds as its log replays (review round 201 F3): up to 2048
+// frames before the stop, as the stopped epoch's log; and, when the launch
+// was not heard, the resumed epoch for a second as its own log (from where
+// it began: the resume, or the locate's frame two cycles before `resumed`).
+void asReplayed(const model::Session& s, const fs::path& dir, const Interrupted& run,
+                std::int64_t stopCycle, Interrupt how, bool heard) {
+    std::vector<LaunchLogEntry> stopped, resumed;
+    for (const LaunchLogEntry& e : run.log)
+        (e.epoch <= run.epochBefore ? stopped : resumed).push_back(e);
+    const std::size_t head = std::size_t(stopCycle * 32) - 2048;
+    const auto before = replay(s, dir, stopped, head);
+    INFO("before the stop against its log's replay: " << differences(run.out, run.latency, before,
+                                                                     head));
+    CHECK(maxDiff(run.out, run.latency, before, head) == 0.0);
+    if (heard) return;  // carried over from the stopped epoch: its log cannot say so
+    const std::size_t n = 48000;
+    const double from = how == Interrupt::Locate ? 0.5 : double(stopCycle * 32) / 48000;
+    const auto after = replay(s, dir, resumed, n, from);
+    const std::size_t at =
+        run.latency + std::size_t((how == Interrupt::Locate ? run.resumed - 2 : run.resumed) * 32);
+    INFO("the resumed epoch against its log's replay: " << differences(run.out, at, after, n));
+    CHECK(maxDiff(run.out, at, after, n) == 0.0);
+}
+
 }  // namespace
 
 TEST_CASE("a launch the listener did not hear before a stop or locate is placed again (F6)" *
@@ -174,32 +224,40 @@ TEST_CASE("a launch the listener did not hear before a stop or locate is placed 
     // 3010 (heard). Each by a pause and play, a pause, a return and play,
     // and a locate. The renderer applies the launch up to 4096 frames ahead:
     // the review's F6 (round 192) had it play straight on, its log claiming
-    // a launch never heard.
-    for (const bool latent : {false, true}) {
+    // a launch never heard. Round 201 F3: each run sounds as its log
+    // replays, and a channel shifted 64 frames by another track's latent FX
+    // (its switch heard at 96064: stops after 3001 and 3002 do not hear it).
+    for (const int setup : {0, 1, 2}) {
         Project p;
-        if (latent)
+        if (setup == 1)
             latentClip(p);
         else
             twoAudioClips(p);
+        if (setup == 2) shiftedChannel(p);
+        const std::int64_t shift = setup == 2 ? 64 : 0;
         const model::Session s = p.app->head();
-        for (const std::int64_t stop : {2990, 2998, 2999, 3000, 3001, 3010})
+        const std::vector<std::int64_t> stops =
+            setup == 2 ? std::vector<std::int64_t>{2990, 3001, 3002, 3003, 3010}
+                       : std::vector<std::int64_t>{2990, 2998, 2999, 3000, 3001, 3010};
+        for (const std::int64_t stop : stops)
             for (const Interrupt how :
                  {Interrupt::Pause, Interrupt::PauseAndReturn, Interrupt::Locate}) {
-                INFO("latent " << latent << ", stopped after cycle " << stop << ", interrupt "
-                               << int(how));
+                INFO("setup " << setup << ", stopped after cycle " << stop << ", interrupt "
+                              << int(how));
                 Run r;
                 r.launches = {{20, {request("tr_1", "cl_1")}, model::LaunchQuantize::Bar}};
                 r.stopCycle = stop;
                 r.how = how;
                 const Interrupted cb = executorsAgree(s, p.app->projectDir(), r);
-                onlyHeard(cb, stop * 32, 0);
+                onlyHeard(cb, stop * 32, shift);
                 // While stopped, launch.state has an unheard launch queued.
                 const auto tr1 = std::find_if(cb.stopped.begin(), cb.stopped.end(),
                                               [](const auto& t) { return t.track == id("tr_1"); });
                 REQUIRE(tr1 != cb.stopped.end());
-                const bool heard = stop * 32 > 96000;
+                const bool heard = stop * 32 > 96000 + shift;
                 CHECK((tr1->plays == Engine::TrackLaunch::Plays::Clip) == heard);
                 if (!heard && how != Interrupt::Locate) CHECK(tr1->queued.has_value());
+                asReplayed(s, p.app->projectDir(), cb, stop, how, heard);
             }
     }
 }
@@ -225,6 +283,7 @@ TEST_CASE("the frame where hearing ended is not heard; the one before it is (F6 
         r.relaunchAfter = 1500;
         const Interrupted cb = executorsAgree(s, p.app->projectDir(), r);
         REQUIRE(cb.targets == std::vector<std::int64_t>{target});
+        asReplayed(s, p.app->projectDir(), cb, 3000, Interrupt::Pause, target != 96000);
         std::size_t inStopped = 0, after = 0;
         for (const LaunchLogEntry& e : cb.log)
             (e.epoch == cb.epochBefore ? inStopped : after) += e.clip == id("cl_1");
@@ -551,5 +610,152 @@ TEST_CASE(
                                                                        control, n));
         CHECK(maxDiff(b.out, b.latency + from, control, n) == 0.0);
         CHECK(std::any_of(control.begin(), control.end(), [](float v) { return v != 0.0f; }));
+    }
+}
+
+TEST_CASE(
+    "an unheard launch is placed again after more than eight epochs between services (round "
+    "201 F2)" *
+    doctest::description("rt")) {
+    // The renderer applies cl_1 (bar 2) ahead; the stop after 2990 cycles
+    // leaves it unheard. Then 9 seeks, 2 cycles, 8 seeks and 2 cycles
+    // before any service: the stopped epoch's end must still be known. Both
+    // executors take it back, the log keeps no entry of the stopped epoch,
+    // and they sound alike after.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    std::vector<float> outs[2];
+    std::uint32_t latency[2] = {0, 0};
+    std::string logs[2];
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 6);
+        e.engine.play();
+        e.run(20);
+        (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+        e.run(2990);
+        e.engine.service();
+        const std::uint64_t e0 = EngineTestAccess::epoch(e.engine);
+        for (int i = 0; i < 9; ++i) e.engine.seek(0.5);
+        e.run(e.done + 2);
+        for (int i = 0; i < 8; ++i) e.engine.seek(0.5);
+        e.run(e.done + 2);
+        e.engine.service();
+        CHECK(e.node() == e.plays());
+        e.run(e.done + 4000);
+        e.engine.service();
+        const auto log = e.engine.launchLog();
+        INFO(describe(log));
+        std::size_t later = 0;
+        for (const LaunchLogEntry& le : log) {
+            CHECK(le.epoch != e0);
+            later += le.clip == id("cl_1");
+        }
+        CHECK(later == 1);
+        logs[ahead] = describe(log);
+        latency[ahead] = e.engine.outputLatency();
+        e.engine.stop();
+        outs[ahead] = e.backend.capture().channels[0];
+    }
+    const std::size_t from = 2994 * 32, n = 4000 * 32 - 4096;
+    const std::vector<float> reference(outs[0].begin() + latency[0] + from,
+                                       outs[0].begin() + latency[0] + from + n);
+    INFO("anticipative against in-callback: " << differences(outs[1], latency[1] + from, reference,
+                                                             n));
+    CHECK(maxDiff(outs[1], latency[1] + from, reference, n) == 0.0);
+    CHECK(logs[1] == logs[0]);
+}
+
+TEST_CASE(
+    "a capture read before the stopped epoch is judged, on a shifted channel, is not as heard "
+    "(round 201, launch_unsettled)" *
+    doctest::description("rt")) {
+    // tr_2's latent FX shifts tr_1 by 64 frames. cl_1 on bar 2 (key 96064);
+    // paused after 3001 cycles (heard to 96032): unheard. Read at once, before
+    // the callback leaves the epoch, a capture that lists cl_1 must not be as
+    // heard; read after, it is as heard and lists nothing.
+    Project p;
+    twoAudioClips(p);
+    shiftedChannel(p);
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 4);
+        REQUIRE(EngineTestAccess::launchShift(e.engine, id("tr_1")) == 64);
+        e.engine.play();
+        e.run(20);
+        e.engine.service();
+        REQUIRE(e.engine.captureLaunches(true));
+        const std::int64_t target = e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+        REQUIRE(target == 96000);
+        e.run(3001);
+        e.engine.service();
+        e.engine.pause();
+        const auto window = e.engine.launchCapture();  // no cycle yet
+        REQUIRE(window);
+        INFO("window:" << describe(window->launches));
+        if (!window->launches.empty()) CHECK(window->facts.launchUnsettled);
+        e.run(e.done + 10);
+        e.engine.service();
+        const auto later = e.engine.launchCapture();
+        REQUIRE(later);
+        CHECK(later->launches.empty());
+        CHECK(later->facts == Engine::CaptureFacts{.fromPlayStart = later->facts.fromPlayStart});
+        e.engine.stop();
+    }
+}
+
+TEST_CASE(
+    "a renderer that leaves an epoch before the callback waits for its verdict: logged once, "
+    "the capture not as heard (round 201 F2)" *
+    doctest::description("rt")) {
+    // The renderer applies cl_1 (bar 2) ahead; the transport is located
+    // after 2990 cycles (unheard) or 3010 (heard). With the test hook the
+    // renderer's leave acts as a timed-out wait for the callback: it applies
+    // nothing until the callback's end is known, then takes back by it. The
+    // callback's verdict is the only one: the log equals the in-callback
+    // run's (cl_1 once: placed again, or kept), the node plays what
+    // launch.state says, and the capture running across is not as heard.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const std::int64_t stop : {2990, 3010}) {
+        INFO("stopped after cycle " << stop);
+        std::string logs[2];
+        for (const bool ahead : {false, true}) {
+            INFO(std::string(ahead ? "anticipative, its leave late" : "in-callback"));
+            Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                     48000 * 6);
+            e.engine.play();
+            e.run(20);
+            e.engine.service();
+            REQUIRE(e.engine.captureLaunches(true));
+            (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+            e.run(stop);
+            e.engine.service();
+            EngineTestAccess::rendererLeaveLate(e.engine, ahead);
+            e.engine.seek(0.5);
+            e.run(e.done + 2);
+            e.engine.service();
+            EngineTestAccess::rendererLeaveLate(e.engine, false);
+            e.run(e.done + 8);
+            e.engine.service();
+            CHECK(e.node() == e.plays());
+            const auto capture = e.engine.launchCapture();
+            REQUIRE(capture);
+            if (ahead) CHECK(capture->facts.launchUnsettled);
+            e.run(e.done + 3000);
+            e.engine.service();
+            const auto log = e.engine.launchLog();
+            std::size_t cl1 = 0;
+            for (const LaunchLogEntry& le : log) cl1 += le.clip == id("cl_1");
+            CHECK(cl1 == 1);
+            logs[ahead] = describe(log);
+            e.engine.stop();
+        }
+        CHECK(logs[1] == logs[0]);
     }
 }

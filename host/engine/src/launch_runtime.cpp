@@ -496,6 +496,7 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
         slot->required.store(required, std::memory_order_relaxed);
         slot->epoch.store(placed->epoch, std::memory_order_relaxed);
         slot->target.store(placed->stream, std::memory_order_relaxed);
+        slot->key.store(INT64_MIN, std::memory_order_relaxed);
         slot->anchorSample.store(placed->anchorSample, std::memory_order_relaxed);
         slot->songFrame.store(placed->songFrame, std::memory_order_relaxed);
         slot->anchorBeat.store(placed->anchorBeat, std::memory_order_relaxed);
@@ -629,14 +630,15 @@ void Engine::takeBackNodes(detail::Plan& p, int liveClass, std::size_t c) SUPPLE
         // new one); a relocated switch-now of this epoch is recorded after.
         const std::uint64_t e = n.launchUndos[n.launchUndoCount - 1].epoch;
         const auto end = launchHeardEnd(c, e);
-        if (!end) {  // never expected: the callback has left it by now
+        // Unknown (its entry reused before this executor read it): taken as
+        // unheard, as the main thread takes it, and counted (round 201 F2).
+        if (!end) {
             launchTakeBackUnknown_.fetch_add(1, std::memory_order_relaxed);
-            detail::clearLaunchUndos(n);
+            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
             notifyMain();
-            continue;
         }
         bool inexact = false;
-        if (detail::takeBackLaunches(n, e, *end, &inexact) && inexact) {
+        if (detail::takeBackLaunches(n, e, end.value_or(INT64_MIN), &inexact) && inexact) {
             launchUndoLost_.fetch_add(1, std::memory_order_relaxed);
             notifyMain();
         }
@@ -648,11 +650,32 @@ void Engine::leaveLaunchEpoch(std::uint8_t mine, const detail::Plan* plan, std::
     for (LaunchSlot& s : *launchSlots_) {
         if (status(s.state.load(std::memory_order_acquire)) != LaunchSlot::kApplied) continue;
         if (s.epoch.load(std::memory_order_relaxed) != left) continue;
-        const model::Id track{model::Kind::Track,
-                              static_cast<std::uint32_t>(s.track.load(std::memory_order_relaxed))};
-        if (s.target.load(std::memory_order_relaxed) + launchShift(plan, track) >= end)
-            launchDone(s, mine);
+        if (slotKey(s, plan) >= end) launchDone(s, mine);
     }
+}
+
+std::int64_t Engine::slotKey(const LaunchSlot& s, const detail::Plan* plan) SUPPLE_RT {
+    if (const std::int64_t key = s.key.load(std::memory_order_acquire); key != INT64_MIN)
+        return key;
+    const model::Id track{model::Kind::Track,
+                          static_cast<std::uint32_t>(s.track.load(std::memory_order_relaxed))};
+    return s.target.load(std::memory_order_relaxed) + launchShift(plan, track);
+}
+
+bool Engine::settleLeave(detail::Plan& p, int liveClass) SUPPLE_RT {
+    const std::uint64_t left = launchLeavePending_;
+    auto end = heardEnd(left);
+    if (!end) {
+        if (heardEndsEntered_.load(std::memory_order_acquire) <= left) return false;  // not yet
+        end = INT64_MIN;  // reused before read: unheard, counted
+        launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+    }
+    launchLeavePending_ = UINT64_MAX;
+    launchLeftEpoch_[0] = left;
+    launchLeftEnd_[0] = *end;
+    leaveLaunchEpoch(1, &p, left, *end);
+    takeBackNodes(p, liveClass, 0);
+    return true;
 }
 
 void Engine::launchDone(LaunchSlot& slot, std::uint8_t mine) SUPPLE_RT {
@@ -684,7 +707,14 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     launchLastStream_[c] = stream;
     // A new epoch for this executor: what it applied in the one it left and
     // the listener did not hear goes back (ADR-0097, dated 2026-11-26).
-    if (!lastValid || lastEpoch != epoch) takeBackNodes(p, liveClass, c);
+    // The renderer's leave of an epoch the callback had not left (its wait
+    // timed out) waits for the callback's end: until then nothing applies
+    // and nothing is taken back (round 201 F2).
+    if (renderer && launchLeavePending_ != UINT64_MAX) {
+        if (!settleLeave(p, liveClass)) return k;
+    } else if (!lastValid || lastEpoch != epoch) {
+        takeBackNodes(p, liveClass, c);
+    }
     if (launchesQueued_.load() == 0) return k;
     std::int64_t soonest = INT64_MAX;
     for (LaunchSlot& slot : *launchSlots_) {
@@ -710,8 +740,10 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         const double anchorBeat = slot.anchorBeat.load(std::memory_order_relaxed);
         const std::int64_t songFrame = slot.songFrame.load(std::memory_order_relaxed);
         // Its switch frame, as heard (the track's channel's shift): what each
-        // target records to take back an unheard switch (LaunchUndo::key).
-        const std::int64_t key = target + launchShift(&p, track);
+        // target records to take back an unheard switch (LaunchUndo::key),
+        // set in the slot by the first executor to apply it and read by all
+        // (round 201 F2).
+        std::int64_t key = slotKey(slot, &p);
         // Switches this class's targets that `when` accepts. `relocated`: at
         // its first block after leaving the slot's epoch, as a relocation.
         const auto apply = [&](auto when, bool relocated) SUPPLE_RT {
@@ -749,6 +781,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 ack.anchorSample = anchorSample;
                 ack.anchorBeat = anchorBeat;
                 ack.songFrame = songFrame;
+                ack.key = key;
                 if ((renderer && dropRendererAcksForTests_.load(std::memory_order_relaxed)) ||
                     !(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack)) {
                     launchAcksDropped_.fetch_add(1, std::memory_order_relaxed);
@@ -767,14 +800,17 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 // Unless its switch was not heard: then this executor took
                 // back what it had applied (takeBackNodes), and the main
                 // thread places it again (ADR-0097, dated 2026-11-26).
+                // Unknown (reused before read): unheard, as the main thread
+                // takes it (round 201 F2).
                 const auto end = launchHeardEnd(c, slotEpoch);
-                if (end && key >= *end) {
-                    launchDone(slot, mine);
-                    continue;
-                }
                 if (!end) {
                     launchTakeBackUnknown_.fetch_add(1, std::memory_order_relaxed);
+                    launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
                     notifyMain();
+                }
+                if (!end || key >= *end) {
+                    launchDone(slot, mine);
+                    continue;
                 }
                 const bool ran = lastValid && lastEpoch == slotEpoch;
                 apply([&](std::int64_t at) { return !ran || at > lastStream; }, true);
@@ -839,6 +875,10 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 continue;  // voided, or rewritten
         }
         if (due && !repeat) {
+            // The first executor to apply it sets the key all record.
+            std::int64_t unset = INT64_MIN;
+            if (!slot.key.compare_exchange_strong(unset, key, std::memory_order_acq_rel))
+                key = unset;
             forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
                 if (feed) return;
                 const std::int64_t at = target + n.timelineShift;
@@ -881,11 +921,10 @@ bool Engine::unheardApplied(const LaunchSlot& s) const {
     const std::uint64_t e = s.epoch.load();
     if (e >= epoch_.load(std::memory_order_acquire)) return false;  // its epoch runs on
     const auto end = heardEnd(e);
-    // Not left by the callback yet: undecided. Reused (8 epochs on): heard.
-    if (!end) return heardEndsEntered_.load(std::memory_order_acquire) <= e;
-    const model::Id track{model::Kind::Track, static_cast<std::uint32_t>(s.track.load())};
-    return s.target.load() + launchShift(latestPlan_.load(std::memory_order_acquire), track) >=
-           *end;
+    // Not left by the callback yet: undecided. Reused before read (64 epochs
+    // on): unheard, as the executors take it (round 201 F2).
+    if (!end) return true;
+    return slotKey(s, latestPlan_.load(std::memory_order_acquire)) >= *end;
 }
 
 void Engine::takeBackUnheard() {
@@ -898,10 +937,17 @@ void Engine::takeBackUnheard() {
         const LaunchLogEntry& e = launchLog_[i];
         if (e.epoch >= current) continue;
         const auto end = heardEnd(e.epoch);
-        if (!end || e.runningFrame + launchShift(plan, e.track) < *end) continue;
+        if (!end) {
+            if (heardEndsEntered_.load(std::memory_order_acquire) <= e.epoch) continue;  // not yet
+            // Reused before read: unheard, as the executors take it.
+            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+        } else if (launchKeys_[i] < *end) {
+            continue;
+        }
         if (launchIsReturn_[i]) returned.push_back(e.track);
         launchLog_.erase(launchLog_.begin() + static_cast<std::ptrdiff_t>(i));
         launchIsReturn_.erase(launchIsReturn_.begin() + static_cast<std::ptrdiff_t>(i));
+        launchKeys_.erase(launchKeys_.begin() + static_cast<std::ptrdiff_t>(i));
         removed = true;
     }
     // A return comes from a plan, which the stop does not take back: the
@@ -926,6 +972,7 @@ void Engine::takeBackUnheard() {
         if (placed->stream != 0) noteReturnGuess(r.epoch, r.songFrame);
         launchLog_.push_back(r);
         launchIsReturn_.push_back(1);
+        launchKeys_.push_back(0);  // the epoch's first frame, as heard
     }
     if (removed) sortLaunchLog();
     // The slots: voided once every executor is done with them (each took
@@ -934,7 +981,9 @@ void Engine::takeBackUnheard() {
     for (LaunchSlot& s : *launchSlots_) {
         std::uint64_t st = s.state.load(std::memory_order_acquire);
         if (status(st) != LaunchSlot::kApplied || !unheardApplied(s)) continue;
-        if (!heardEnd(s.epoch.load())) continue;  // undecided yet
+        if (!heardEnd(s.epoch.load()) &&
+            heardEndsEntered_.load(std::memory_order_acquire) <= s.epoch.load())
+            continue;  // undecided yet
         const std::uint8_t need = s.required.load();
         if ((s.done.load(std::memory_order_acquire) & need) != need) continue;  // next service
         (void)s.state.compare_exchange_strong(st, with(st, LaunchSlot::kVoided));
@@ -942,6 +991,13 @@ void Engine::takeBackUnheard() {
 }
 
 void Engine::judgeAckDrops() {
+    // A verdict that came late or was taken as unheard (round 201 F2): the
+    // capture there is not as heard (launch_unsettled).
+    if (const auto unsettled = launchUnsettled_.load(std::memory_order_relaxed);
+        unsettled != launchUnsettledSeen_) {
+        launchUnsettledSeen_ = unsettled;
+        if (capture_.any && !capture_.pending) capture_.facts.launchUnsettled = true;
+    }
     for (auto& ring : launchAckDrops_) {
         AckDrop d;
         while (ring->pop(d)) launchAckDropsWaiting_.push_back(d);
@@ -1001,6 +1057,7 @@ void Engine::serviceLaunches() {
                 e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
             launchIsReturn_.push_back(0);
+            launchKeys_.push_back(ack.key);
         }
     }
     if (added) sortLaunchLog();  // the two executors' acks interleave
@@ -1112,6 +1169,7 @@ void Engine::serviceLaunches() {
             r.epoch = placed->epoch;
             launchLog_.push_back(r);
             launchIsReturn_.push_back(1);
+            launchKeys_.push_back(r.runningFrame + launchShift(plan, track));
             noteReturnGuess(r.epoch, r.songFrame);
             any = true;
         }
@@ -1763,6 +1821,20 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         out.launches.push_back(in);
     };
     for (const LaunchLogEntry& e : launchLog_) within(e);
+    // A launch it lists from an epoch that has ended while the callback has
+    // not left it yet, at or past what was played there: whether it was heard
+    // is not known, so the capture is not as heard (round 201,
+    // launch_unsettled; its key carries the channel's shift, as the
+    // take-back's does).
+    if (capture_.epoch < epoch_.load(std::memory_order_acquire) && !heardEnd(capture_.epoch) &&
+        heardEndsEntered_.load(std::memory_order_acquire) <= capture_.epoch) {
+        const std::int64_t played = playedStream(capture_.epoch);
+        for (std::size_t i = 0; i < launchLog_.size(); ++i) {
+            const LaunchLogEntry& e = launchLog_[i];
+            if (e.epoch == capture_.epoch && e.songFrame < end && launchKeys_[i] >= played)
+                out.facts.launchUnsettled = true;
+        }
+    }
     std::stable_sort(out.launches.begin() + static_cast<std::ptrdiff_t>(firsts), out.launches.end(),
                      [](const LaunchLogEntry& a, const LaunchLogEntry& b) {
                          return a.runningFrame < b.runningFrame;
@@ -1784,6 +1856,7 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
         // node switches its input timelineShift frames behind the stream:
         // round 176 F2).
         ack.stream = stream - n.timelineShift;
+        ack.key = ack.stream + n.timelineShift;  // as heard (LaunchSlot::key)
         ack.returned = true;
         ack.generation = next.generation;
         if (!(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack))
@@ -1821,6 +1894,7 @@ void Engine::ackClassMoves(const detail::Plan& old, const detail::Plan* skipped,
         ack.epoch = epoch;
         ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
         ack.stream = stream - n.timelineShift;
+        ack.key = ack.stream + n.timelineShift;  // as heard (LaunchSlot::key)
         ack.returned = true;
         ack.generation = next.generation;
         if (!callbackLaunchAcks_->push(ack))
@@ -1846,6 +1920,7 @@ void Engine::ackSkipped(detail::Plan& skipped) SUPPLE_RT {
         ack.epoch = skipped.handEpoch;
         ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
         ack.stream = skipped.handAt - n.timelineShift;
+        ack.key = ack.stream + n.timelineShift;  // as heard (LaunchSlot::key)
         ack.returned = true;
         ack.generation = skipped.generation;
         if (!callbackLaunchAcks_->push(ack))
@@ -1876,14 +1951,18 @@ void Engine::sortLaunchLog() {
     });
     std::vector<LaunchLogEntry> log;
     std::vector<std::uint8_t> returns;
+    std::vector<std::int64_t> keys;
     log.reserve(order.size());
     returns.reserve(order.size());
+    keys.reserve(order.size());
     for (const std::size_t i : order) {
         log.push_back(launchLog_[i]);
         returns.push_back(launchIsReturn_[i]);
+        keys.push_back(launchKeys_[i]);
     }
     launchLog_ = std::move(log);
     launchIsReturn_ = std::move(returns);
+    launchKeys_ = std::move(keys);
 }
 
 std::vector<model::Id> Engine::tracksLosingLaunch(const detail::Plan* plan) const {
@@ -1961,6 +2040,7 @@ void Engine::logReturn(const LaunchAck& ack) {
     if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.edited = true;
     launchLog_.push_back(r);
     launchIsReturn_.push_back(1);
+    launchKeys_.push_back(ack.key);
 }
 
 std::vector<model::Id> Engine::clipsSkipped() const {

@@ -2728,7 +2728,8 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
     if (t.seekSeq != seekSeen_) {
         seekSeen_ = t.seekSeq;
         pos_ = t.seekSample;
-        if (undos && backend_->ownsThread()) {
+        if (undos && backend_->ownsThread() &&
+            !rendererLeaveLateForTests_.load(std::memory_order_relaxed)) {
             const auto deadline = std::chrono::steady_clock::now() + rendererSafetyTimeout();
             for (;;) {
                 const auto event = rendererEvent_.load(std::memory_order_acquire);
@@ -2763,9 +2764,31 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         }
         pos_ = playedPosition(previous, epochStartLocal_);
     }
-    launchLeftEpoch_[0] = previous;
-    launchLeftEnd_[0] = playedStream(previous);
-    leaveLaunchEpoch(1, plan_, previous, launchLeftEnd_[0]);
+    // Where hearing ended in the epoch left: the callback's end once it has
+    // left it; with a manual backend, whose callback runs only when told,
+    // what it consumed is final already. Unknown (the wait timed out, or the
+    // test hook): settled once the callback's end is known, nothing applied
+    // or taken back until then (settleLeave; round 201 F2).
+    std::optional<std::int64_t> leftEnd;
+    if (rendererLeaveLateForTests_.load(std::memory_order_relaxed))
+        leftEnd = std::nullopt;
+    else if (!backend_->ownsThread())
+        leftEnd = playedStream(previous);
+    else
+        leftEnd = heardEnd(previous);
+    if (leftEnd) {
+        launchLeftEpoch_[0] = previous;
+        launchLeftEnd_[0] = *leftEnd;
+        leaveLaunchEpoch(1, plan_, previous, *leftEnd);
+    } else {
+        launchLeavePending_ = previous;
+        // What it renders meanwhile may still hold a switch that was not
+        // heard: a capture over it is not as heard.
+        if (undos) {
+            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+            notifyMain();
+        }
+    }
     if (plan_) {
         detail::locateClass(*plan_, pos_, false);
         resetOwned(processing_, plan_);

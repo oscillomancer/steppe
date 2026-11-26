@@ -423,9 +423,13 @@ instructions are in `docs/guides/installing.md`.
     - a launch applied ahead (by the anticipative renderer, or its early
       half in callback) and not heard before a pause or seek is taken
       back and placed again at the next play, and leaves the log
-      (ADR-0097, revision 2026-11-26); a capture committed within one
-      device period of the stop, before the callback has seen the new
-      epoch, can still hold such a launch.
+      (ADR-0097, revision 2026-11-26); a capture read before the
+      callback has left the stopped epoch (about one device period) is
+      not as heard while it lists a launch of that epoch whose verdict is
+      not in (`launch_unsettled`), and so is one over a renderer leave
+      that came before the callback's (a timed-out wait) or an end reused
+      before it was read; the GUI's as-heard line does not word
+      `launch_unsettled` yet (gui-lead).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

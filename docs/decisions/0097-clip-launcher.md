@@ -1383,6 +1383,16 @@ them again in order at the next play. Every kind of slot is judged alike; a drop
 unheard slot is not `launch_unlogged`; a stop exactly at the switch frame is unheard. engine.md
 §1.4.2 and §3.1 have the rules.
 
+Review round 201 (same date) found that an early half's record, undone, also undid a heard switch
+made after it, and that the executors and the main thread judged "heard" from different sources (an
+eight-entry ring read as "reused = heard", the renderer's own count after a timed-out wait, each
+side's plan for the shift). Decided: an early half's record restores only that half; one verdict per
+slot, from one end (the callback's, published per epoch in a ring of 64) and one key (set in the
+slot by the first executor to apply it); an end not known is taken as unheard, and a renderer whose
+wait timed out applies and takes back nothing until the callback's end is known; a capture that
+lists a launch whose verdict is not in, or that ran over such a late or taken-as-unheard verdict, is
+not as heard (`launch_unsettled`).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

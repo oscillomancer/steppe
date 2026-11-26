@@ -199,6 +199,7 @@ struct EngineTestAccess {
     // The renderer's launch acks dropped as by a full ring (ADR-0097, dated
     // 2026-11-26: judged once their switch is known to be heard).
     static void dropRendererAcks(Engine& e, bool on) { e.dropRendererAcksForTests_.store(on); }
+    static void rendererLeaveLate(Engine& e, bool on) { e.rendererLeaveLateForTests_.store(on); }
     // A track's channel's shift in the latest plan (its launches' switch
     // frame is their target plus it).
     static std::int64_t launchShift(const Engine& e, model::Id track) {
