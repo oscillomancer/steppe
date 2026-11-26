@@ -564,7 +564,16 @@ Kind: `action`. Exposure: `mcp-exec`.
                   "type": "string"
                 },
                 "reason": {
-                  "type": "string"
+                  "type": "string",
+                  "enum": [
+                    "source",
+                    "cycle",
+                    "limit",
+                    "source_removed",
+                    "target_removed",
+                    "source_unfit",
+                    "target_unfit"
+                  ]
                 }
               },
               "required": ["code", "message", "path", "hint", "track", "file"],

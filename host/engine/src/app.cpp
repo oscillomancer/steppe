@@ -763,7 +763,7 @@ std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToL
     std::vector<RouteNotCopied> out;
     const auto copied = txn.takeCopiedRoutes();
     if (copied.empty()) return out;
-    const auto drop = [&](model::Id made, model::Id original, std::string reason,
+    const auto drop = [&](model::Id made, model::Id original, model::RouteWarningReason reason,
                           const std::string& why, const std::string& remedy) {
         const model::Modulation* m = txn.get<model::Modulation>(made);
         if (!m) return;
@@ -782,7 +782,8 @@ std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToL
         if (!m) continue;  // the command removed it again
         const model::RackModule* module = txn.get<model::RackModule>(m->source.module);
         if (!module || module->type != model::kModOutModule)
-            drop(made, original, "source", "its source " + m->source.module.str() + " is not here",
+            drop(made, original, model::RouteWarningReason::Source,
+                 "its source " + m->source.module.str() + " is not here",
                  "route again with modulation.add once a Mod Out exists");
         else
             sourced.emplace_back(made, original);
@@ -794,7 +795,7 @@ std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToL
     std::vector<std::pair<model::Id, model::Id>> placed;
     for (const auto& [made, original] : sourced)
         if (std::find(closing.begin(), closing.end(), made) != closing.end())
-            drop(made, original, "cycle",
+            drop(made, original, model::RouteWarningReason::Cycle,
                  "it would close a cycle, the copy's track feeding "
                  "the source's rack",
                  "modulate from a rack that the copy's track does not feed");
@@ -804,7 +805,7 @@ std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToL
     if (trimToLimit) {
         std::size_t count = txn.preview().modulations.size();
         while (!placed.empty() && count > model::kMaxModulations) {
-            drop(placed.back().first, placed.back().second, "limit",
+            drop(placed.back().first, placed.back().second, model::RouteWarningReason::Limit,
                  "the project holds at most " + std::to_string(model::kMaxModulations) + " routes",
                  "remove routes, then add it again with modulation.add");
             placed.pop_back();
@@ -4162,7 +4163,8 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakesNow(const std::vector<Re
                 ev["hint"] = w.hint;
                 ev["track"] = track;
                 ev["file"] = w.file.empty() ? info.file : w.file;
-                if (w.reason) ev["reason"] = *w.reason;  // the code's cause, as a command's has
+                if (w.reason)  // the code's cause, as a command's has
+                    ev["reason"] = std::string(model::reasonWord(*w.reason));
                 emit("record.warning", std::move(ev));
             }
         }

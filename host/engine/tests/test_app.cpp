@@ -6955,7 +6955,7 @@ TEST_CASE(
     const auto dropped = settleCopiedRoutes(t, true);
     REQUIRE(dropped.size() == 1);
     CHECK(dropped[0].original == original);
-    CHECK(dropped[0].reason == "limit");
+    CHECK(dropped[0].reason == model::RouteWarningReason::Limit);
     CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
     CHECK_FALSE(t.exists<model::Modulation>(made));
     CHECK(t.preview().modulations.size() == model::kMaxModulations);
@@ -6969,6 +6969,6 @@ TEST_CASE(
     u.copiedRoute(strayCopy, original);
     const auto unsourced = settleCopiedRoutes(u, false);
     REQUIRE(unsourced.size() == 1);
-    CHECK(unsourced[0].reason == "source");
+    CHECK(unsourced[0].reason == model::RouteWarningReason::Source);
     CHECK_FALSE(u.exists<model::Modulation>(strayCopy));
 }

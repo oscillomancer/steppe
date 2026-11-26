@@ -2372,7 +2372,8 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.not_copied` (M5) carries no hint, so its message holds the
   remedy.
   Each warning that has more than one cause carries `reason`, a fixed word
-  for it (command-bus.md), so a client tells the causes apart without the
+  for it (command-bus.md; in code `model::kRouteWarningReasons`, which a
+  test holds to this list), so a client tells the causes apart without the
   model or the message:
   - `modulation.not_copied`: `source` (the copy's source Mod Out is not in
     the destination), `cycle` (the copy's track would feed the source's

@@ -186,7 +186,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             if (app.inTransaction()) {
                 for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
                     ctx.warn("modulation.not_copied", d.message, "/modulations/" + d.original.str(),
-                             d.reason);
+                             std::string(model::reasonWord(d.reason)));
                 const std::size_t routes = app.txn().preview().modulations.size();
                 if (routes > model::kMaxModulations && routes > before.modulations.size())
                     return Error("modulation.limit",
@@ -225,12 +225,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             // whose target stopped fitting (a send turned MIDI) goes here.
             if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
                 const auto removed = [&](model::Id route, const model::Modulation& m,
-                                         const std::string& why, const char* reason) {
+                                         const std::string& why, model::RouteWarningReason reason) {
                     ctx.warn("modulation.removed",
                              route.str() + " (" + m.source.module.str() + "." + m.source.input +
                                  " to " + m.target.object.str() + " " + m.target.param +
                                  ") was removed: " + why,
-                             "/modulations/" + route.str(), reason);
+                             "/modulations/" + route.str(), std::string(model::reasonWord(reason)));
                 };
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
@@ -240,14 +240,13 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     const model::Modulation& m = *e.value;
                     if (after.modules.contains(m.source.module))
                         removed(e.id, m, "its target " + m.target.object.str() + " was removed",
-                                "target_removed");
+                                model::RouteWarningReason::TargetRemoved);
                     else
                         removed(e.id, m, "its source " + m.source.module.str() + " was removed",
-                                "source_removed");
+                                model::RouteWarningReason::SourceRemoved);
                 }
                 for (const model::StrandedModulation& d : model::strandedModulations(after)) {
-                    removed(d.route, *after.modulations.find(d.route), d.why,
-                            d.atSource ? "source_unfit" : "target_unfit");
+                    removed(d.route, *after.modulations.find(d.route), d.why, d.reason());
                     app.txn().remove<model::Modulation>(d.route);
                 }
             }
