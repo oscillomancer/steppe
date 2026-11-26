@@ -400,6 +400,15 @@ until it is released.
     - **Why.** The grid point at or before the onset then always falls
       inside a block the chain runs. Its sum reaches the onset at any block
       size, in both executors.
+    - **A stage that smooths.** The value at the onset is exact at any
+      block size, but the grid values before it are sent from the entry,
+      which falls on a block boundary. So a stage with memory (parameter
+      smoothing) gives an output after the onset that depends on the block
+      size, and after an off-grid loop wrap on the pass's alignment; live
+      equals offline at the same alignment (review round 193, measured with
+      a gain smoothed over 64 frames). So the tests stay on the memoryless
+      gain: the early entry after a wrap (S2) and a switch's entry (G1) are
+      covered, not proved by a red run (STATUS).
     - **Item chains.** Every branch where `processTake` decides that the
       chain meets its item (unity, the early wrap, the playrate path)
       widens the input end by `kAutomationStep`.

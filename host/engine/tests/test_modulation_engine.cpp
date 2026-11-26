@@ -2007,7 +2007,14 @@ TEST_CASE("modulation: a latent take chain's route across a loop's early wrap (M
     // the 32-frame grid start the blocks of each later pass off it too;
     // these put a block's end (at 128 and at 512, in pass 2 or 3) off the
     // grid between the entry's frame and the onset's, 80 and 48 frames
-    // before the loop end.
+    // before the loop end. The target is the memoryless gain: a stage that
+    // smooths remembers every grid value sent between the chain's entry,
+    // at a block boundary, and the onset, so its output after the onset
+    // depends on the block size and, after an off-grid wrap, on the pass's
+    // alignment, and no pass could equal the span exactly (review round 193:
+    // measured with a gain smoothed over 64 frames, offline at 37 and 512
+    // against 128 differ from the onset; live equals offline at one
+    // alignment).
     ConstantFile file;
     const TakeRoute route(file, "beat_phase", 0.2, true);
     constexpr std::int64_t kLoopStart = 12224;
