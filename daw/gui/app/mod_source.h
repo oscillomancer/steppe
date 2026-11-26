@@ -51,8 +51,9 @@ void showModSource(AppActions& actions, model::Id route);
 
 // A control's parameter menu rows (none without a route on `target`):
 // "Show modulation source" for one route; for several, one row each,
-// "Show modulation source: LFO (Modulators)". In every menu of routes, two
-// that read the same also name their Mod Out input ("LFO (Modulators) · Mod 2").
+// "Show modulation source: LFO (Modulators)". In every menu of routes no two
+// rows read the same: the Mod Out input tells two same-named sources apart
+// ("LFO (Modulators) · Mod 2"), then the rack's place two same-named racks.
 std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Session& s,
                                          const rack::Catalog* catalog,
                                          const model::EnvTarget& target);

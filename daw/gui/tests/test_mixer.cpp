@@ -27,6 +27,7 @@
 #include "audio_device.h"
 #include "meter_feed.h"
 #include "mixer.h"
+#include "mod_source.h"
 #include "preferences.h"
 #include "selection_edit.h"
 #include "supple/base/files.h"
@@ -4246,4 +4247,47 @@ TEST_CASE("preferences: malformed MIDI records do not block GUI startup") {
     CHECK_FALSE(loaded->midiInputs.contains("Bad"));
     CHECK_FALSE(engine::midiPortSettings(loaded->midiOutputs, "Good").enabled);
     CHECK(engine::midiPortSettings(loaded->midiInputs, "Good").offsetMs == 5);
+}
+
+TEST_CASE("mixer: route rows from two racks that read the same still differ") {
+    // gui.md §2: no two rows of a menu of routes are alike. Two racks may
+    // carry one name (rack.set takes any), and their first routes both use
+    // their Mod Out's in_1: each rack's place among racks of that name.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const std::string first = made["rack"].asString();
+    const std::string name = model::rackLabel(f.app->head(), *model::Id::parse(first));
+    const std::string second =
+        f.exec("rack.add", R"({"track":")" + a + R"(","name":")" + name + R"("})")["rack"]
+            .asString();
+    const std::string modOut =
+        f.exec("module.add", R"({"rack":")" + second + R"(","type":"mod_out"})")["module"]
+            .asString();
+    json::Value lfo = f.exec("module.add", R"({"rack":")" + second + R"(","type":"lfo"})");
+    f.exec("cable.add", R"({"from":")" + lfo["module"].asString() + "." +
+                            lfo["outputs"].asArray().front().asString() + R"(","to":")" + modOut +
+                            R"(.in_1"})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_1"},"target":{"track":")" + a +
+                                 R"(","param":"volume"},"depth":2})");
+    std::vector<std::string> removes;
+    for (const auto& item :
+         gui::modRemoveItems(*f.actions, f.app->head(), nullptr, {*model::Id::parse(a), "volume"}))
+        removes.push_back(item.label);
+    REQUIRE(removes.size() == 2);
+    CHECK(removes[0] != removes[1]);
+    CHECK(removes[0].ends_with(" · Mod 1 · rack 1"));
+    CHECK(removes[1].ends_with(" · Mod 1 · rack 2"));
+    // Renamed apart, the names alone tell them apart again.
+    f.exec("rack.set", R"({"rack":")" + second + R"(","name":"Second"})");
+    removes.clear();
+    for (const auto& item :
+         gui::modRemoveItems(*f.actions, f.app->head(), nullptr, {*model::Id::parse(a), "volume"}))
+        removes.push_back(item.label);
+    REQUIRE(removes.size() == 2);
+    CHECK(removes[0].find("·") == std::string::npos);
+    CHECK(removes[1].ends_with(" (Second)"));
 }
