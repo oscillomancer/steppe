@@ -93,6 +93,7 @@ struct Fixture {
         fonts = *f;
         engine::AppOptions options;
         options.workdir = dir;
+        options.pluginPath = {std::filesystem::path(SUPPLE_CLAP_DIR)};  // the stock plug-ins only
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -594,6 +595,40 @@ TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' 
     f.ui.selectedTracks = {bass, keys};
     f.pass();
     CHECK_FALSE(f.inView("inspector.row.track.modulation"));
+}
+
+TEST_CASE("inspector: a track's Modulation row lists its input chain's routes") {
+    // gui.md §4.14: "its effects' parameters (chain and input chain)".
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string fx =
+        f.exec("fx.add", R"({"track":")" + bass + R"(","plugin":"Hickory","chain":"input"})")["fx"]
+            .asString();
+    std::string param;
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.pass();
+    REQUIRE(f.inView("inspector.row.track.modulation"));
+    auto* line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO");
 }
 
 TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the bar's meter") {

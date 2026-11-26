@@ -68,7 +68,7 @@ std::vector<model::Id> modRoutesOfTrack(const model::Session& s, model::Id track
         const model::Route* send =
             object.kind == model::Kind::Route ? s.routes.find(object) : nullptr;
         if (object == track ||
-            (object.kind == model::Kind::Fx && model::trackOfFx(s, object) == track) ||
+            (object.kind == model::Kind::Fx && model::trackOfChainFx(s, object) == track) ||
             (send && send->from.track == track))
             out.push_back(m.id);
     }
