@@ -66,6 +66,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "tap_tempo_button.h"
 #include "transport_bar.h"
 #include "ui_persistence.h"
@@ -6549,5 +6550,19 @@ TEST_CASE("input menu: a rack's Out that would loop a modulation is refused in t
     CHECK(error.find("parent send") == std::string::npos);
     for (const char* id : {"tr_", "mr_", "rk_", "mo_", "modulation."})
         CHECK(error.find(id) == std::string::npos);
+    // With the parent send turned off in the same edit (a macro's or an
+    // agent's), the refusal is still the rack's Out's (round 200 F3): a
+    // parent send turned off makes no edge.
+    auto both = a.dispatcher->execute(
+        {"track.set",
+         *json::parse(R"({"track":")" + cee + R"(","parent_send":false,"record_rack":")" + out +
+                      R"("})"),
+         origin});
+    REQUIRE_FALSE(both);
+    CHECK(both.error().path == "/args/record_rack");
+    const std::string said =
+        views::modulationRefusal(a.app->head(), "track.set", both.error()).message;
+    CHECK(said.starts_with("Taking that rack's Out as the input would loop its modulation"));
+    CHECK(a.app->head().version == version);
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }

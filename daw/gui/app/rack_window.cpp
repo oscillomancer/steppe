@@ -818,8 +818,9 @@ Result<json::Value> RackWindow::exec(const std::string& command, json::Value arg
     cmd::Origin origin = kOrigin;
     origin.gesture = gesture;
     auto r = dispatcher_.execute({command, std::move(args), origin});
-    // A Notes source, Hear MIDI sends, a Notes module added or a rack's
-    // home that would loop a modulation, in the GUI's words (gui.md §2).
+    // A Notes source, Hear MIDI sends, a Notes module added, a patch loaded
+    // or a rack's home that would loop a modulation, in the GUI's words
+    // (gui.md §2).
     if (!r) report(views::modulationRefusal(app_.head(), command, r.error()));
     return r;
 }
@@ -1821,7 +1822,9 @@ Status RackWindow::paste(ui::Point sp) {
     args["x"] = std::round(static_cast<double>(sp.x));
     args["y"] = std::round(static_cast<double>(sp.y));
     auto r = dispatcher_.execute({"rack.paste", std::move(args), kOrigin});
-    if (!r) return std::move(r).error();
+    // A pasted Notes module that would loop a modulation, in the GUI's
+    // words (gui.md §2); the callers report it.
+    if (!r) return views::modulationRefusal(app_.head(), "rack.paste", std::move(r).error());
     std::set<model::Id> made;
     if (const auto* ids = r->find("modules"); ids && ids->isArray())
         for (const auto& x : ids->asArray())

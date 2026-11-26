@@ -5798,13 +5798,16 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
                                                   {"module.add", ""},
                                                   {"module.set", ""},
                                                   {"rack.set", ""},
+                                                  {"rack.paste", ""},
+                                                  {"rack.preset.load", ""},
                                                   {"track.remove", ""}};
     // Those that declare one and the GUI does not run with routes to copy:
     // take.add {from} only in the --generate demo, the consolidation's commit
     // inside its job (its refusal is the job's, said as item.consolidate's),
-    // and the route commands, which keep their own words.
-    const std::set<std::string> notRun{"take.add", "item.consolidate.commit", "modulate",
-                                       "modulation.add", "modulation.set"};
+    // rack.patch (an agent's: the rack window adds modules one by one), and
+    // the route commands, which keep their own words.
+    const std::set<std::string> notRun{"take.add", "item.consolidate.commit", "rack.patch",
+                                       "modulate", "modulation.add",          "modulation.set"};
     const std::set<std::string> m5{"modulation.limit", "modulation.cycle", "item.heal_fx"};
     const char* text = "engine text tr_3 it_4";
     const char* hint = "a hint for command callers";
@@ -5879,7 +5882,8 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
          "channels, never its ends"},
         {{"route.set", "/from"}, "as /to"},
         {{"route.set", "/fx"}, "as /to"},
-        {{"module.add", "/source"}, "Add module gives no source (the module plays its home)"}};
+        {{"module.add", "/source"}, "Add module gives no source (the module plays its home)"},
+        {{"rack.patch", "/modules"}, "the rack window never patches; it adds modules one by one"}};
     const std::set<std::string> takeMoves{"item.move", "clip.move", "take.extract",
                                           "item.explode-takes"};
     std::map<std::string, std::set<std::string>> argumentsOf, wordsOf;
@@ -5923,7 +5927,7 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
         argumentsOf[command].insert(at);
         wordsOf[command].insert(*words);
     }
-    CHECK(rows >= 26);
+    CHECK(rows >= 29);
     // Each argument of a command reads apart (track.set's parent send is not
     // its rack's Out; route.add's send is not its key route).
     for (const auto& [command, arguments] : argumentsOf) {
@@ -5948,8 +5952,8 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
         {"rack_device.cpp", "its exec hook, which the FX window words (its knobs' params only)"},
     };
     // Where a command listed as not run may be named.
-    const std::map<std::string, std::set<std::string>> notRunAt{{"take.add", {"generate.cpp"}},
-                                                                {"item.consolidate.commit", {}}};
+    const std::map<std::string, std::set<std::string>> notRunAt{
+        {"take.add", {"generate.cpp"}}, {"item.consolidate.commit", {}}, {"rack.patch", {}}};
     std::size_t scanned = 0;
     for (const char* dir : {"app", "views/src"})
         for (const auto& entry : std::filesystem::directory_iterator(gui / dir)) {

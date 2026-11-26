@@ -116,6 +116,14 @@ constexpr CycleWords kCycleWords[] = {
      "Moving the rack's home there would loop its modulation: its Notes "
      "module would hear what the rack modulates.",
      "Keep it on its channel"},
+    {"rack.paste", "rack",
+     "A pasted Notes module would loop its modulation: it would hear a MIDI "
+     "send from what the rack modulates.",
+     "Paste into another rack or remove that MIDI send"},
+    {"rack.preset.load", "rack",
+     "The patch's Notes module would loop its modulation: it plays the "
+     "rack's channel, which a MIDI send from what the rack modulates reaches.",
+     "Load it into another rack or remove that MIDI send"},
     {"track.remove", "track",
      "Deleting the track would loop its modulation: the Notes modules "
      "that played it would play their rack's channel instead and hear "

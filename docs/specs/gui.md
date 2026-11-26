@@ -386,12 +386,17 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   Notes module's Plays track (`module.set` `source`: "Playing that track
   would loop its modulation: a MIDI send from what the rack modulates
   reaches it. …"), Hear MIDI sends (`source_sends`), Add module Notes
-  (`module.add`, playing the rack's channel) and the tab's Home:
-  (`rack.set`); and Track: delete selected or the track menu's Delete
+  (`module.add`, playing the rack's channel), the tab's Home:
+  (`rack.set`), Paste (`rack.paste`: "A pasted Notes module would loop its
+  modulation: it would hear a MIDI send from what the rack modulates.
+  Paste into another rack or remove that MIDI send, …") and a patch's Load
+  into rack (`rack.preset.load`); and Track: delete selected or the track menu's Delete
   (`track.remove`) when a Notes module that played the track would then
   play its rack's channel and hear what the rack modulates. Each row of
   session-model's table of the edits that can close a cycle has words, by
-  its command and argument; any other command keeps its own words), and `item.heal_fx` from **Heal splits**
+  its command and argument, the argument the engine picks by the edge the
+  edit made (`track.set` with the parent send turned off and a rack's Out
+  is the rack's Out's); any other command keeps its own words), and `item.heal_fx` from **Heal splits**
   ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
   them match (…), or consolidate them instead."). The warnings, which have
   no registry (session-model lists them), go to the status line as a note
@@ -443,8 +448,8 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   declaring it, it cannot see. The cycle refusals it walks by
   session-model's table, row by row: each row has words that name no take
   unless a take moves, the rows of one command read apart, and a row the
-  GUI does not dispatch (`route.set`'s ends, `module.add` with a source) is
-  listed as such, so a new row fails until it is one or the other.
+  GUI does not dispatch (`route.set`'s ends, `module.add` with a source,
+  `rack.patch`, which the GUI never runs) is listed as such, so a new row fails until it is one or the other.
   Another test takes every reason in
   `model::kRouteWarningReasons` and checks each has words other than the
   plain sentence.
