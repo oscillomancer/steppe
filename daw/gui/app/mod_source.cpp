@@ -14,6 +14,8 @@ namespace supple::gui {
 
 namespace {
 
+const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
+
 // The cables into the route's Mod Out input, in id order.
 std::vector<model::Id> feeders(const model::Session& s, const model::Modulation& m) {
     std::vector<std::pair<model::Id, model::Id>> found;  // cable, module
@@ -96,6 +98,30 @@ std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Sessi
                              ? std::string("Show modulation source")
                              : "Show modulation source: " + modRouteLabel(s, catalog, route),
                          "", [a, route] { showModSource(*a, route); }});
+    return items;
+}
+
+std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Session& s,
+                                         const rack::Catalog* catalog,
+                                         const model::EnvTarget& target) {
+    std::vector<ui::MenuItem> items;
+    AppActions* a = &actions;
+    for (model::Id route : views::routesOn(s, target))
+        items.push_back({"Remove modulation: " + modRouteLabel(s, catalog, route), "", [a, route] {
+                             json::Value args = json::Value::object();
+                             args["modulation"] = route.str();
+                             const auto r = a->dispatcher().execute(
+                                 {"modulation.remove", std::move(args), kOrigin});
+                             if (!r && a->onError) a->onError(r.error().message);
+                         }});
+    return items;
+}
+
+std::vector<ui::MenuItem> modRouteItems(AppActions& actions, const model::Session& s,
+                                        const rack::Catalog* catalog,
+                                        const model::EnvTarget& target) {
+    auto items = modSourceItems(actions, s, catalog, target);
+    for (auto& item : modRemoveItems(actions, s, catalog, target)) items.push_back(std::move(item));
     return items;
 }
 

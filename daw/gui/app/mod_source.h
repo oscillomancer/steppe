@@ -56,6 +56,18 @@ std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Sessi
                                          const rack::Catalog* catalog,
                                          const model::EnvTarget& target);
 
+// "Remove modulation: LFO (Modulators)": one row per route on `target`, by
+// source, each one modulation.remove (one undo step); its refusal goes to
+// actions.onError. None without a route.
+std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Session& s,
+                                         const rack::Catalog* catalog,
+                                         const model::EnvTarget& target);
+// What a parameter menu lists for `target`'s routes, in every menu alike:
+// the source rows, then the remove rows.
+std::vector<ui::MenuItem> modRouteItems(AppActions& actions, const model::Session& s,
+                                        const rack::Catalog* catalog,
+                                        const model::EnvTarget& target);
+
 // One route on `target`: its source at once; several: a menu of them at
 // `anchor` (window coordinates); none: nothing.
 void openModSource(ui::Root& root, AppActions& actions, const model::Session& s,

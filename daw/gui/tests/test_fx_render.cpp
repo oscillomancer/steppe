@@ -122,9 +122,9 @@ struct Fixture {
             return actions->key(e.key, e.mods, typing, gui::keySections(source));
         };
         gui::FxWindow::Hooks hooks;
-        // The parameter menu's "Show modulation source" rows, as the app gives them.
+        // The parameter menu's source and remove rows, as the app gives them.
         hooks.sourceItems = [this](const model::EnvTarget& target) {
-            return gui::modSourceItems(*actions, app->head(), nullptr, target);
+            return gui::modRouteItems(*actions, app->head(), nullptr, target);
         };
         fx = std::make_unique<gui::FxWindow>(*app, *dispatcher, *root, *panel, std::move(hooks),
                                              gui::Favourites::defaultFile(gui::test::slug()));
@@ -2683,7 +2683,30 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     std::string rows;
     for (const std::string& l : labels(menu)) rows += l + " | ";
     CHECK_MESSAGE(said, "menu rows: " << rows);
+    // Remove modulation: <source> removes the route, one undo step, and
+    // leaves the envelope that carried it (gui.md §2).
+    std::function<void()> remove;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation: ")) {
+            CHECK_FALSE(remove);  // one route: one row
+            remove = item.run;
+        }
+    REQUIRE_MESSAGE(remove, "menu rows: " << rows);
     f.uiRoot().closePopup();
+    remove();
+    CHECK(f.app->head().modulations.size() == 0);
+    CHECK(f.app->head().envelopes.find(*env));
+    f.fx->tick();
+    f.frame();
+    menu = openMenu();
+    REQUIRE(menu);
+    for (const std::string& l : labels(menu)) {
+        CHECK_FALSE(l.starts_with("Remove modulation"));
+        CHECK_FALSE(l.starts_with("Show modulation source"));
+    }
+    f.uiRoot().closePopup();
+    REQUIRE(f.run("history.undo", json::Value::object()));
+    CHECK(f.app->head().modulations.size() == 1);
 }
 
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {

@@ -3685,6 +3685,12 @@ TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on it
         }
     CHECK(sources == std::vector<std::string>{"Show modulation source"});
     REQUIRE(run);
+    // Then one Remove row, by source (gui.md §2).
+    std::vector<std::string> removes;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation")) removes.push_back(item.label);
+    REQUIRE(removes.size() == 1);
+    CHECK(removes[0].starts_with("Remove modulation: LFO ("));
     f.root->closePopups();
     run();
     CHECK(shown == std::vector<std::string>{route});
@@ -3709,7 +3715,31 @@ TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on it
     REQUIRE(sources.size() == 2);
     CHECK(sources[0].starts_with("Show modulation source: LFO ("));
     CHECK(sources[1].starts_with("Show modulation source: Mod 4 ("));
+    // One Remove row each, after the source rows; the second removes only
+    // its own route, as one undo step.
+    std::vector<std::string> labels;
+    std::function<void()> removeSecond;
+    for (const auto& item : ui::menuItems(*menu)) {
+        labels.push_back(item.label);
+        if (item.label.starts_with("Remove modulation: Mod 4 (")) removeSecond = item.run;
+    }
+    const auto at = [&](const std::string& prefix) {
+        return std::find_if(labels.begin(), labels.end(),
+                            [&](const std::string& l) { return l.starts_with(prefix); }) -
+               labels.begin();
+    };
+    CHECK(at("Remove modulation: LFO (") > at("Show modulation source: Mod 4 ("));
+    CHECK(at("Remove modulation: Mod 4 (") == at("Remove modulation: LFO (") + 1);
+    REQUIRE(removeSecond);
     f.root->closePopups();
+    const std::size_t steps = f.exec("history.list", "{}")["versions"].size();
+    removeSecond();
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);
+    const model::Session after = f.app->head();
+    REQUIRE(after.modulations.size() == 1);
+    CHECK(after.modulations.find(*model::Id::parse(route)));
+    f.exec("history.undo", "{}");
+    CHECK(f.app->head().modulations.size() == 2);
 }
 
 TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {

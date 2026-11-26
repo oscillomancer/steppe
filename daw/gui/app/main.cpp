@@ -570,7 +570,7 @@ int frontendMain(int argc, char** argv) {
             },
             [&](const model::EnvTarget& target) {
                 const auto catalog = gui::racks::catalog(**app);
-                return gui::modSourceItems(appActions, (*app)->head(), catalog.get(), target);
+                return gui::modRouteItems(appActions, (*app)->head(), catalog.get(), target);
             }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
