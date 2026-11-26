@@ -257,10 +257,14 @@ TEST_CASE("a modulated MIDI clip switch plays live as the replay of its log (M5,
           doctest::description("rt")) {
     // cl_1 to cl_2, each through a sine and a gain, a route on cl_2's gain:
     // the switch keeps its two moments live (the entry, then the input) as
-    // the replay does.
+    // the replay does. At 112 BPM bars 2 and 3 (102857, 205714) are off the
+    // block grid, and each clip's first note sounds (at 113 BPM their
+    // anchors round up, and until round 195's first-note fix on main the
+    // notes were dropped: the replay compared silence with silence). Red
+    // without the live preenter (review round 195, probe G).
     Project p;
     modulators(p);
-    offGrid(p);
+    p.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 112}]})");
     p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice a; 1: C3:w"})");
     p.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice b; 1: E3:w"})");
     std::string gain;
@@ -277,11 +281,16 @@ TEST_CASE("a modulated MIDI clip switch plays live as the replay of its log (M5,
             const Live live =
                 playLive(s, p.app->projectDir(), options, block, frames,
                          {{4000 / block, {request("tr_1", "cl_1")}},
-                          {(101947 + 50000) / std::int64_t(block), {request("tr_1", "cl_2")}}});
+                          {(102857 + 50000) / std::int64_t(block), {request("tr_1", "cl_2")}}});
             INFO(live.report);
             REQUIRE(live.log.size() == 2);
-            CHECK(maxDiff(live.left, live.latency, mixOf(p, s, 5.0, live.log, block), 48000 * 5) ==
-                  0.0);
+            CHECK(live.log[1].anchorSample % 32 != 0);  // off the grid
+            const auto replay = mixOf(p, s, 5.0, live.log, block);
+            double peak = 0;  // not silence against silence
+            for (std::size_t f = std::size_t(live.log[1].runningFrame); f < replay.size(); ++f)
+                peak = std::max(peak, std::fabs(double(replay[f])));
+            CHECK(peak > 0.01);
+            CHECK(maxDiff(live.left, live.latency, replay, 48000 * 5) == 0.0);
         }
 }
 

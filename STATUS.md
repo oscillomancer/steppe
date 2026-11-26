@@ -970,9 +970,9 @@ instructions are in `docs/guides/installing.md`.
   depend on the block size (a plug-in that smooths its parameters still
   hears the grid values from the entry, which falls on a block boundary,
   so its output after the onset can depend on the block size and, after an
-  off-grid loop wrap, on the pass; the tests' memoryless gain cannot prove
-  the early entry after a wrap or a switch's by a red run, only cover it:
-  the round 187 question, open); on a track whose clip chain is modulated an
+  off-grid loop wrap, on the pass; a switch's entry is proved by red runs,
+  but the tests' memoryless gain cannot prove the early entry after a wrap
+  by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
   pressed within 32 more frames of its boundary takes the next. A route
   into a take that does not play is idle (`modulation.list` says `inert:

@@ -407,8 +407,10 @@ until it is released.
       size, and after an off-grid loop wrap on the pass's alignment; live
       equals offline at the same alignment (review round 193, measured with
       a gain smoothed over 64 frames). So the tests stay on the memoryless
-      gain: the early entry after a wrap (S2) and a switch's entry (G1) are
-      covered, not proved by a red run (STATUS).
+      gain. A switch's entry (G1) is proved by red runs: the audio and the
+      MIDI switch tests in test_clip_player_modulation.cpp fail without the
+      live preenter (review round 195). The early entry after a wrap (S2)
+      is covered, not proved by a red run (STATUS).
     - **Item chains.** Every branch where `processTake` decides that the
       chain meets its item (unity, the early wrap, the playrate path)
       widens the input end by `kAutomationStep`.
