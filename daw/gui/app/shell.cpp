@@ -309,8 +309,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
         return dispatcher_.execute(
             {"route.add", std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
     };
-    tcp.onError = [this](const Error& error) {
-        if (onError)
+    tcp.onError = [this](const Error& error) {  // addSend's refusal
+        if (const auto words = views::modulationRefusalWords(app_.head(), "route.add", error);
+            words && onError)
+            onError(*words);
+        else if (onError)
             onError(error.toString());
         else
             std::fprintf(stderr, "send refused: %s\n", error.toString().c_str());
@@ -1060,7 +1063,8 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
     cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     origin.gesture = std::move(gesture);
     auto r = dispatcher_.execute({std::string(command), std::move(args), std::move(origin)});
-    if (!r && onError) onError(r.error().message);
+    // A refusal changes nothing: the head is the session it ran on.
+    if (!r && onError) onError(views::modulationRefusal(app_.head(), command, r.error()).message);
 }
 
 }  // namespace supple::gui

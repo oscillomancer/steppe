@@ -2118,7 +2118,10 @@ void Mixer::endDrag(bool commit) {
                 }
                 return json::Value::object();
             });
-        if (!r && actions_.onError) actions_.onError(std::string("mixer: ") + r.error().message);
+        if (!r && actions_.onError)
+            actions_.onError(
+                std::string("mixer: ") +
+                views::modulationRefusal(app_.head(), "track.move", r.error()).message);
         return;
     } else if (done.kind == DragView::Kind::Strip) {
         command = "track.move";

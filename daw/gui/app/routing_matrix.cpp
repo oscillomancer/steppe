@@ -442,7 +442,13 @@ RoutingMatrix::~RoutingMatrix() { close(); }
 Result<json::Value> RoutingMatrix::exec(const std::string& command, json::Value args,
                                         const cmd::Origin* origin) {
     auto r = dispatcher_.execute({command, std::move(args), origin ? *origin : kOrigin});
-    if (!r && status_) status_->setText(command + ": " + r.error().message);
+    if (!r && status_) {
+        // A send that would loop a modulation, in the GUI's words (gui.md §2).
+        if (const auto words = views::modulationRefusalWords(app_.head(), command, r.error()))
+            status_->setText(*words);
+        else
+            status_->setText(command + ": " + r.error().message);
+    }
     return r;
 }
 

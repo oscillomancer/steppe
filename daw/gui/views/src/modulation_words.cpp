@@ -11,8 +11,9 @@
 namespace supple::views {
 namespace {
 
-// What a copying command does, as the start of a sentence.
-std::string copying(std::string_view command) {
+// What a copying command does, as the start of a sentence; nullopt for a
+// command not known to copy routes (its caller keeps its own words).
+std::optional<std::string> copying(std::string_view command) {
     if (command == "item.paste") return "Pasting";
     if (command == "item.duplicate") return "Duplicating";
     if (command == "item.split") return "Splitting";
@@ -27,16 +28,16 @@ std::string copying(std::string_view command) {
     if (command == "track.duplicate") return "Duplicating the track";
     if (command == "launch.commit") return "Committing the performance";
     if (command == "take.add") return "Copying the take";
-    return "The copy";
+    return std::nullopt;
 }
 
-// What a moving command does, as the start of a sentence.
-std::string moving(std::string_view command) {
+// What a command that moves a take does, as the start of a sentence;
+// nullopt for any other.
+std::optional<std::string> movingTake(std::string_view command) {
     if (command == "item.move") return "Moving the item there";
     if (command == "clip.move") return "Moving the clip there";
     if (command == "take.extract") return "Moving the take there";
-    if (command == "item.explode-takes") return "Exploding the takes";
-    return "The move";
+    return std::nullopt;
 }
 
 // The commands that make, change or remove a route keep their own words
@@ -58,12 +59,25 @@ constexpr std::string_view kRemove = "Remove modulation in the plug-in parameter
 std::optional<std::string> modulationRefusalWords(const model::Session&, std::string_view command,
                                                   const Error& e) {
     if (routeCommand(command)) return std::nullopt;
-    if (e.code == "modulation.limit")
-        return copying(command) + " would make more than " +
-               std::to_string(model::kMaxModulations) +
+    // Only a (command, code) pair known here has words: any other keeps its
+    // caller's (a generic verb once worded a send as a take's move).
+    if (e.code == "modulation.limit") {
+        const auto verb = copying(command);
+        if (!verb) return std::nullopt;
+        return *verb + " would make more than " + std::to_string(model::kMaxModulations) +
                " modulation routes, the most a project holds. Remove some first (" +
                std::string(kRemove) + "); a copied chain brings its routes with it.";
+    }
     if (e.code == "modulation.cycle") {
+        if (command == "route.add")
+            return "The send would loop its modulation: where it goes feeds the rack that "
+                   "modulates the sending track. Send it elsewhere, or remove the modulation "
+                   "first (" +
+                   std::string(kRemove) + ").";
+        if (command == "track.move")
+            return "Moving the track there would loop its modulation: it would feed the rack "
+                   "that modulates it. Put it elsewhere, or remove the modulation first (" +
+                   std::string(kRemove) + ").";
         if (command == "fx.move")
             return "Moving the plug-in there would loop its modulation: that track feeds the "
                    "rack that modulates the plug-in. Choose another track, or remove the "
@@ -74,12 +88,14 @@ std::optional<std::string> modulationRefusalWords(const model::Session&, std::st
                    "modulating its plug-ins, so the modulation would loop. Explode them in "
                    "sequence on this track, or remove the modulation first (" +
                    std::string(kRemove) + ").";
-        return moving(command) +
+        const auto verb = movingTake(command);
+        if (!verb) return std::nullopt;
+        return *verb +
                " would loop its modulation: that track feeds the rack that modulates the "
                "take's plug-ins. Choose another track, or remove the modulation first (" +
                std::string(kRemove) + ").";
     }
-    if (e.code == "item.heal_fx")
+    if (e.code == "item.heal_fx" && command == "item.heal")
         return "The pieces' take plug-ins differ (the plug-ins, their settings, their "
                "automation or their modulation), so they cannot be joined. Make them match (" +
                std::string(kRemove) + " removes a route), or consolidate them instead.";

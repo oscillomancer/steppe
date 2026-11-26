@@ -5788,7 +5788,9 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
                                                   {"take.extract", ""},
                                                   {"item.explode-takes", ""},
                                                   {"item.heal", ""},
-                                                  {"fx.move", ""}};
+                                                  {"fx.move", ""},
+                                                  {"route.add", ""},
+                                                  {"track.move", ""}};
     // Those that declare one and the GUI does not run with routes to copy:
     // take.add {from} only in the --generate demo, the consolidation's commit
     // inside its job (its refusal is the job's, said as item.consolidate's),
@@ -5799,6 +5801,32 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
     const char* text = "engine text tr_3 it_4";
     const char* hint = "a hint for command callers";
     const model::Session s = f.app->head();
+    // TODO(round 195 F2): route.add and track.move answer modulation.cycle
+    // without declaring it. They have words now (the mixer, the routing
+    // matrix and the track panel run them); once the lead declares the code,
+    // take them off this list and the walk checks them as the rest.
+    const std::set<std::string> undeclared{"route.add", "track.move"};
+    for (const std::string& name : undeclared) {
+        INFO(name << " (answers modulation.cycle undeclared)");
+        const cmd::CommandInfo* info = f.registry.find(name);
+        REQUIRE(info);
+        bool declares = false;
+        for (const cmd::ErrorSpec& e : info->errors) declares |= m5.contains(e.code);
+        CHECK_FALSE(declares);  // declared now: take it off `undeclared`
+        const auto words = views::modulationRefusalWords(
+            s, name, Error("modulation.cycle", text, "/modulations/mr_1", hint));
+        REQUIRE(words);
+        CHECK(words->find("would loop its modulation") != std::string::npos);
+        CHECK(words->find("take") == std::string::npos);
+        CHECK(words->find("Remove modulation") != std::string::npos);
+    }
+    // A command not known here keeps its caller's words for every M5 code
+    // (round 196 F1: a generic verb worded a send as a take's move).
+    for (const char* code : {"modulation.limit", "modulation.cycle", "item.heal_fx"})
+        for (const char* other : {"track.set", "route.set", "item.merge", "clip.remove"}) {
+            INFO(other << " " << code);
+            CHECK_FALSE(views::modulationRefusalWords(s, other, Error(code, text, "", hint)));
+        }
     std::set<std::string> worded;
     for (const cmd::CommandInfo* command : f.registry.all()) {
         bool declares = false;
@@ -5866,6 +5894,7 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
         {"generate.cpp", "the --generate demo, whose project has no routes"},
         {"file_actions.cpp", "item.add of a media file, which copies no route"},
         {"render_dialog.cpp", "item.add of a rendered file, which copies no route"},
+        {"tcp.cpp", "Shell::commit (a reorder) and the shell's addSend refusal"},
     };
     // Where a command listed as not run may be named.
     const std::map<std::string, std::set<std::string>> notRunAt{{"take.add", {"generate.cpp"}},
@@ -6276,4 +6305,66 @@ TEST_CASE(
     CHECK(said.message.find("take") == std::string::npos);
     CHECK(said.message.find("fx_") == std::string::npos);
     CHECK(said.hint.empty());
+}
+
+namespace {
+// The first modulatable parameter of `fx`, "" when it has none.
+std::string firstModulatable(Fixture& f, model::Id fx) {
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    if (!described || !(*described)["params"].isObject()) return {};
+    for (const auto& m : (*described)["params"].asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+            return m.key;
+    return {};
+}
+}  // namespace
+
+TEST_CASE("modulation words: a send or a track move that would loop says so as itself") {
+    // Round 196 F1: route.add and track.move answer modulation.cycle when the
+    // edit closes a loop; the GUI says it as a send's or a track's move,
+    // never a take's (the mixer, the routing matrix and the track panel run
+    // them). From the engine's real refusals.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto buss = f.run("track.add", f.args({{"name", "Listened"}, {"type", "buss"}}));
+    REQUIRE(buss);
+    const std::string listened = (*buss)["track"].asString();
+    auto made = f.run("fx.add", f.args({{"track", keys.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = firstModulatable(f, fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    REQUIRE(f.run("modulate",
+                  f.args({{"target", target}, {"source", "follower"}, {"from", listened}})));
+    const std::map<std::string, std::pair<json::Value, std::string>> edits{
+        {"route.add", {f.args({{"from", keys.str()}, {"to", listened}}), "The send would loop"}},
+        {"track.move",
+         {f.args({{"track", keys.str()}, {"parent", listened}}),
+          "Moving the track there would loop"}}};
+    for (const auto& [command, edit] : edits) {
+        INFO(command);
+        auto r = f.run(command.c_str(), edit.first);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        const Error said = views::modulationRefusal(f.app->head(), command, r.error());
+        INFO(said.message);
+        CHECK(said.message.starts_with(edit.second));
+        CHECK(said.message.find("take") == std::string::npos);
+        CHECK(said.message.find("mr_") == std::string::npos);
+        CHECK(said.message.find("tr_") == std::string::npos);
+    }
 }

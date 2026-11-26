@@ -371,7 +371,13 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   offers exploding in sequence; a track's plug-in moved, `fx.move`, "Moving
   the plug-in there would loop its modulation: that track feeds the rack
   that modulates the plug-in. …", where the FX window and the mixer run
-  it, though their moves stay on one track, which cannot loop), and `item.heal_fx` from **Heal splits**
+  it, though their moves stay on one track, which cannot loop; a send,
+  `route.add`, "The send would loop its modulation: where it goes feeds the
+  rack that modulates the sending track. …", and a track moved into a
+  folder or buss, `track.move`, "Moving the track there would loop its
+  modulation: it would feed the rack that modulates it. …", where the
+  mixer, the routing matrix and the track panel run them; any other
+  command keeps its own words), and `item.heal_fx` from **Heal splits**
   ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
   them match (…), or consolidate them instead."). The warnings, which have
   no registry (session-model lists them), go to the status line as a note
@@ -415,7 +421,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `item.add` copies no route), and a command listed as not run is named
   only where that holds (`take.add` in the demo generator). A command
   named through a variable, or a listed file that skips the words at one
-  call site, it cannot see.
+  call site, it cannot see, nor a code a command raises without declaring
+  it: `route.add` and `track.move` raise `modulation.cycle` undeclared, so
+  they are listed apart until they declare it.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
