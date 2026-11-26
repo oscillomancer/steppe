@@ -133,7 +133,8 @@ class LaneLabels : public ui::Node {
                 // A modulated FX of its heard take (ADR-0096 M5): the mark
                 // right after the name, which elides before it; dimmed as a
                 // slot's is, while every route is off or the track is frozen.
-                const NameMark modMark = takeNameMark(s, item->activeTake);
+                const NameMark modMark =
+                    kTakeNameMarksShown ? takeNameMark(s, item->activeTake) : NameMark{};
                 const std::string markInk =
                     modMark.mark.empty() ? std::string()
                                          : (modMark.on && !frozen ? "signal-cv" : "ink-faint");

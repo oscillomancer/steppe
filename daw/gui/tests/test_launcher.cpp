@@ -3350,10 +3350,16 @@ TEST_CASE("launcher: a clip whose active take's FX is modulated carries the mark
     const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
                                                      param + R"("},"source":"lfo"})")["modulation"]
                                   .asString();
-    CHECK(marks() == std::vector<std::string>{"", "", "signal-cv"});
+    // Drawn only while views::kTakeNameMarksShown is on (off by default).
+    const auto clipTake = f.app->head().clips.find(*model::Id::parse("cl_3"))->activeTake;
+    const std::string shown = views::kTakeNameMarksShown ? "signal-cv" : "";
+    CHECK(marks() == std::vector<std::string>{"", "", shown});
+    CHECK(views::takeNameMark(f.app->head(), clipTake).mark == views::kModMark);
     CHECK(pane.stats.names == std::vector<std::string>{"Kit A", "Kit B", "Root"});
     f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
-    CHECK(marks() == std::vector<std::string>{"", "", "ink-faint"});
+    CHECK(marks() ==
+          std::vector<std::string>{"", "", views::kTakeNameMarksShown ? "ink-faint" : ""});
+    CHECK_FALSE(views::takeNameMark(f.app->head(), clipTake).on);
     f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
     marks();
     f.snapshot("launcher-modulated-clip.png");
