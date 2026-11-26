@@ -1167,6 +1167,7 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
         REQUIRE(gui::writePng(std::filesystem::path(out) / "take-fx-lane-dimmed.png",
                               f.root->readBack()));
+    const std::size_t lanesBefore = f.view->trackLayout().rows().size();
     // Another take active: the effect plays nowhere, so all of the lane is dimmed.
     auto second = f.dispatcher->execute(
         {"take.add",
@@ -1185,6 +1186,20 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     };
     activate(secondTake);
     REQUIRE(f.view->trackLayout().indexOfEnv(env) == lane);
+    // The copy (take.add {from}, copyTake) brings its envelope and its lane;
+    // each lane names its own take, so the two read apart.
+    CHECK(f.view->trackLayout().rows().size() == lanesBefore + 1);
+    {
+        const model::Session& now = f.app->head();
+        std::vector<std::string> notes;
+        for (const auto& e : now.envelopes)
+            if (e.value->target.param == key && e.value->target.object.kind == model::Kind::Fx) {
+                const auto scale = f.view->trackLayout().scaleOf(*e.value);
+                notes.push_back(views::laneTitle(*e.value, now, scale ? &*scale : nullptr).note);
+            }
+        std::sort(notes.begin(), notes.end());
+        CHECK(notes == std::vector<std::string>{"(take: Take 1)", "(take: Take 2)"});
+    }
     CHECK(static_cast<double>(dimmedWidth()) ==
           doctest::Approx(static_cast<double>(visible)).epsilon(0.01));
     activate(take.str());

@@ -1035,7 +1035,9 @@ engine plays none of them. Titles that would be the same say what tells them apa
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the
-track has the same effect's same parameter. A clip's take FX have none here: their envelopes are in clip
+track has the same effect's same parameter, and its own take ("(take: Take
+2)", by name or place in the item's take list) when another take of the item
+has it, as a copy of the take does (`take.add {from}` copies its envelopes). A clip's take FX have none here: their envelopes are in clip
 time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
