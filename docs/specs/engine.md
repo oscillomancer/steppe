@@ -486,11 +486,13 @@ the same.*
   clip of a channel is compiled into the channel's node as a *clip
   player*. An audio clip's player holds the take's prepared buffer, as an
   item's does. A MIDI clip's holds its notes, sorted by their beat within
-  the content. Each note plays at the sample its song beat rounds to,
-  pass after pass from the anchor's beat, and none before the anchor's
-  sample: a note at the clip's start sounds at the anchor even where the
-  boundary rounds up to it (review round 195, F1). A launch never
-  compiles. A frozen track's node compiles no players: it has no chain or
+  the content. Each event (a note or a control) plays once, at the
+  sample its song beat rounds to, pass after pass from the anchor's beat,
+  in whichever block holds that sample, and none before the anchor's
+  sample until a wrap or a seek (below): a note at the clip's start
+  sounds at the anchor even where the boundary rounds up to it, and an
+  event just before a block's edge sounds in the next block (review
+  rounds 195 F1 and 197). A launch never compiles. A frozen track's node compiles no players: it has no chain or
   note stage and plays its print.
 - **What a track plays is transport state,** the node's *launch state*:
   `arrangement`, `clip` (with the clip's player and anchor), `held` (a

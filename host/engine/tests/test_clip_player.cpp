@@ -376,6 +376,78 @@ TEST_CASE("a launched MIDI clip's first note sounds at its anchor at any tempo a
     }
 }
 
+// Review round 197: the fault was wider than the first note. Any event in
+// the half sample before a block edge was dropped (about half of all events
+// at block 1, where every sample is an edge; a few in each pass at 512).
+// A dense line, a note on every half beat with a rest after it, replayed
+// at blocks 1, 37 and 512: every note sounds once at its rounded sample
+// (a dropped note-on loses its onset, a dropped note-off fills the rest so
+// the next onset is lost too), and the three renders are identical.
+TEST_CASE("every event of a launched MIDI clip plays once at its rounded sample at any block size" *
+          doctest::description("rt")) {
+    const auto onsets = [](const std::vector<float>& out) {
+        std::vector<std::int64_t> found;
+        std::size_t quiet = 0;
+        for (std::size_t f = 0; f < out.size(); ++f) {
+            if (out[f] == 0.0f) {
+                ++quiet;
+                continue;
+            }
+            if (quiet >= 64) found.push_back(std::int64_t(f) - 1);
+            quiet = 0;
+        }
+        return found;
+    };
+    struct Variant {
+        double bpm;
+        bool take;
+    };
+    for (const Variant v : {Variant{113, false}, Variant{97.3, false}, Variant{121, false},
+                            Variant{143.7, false}, Variant{113, true}}) {
+        INFO(v.bpm << " BPM" << std::string(v.take ? ", take chain" : ", track"));
+        Project p;
+        p.runArgs("tempo.set",
+                  j(R"({"points": [{"beat": 0, "bpm": )" + std::to_string(v.bpm) + "}]}"));
+        // One bar: eight sixteenths, each followed by a sixteenth's rest.
+        p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": )"
+                          R"("voice a; 1: C3:s r:s D3:s r:s E3:s r:s F3:s r:s )"
+                          R"(G3:s r:s A3:s r:s B3:s r:s C4:s r:s"})");
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+        if (v.take)
+            fx["take"] = takeOf(p, "cl_1");
+        else
+            fx["track"] = "tr_1";
+        p.runArgs("fx.add", fx);
+        const double beat = 60.0 / v.bpm * 48000;                                   // frames
+        LaunchLogEntry a = launch(std::int64_t(std::nearbyint(4 * beat)), "cl_1");  // bar 2
+        a.anchorBeat = 4;
+        constexpr double kSeconds = 6.0;
+        std::vector<std::int64_t> expected;
+        for (int k = 0; (4 + 4 * k) * beat < kSeconds * 48000; ++k)  // every pass begun
+            for (int i = 0; i < 8; ++i)
+                expected.push_back(std::int64_t(std::nearbyint((4 + 4 * k + 0.5 * i) * beat)));
+        while (!expected.empty() && double(expected.back()) + 2000 > kSeconds * 48000)
+            expected.pop_back();
+        REQUIRE(expected.size() >= 8);
+        std::vector<float> first;
+        for (const std::uint32_t block : {1u, 37u, 512u}) {
+            INFO("block " << block);
+            const auto out = p.render(kSeconds, {a}, block);
+            auto got = onsets(out);
+            while (!got.empty() && double(got.back()) + 2000 > kSeconds * 48000) got.pop_back();
+            std::size_t mismatch = 0;
+            for (std::size_t i = 0; i < std::min(got.size(), expected.size()); ++i)
+                if (got[i] != expected[i]) ++mismatch;
+            CHECK(got.size() == expected.size());
+            CHECK(mismatch == 0);
+            if (first.empty())
+                first = out;
+            else
+                CHECK(maxDiff(out, 0, first, first.size()) == 0.0);
+        }
+    }
+}
+
 TEST_CASE("the replay does not depend on the block size") {
     Project p;
     p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
