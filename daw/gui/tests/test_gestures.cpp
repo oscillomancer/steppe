@@ -1141,9 +1141,13 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
         f.root->damageAll();
         f.root->frame(false);
     };
+    // On this lane only: take.add {from} copies the take's FX envelopes,
+    // so a copied take brings its own lane, dimmed where it does not play.
     auto dimmedWidth = [&] {
+        const float y = f.view->rowRect(*lane).y;
         float w = 0;
-        for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans()) w += d.w;
+        for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans())
+            if (std::abs(d.y - y) < 0.5f) w += d.w;
         return w;
     };
     paint();
@@ -1200,7 +1204,12 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     f.click({past, area.y + area.h * 0.25f});
     CHECK(f.app->head().envelopes.find(env)->points.size() == 4);
     // The item moved to another track takes its take's lane along.
-    const model::Id other = f.view->trackLayout().rows()[*lane + 1].track;
+    // The next track's row, past this track's lanes (the copy's among them).
+    const auto& rows = f.view->trackLayout().rows();
+    std::size_t next = static_cast<std::size_t>(*lane) + 1;
+    while (next < rows.size() && rows[next].track == track) ++next;
+    REQUIRE(next < rows.size());
+    const model::Id other = rows[next].track;
     REQUIRE(other != track);
     auto moved = f.dispatcher->execute(
         {"item.move",
