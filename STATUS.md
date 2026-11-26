@@ -433,8 +433,8 @@ instructions are in `docs/guides/installing.md`.
       epochs without a service); a launch's verdict is made once, so a
       heard launch stays heard however many epochs follow (round 203),
       and a slot is free again once its launch is heard, so a long play
-      never runs out (round 205); the GUI's as-heard line does not word
-      `launch_unsettled` yet (gui-lead). Known gaps, found by the seeded
+      never runs out (round 205); the GUI's as-heard line words
+      `launch_unsettled` (gui.md §4.8). Known gaps, found by the seeded
       sequence test (round 205) and not yet decided: a capture is as
       heard but its replay differs when it begins (A) after a seek back
       before the anchor of a loop clip that plays on (live plays it by its

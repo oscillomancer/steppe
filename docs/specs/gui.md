@@ -2434,10 +2434,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       Restart audio in Edit > Audio device starts clean: every engine stop
       drops the engine that holds the loss, and a capture kept across it
       keeps the reason), `launch_unlogged`; whether a launch was heard
-      was not yet known (wait for the transport to settle, or capture
+      was not known in time (let the transport settle, then capture
       again), `launch_unsettled`: read just after a stop or seek, before
-      the engine knows whether a launch was heard; once it does, the
-      capture's facts change and the line follows; the engine
+      the engine knows whether a launch was heard (once it does, the
+      capture's facts change and the line follows), or a verdict that came
+      late, which only a new capture clears; the engine
       stopped, or the audio device restarted, during it, from the capture's
       `endedBy`; an unknown reason as its code in words). A test reads
       engine.md's table of reasons, so a new one fails until it has words.

@@ -580,7 +580,7 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
                            .parent_path() /
                        "docs" / "specs" / "engine.md");
     REQUIRE(spec);
-    std::set<std::string> reasons{"launch_unsettled"};  // round 201, before its row merges
+    std::set<std::string> reasons;
     bool inTable = false;
     for (std::string line; std::getline(spec, line);) {
         if (line.starts_with("| Reason | When |")) {
