@@ -5844,6 +5844,47 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
     for (const char* move : {"item.move", "clip.move", "take.extract", "item.explode-takes"})
         CHECK_MESSAGE(worded.contains(std::string(move) + " modulation.cycle"), move);
     CHECK(worded.contains("item.heal item.heal_fx"));
+    // The lists against the GUI's sources (round 194): a file that names a
+    // declaring command runs it through the words (it includes
+    // modulation_words.h) or is listed here with the path it runs it by; a
+    // command listed as not run is named only where that holds. What this
+    // cannot see: a call through a variable command name, or a listed file
+    // whose words skip one of its call sites.
+    const std::filesystem::path gui =
+        std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR).parent_path().parent_path();
+    const std::map<std::string, std::string> through{
+        {"item_gestures.cpp", "ItemGestures::run (main's runner) and runLauncher"},
+        {"launcher.cpp", "ArrangeView::runLauncher"},
+        {"generate.cpp", "the --generate demo, whose project has no routes"},
+        {"file_actions.cpp", "item.add of a media file, which copies no route"},
+        {"render_dialog.cpp", "item.add of a rendered file, which copies no route"},
+    };
+    // Where a command listed as not run may be named.
+    const std::map<std::string, std::set<std::string>> notRunAt{{"take.add", {"generate.cpp"}},
+                                                                {"item.consolidate.commit", {}}};
+    std::size_t scanned = 0;
+    for (const char* dir : {"app", "views/src"})
+        for (const auto& entry : std::filesystem::directory_iterator(gui / dir)) {
+            const std::string file = entry.path().filename().string();
+            if (!file.ends_with(".cpp") && !file.ends_with(".h")) continue;
+            if (file == "modulation_words.cpp") continue;  // the words, by command name
+            std::ifstream in(entry.path());
+            const std::string source((std::istreambuf_iterator<char>(in)),
+                                     std::istreambuf_iterator<char>());
+            ++scanned;
+            const bool words = source.find("supple/views/modulation_words.h") != std::string::npos;
+            for (const auto& [name, path] : runs) {
+                if (source.find("\"" + name + "\"") == std::string::npos) continue;
+                INFO(file << " names " << name);
+                CHECK((words || through.contains(file)));
+            }
+            for (const auto& [name, at] : notRunAt)
+                if (source.find("\"" + name + "\"") != std::string::npos) {
+                    INFO(file << " names " << name << ", listed as not run");
+                    CHECK(at.contains(file));
+                }
+        }
+    CHECK(scanned > 50);
     // Any other code keeps its caller's words; so do the route commands.
     CHECK_FALSE(
         views::modulationRefusalWords(s, "item.paste", Error("item.locked", text, "/args")));

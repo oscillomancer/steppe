@@ -400,7 +400,14 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   route commands (`modulate`, `modulation.*`) keep their own words. A test walks the registry: every code among
   `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command
   the GUI runs declares has words, and every command declaring one is
-  either such a command or listed as one the GUI does not run.
+  either such a command or listed as one the GUI does not run. It then
+  scans the GUI's sources: a file that names such a command includes the
+  words or is listed with the path it runs it by (the gestures through
+  their runner, the launcher through `runLauncher`, and the files whose
+  `item.add` copies no route), and a command listed as not run is named
+  only where that holds (`take.add` in the demo generator). A command
+  named through a variable, or a listed file that skips the words at one
+  call site, it cannot see.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
