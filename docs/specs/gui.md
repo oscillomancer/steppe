@@ -2433,9 +2433,15 @@ project is drawn in the quiet ink, with "from your default" on hover.
       launch was lost from the log before or during it (a new capture after
       Restart audio in Edit > Audio device starts clean: every engine stop
       drops the engine that holds the loss, and a capture kept across it
-      keeps the reason), `launch_unlogged`; the engine
+      keeps the reason), `launch_unlogged`; whether a launch was heard
+      was not yet known (wait for the transport to settle, or capture
+      again), `launch_unsettled`: read just after a stop or seek, before
+      the engine knows whether a launch was heard; once it does, the
+      capture's facts change and the line follows; the engine
       stopped, or the audio device restarted, during it, from the capture's
-      `endedBy`; an unknown reason as its code in words). After a render
+      `endedBy`; an unknown reason as its code in words). A test reads
+      engine.md's table of reasons, so a new one fails until it has words.
+      After a render
       the results start with the same line, from the render's own result,
       and the status line adds ", as heard" or ", not as heard". The dialog
       never sends `as_heard: true`.

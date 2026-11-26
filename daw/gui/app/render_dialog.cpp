@@ -157,6 +157,13 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     if (reason == "launch_unlogged")
         return "a launch was lost from the log before or during it (a new capture after Restart "
                "audio in Edit > Audio device starts clean)";
+    // A launch whose heard-or-not verdict was not in when the capture was
+    // read (just after a stop or seek, round 201): once it is, the capture's
+    // facts change and followCapture redoes the line, as heard unless the
+    // verdict came too late to tell.
+    if (reason == "launch_unsettled")
+        return "whether a launch was heard was not yet known (wait for the transport to "
+               "settle, or capture again)";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"

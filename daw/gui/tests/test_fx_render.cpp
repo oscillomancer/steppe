@@ -568,13 +568,36 @@ TEST_CASE("the render dialog: the launcher's Start and End are checked as one ra
 }
 
 TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words") {
-    // engine.md §3.1's table of reasons: each reads in words, never as its
-    // code (the fallback for one the dialog does not know); given and
-    // from_launcher say nothing on the line.
+    // engine.md §3.1's table of reasons, read from the spec so a new reason
+    // fails until it has words: each reads in words, never as its code (the
+    // fallback for one the dialog does not know); given and from_launcher
+    // say nothing on the line.
     using End = engine::EngineApp::CaptureEnd;
-    for (const char* reason :
-         {"began_mid_run", "edited_during", "playrate_changed", "live_input", "dropout",
-          "launch_unlogged", "plugin_failed", "ended_by_engine", "other_version"}) {
+    std::ifstream spec(std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR)
+                           .parent_path()
+                           .parent_path()
+                           .parent_path()
+                           .parent_path() /
+                       "docs" / "specs" / "engine.md");
+    REQUIRE(spec);
+    std::set<std::string> reasons{"launch_unsettled"};  // round 201, before its row merges
+    bool inTable = false;
+    for (std::string line; std::getline(spec, line);) {
+        if (line.starts_with("| Reason | When |")) {
+            inTable = true;
+            continue;
+        }
+        if (!inTable || line.starts_with("|---") || line.starts_with("| ---")) continue;
+        if (!line.starts_with("| `")) break;  // the table's end
+        const std::size_t open = line.find('`') + 1;
+        reasons.insert(line.substr(open, line.find('`', open) - open));
+    }
+    CHECK(reasons.size() >= 12);
+    for (const char* plain : {"given", "from_launcher"}) {
+        CHECK(reasons.contains(plain));
+        reasons.erase(plain);
+    }
+    for (const std::string& reason : reasons) {
         INFO(reason);
         std::string asCode = reason;
         std::replace(asCode.begin(), asCode.end(), '_', ' ');
