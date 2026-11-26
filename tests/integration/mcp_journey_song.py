@@ -18,7 +18,8 @@ or through `analyze.track`, and is compared with what the commands said (a launc
 `beat`, a track's volume in dB, a modulation's depth, the commit's items).
 
 It documents the limits of today's build as refusals (a clip with no key of its own has
-none to snap to), and it plays only the path that works. A clip keeps the key and chords it was written against (ADR-0098): the drums and
+none to snap to), and it plays only the path that works. A clip keeps the key and
+chords it was written against (ADR-0098): the drums and
 the bass are written with `context_at` where their scene sits in the song, the keys with
 chord symbols, and the Break's bass snaps within D minor though the project starts in
 C minor. The Verse is written once, in C minor: laid under D minor it warns, and laid

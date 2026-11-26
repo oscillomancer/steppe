@@ -335,8 +335,8 @@ until it is released.
   A late source path delays the target as a sidechain does. Cycles are
   refused at edit time (`modulation.cycle`); self-modulation is not
   supported.
-- **Take FX targets (M5, ADR-0096 amended 2026-11-25, round 187; the
-  contract, not yet built).** A route into an FX of a take's chain is an
+- **Take FX targets (M5, ADR-0096 amended 2026-11-25, round 187; built
+  2026-11-26).** A route into an FX of a take's chain is an
   edge into the track that holds the take's item or clip.
   - **Order.** `model::modulationTargetNode`, and with it `topoOrder`, maps
     a take FX to that track. The solve's induction needs the node indices
@@ -507,7 +507,7 @@ until it is released.
       (S2);
     - a mixer target's alignment in a chain of under 32 samples. This is
       coverage of shipped behaviour, so it cannot fail first;
-    - one test per bake, deciding whether it is exact or refused.
+    - one test per bake: all four are exact (none is refused).
   - **What it costs.** Modulating a take FX can add up to its chain's lead,
     beyond the source's arrival, to its track's arrival, and only where the
     track lacks that much read-ahead. The added cost reaches the plan's

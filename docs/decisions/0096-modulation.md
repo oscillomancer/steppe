@@ -134,6 +134,9 @@ changes is in engine.md §1.4.1, "Take FX targets".
 - **Bakes.** Consolidating, applying FX, mixing to a track and freezing
   are each exact, printing the modulation, or refused while a take FX they
   bake is modulated (`modulation.bake`). None uses an unmodulated stand-in.
+  *2026-11-26 (step M5 built, review round 192):* all four are exact, each
+  pinned by a test against playback, so no bake refuses and
+  `modulation.bake` was never built.
 - **Removal.** Removing a take FX, its take, or its item or clip (directly,
   or with its scene or track) removes its routes with `modulation.removed`,
   as `fx.remove` does.

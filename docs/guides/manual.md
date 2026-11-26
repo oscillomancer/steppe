@@ -1225,10 +1225,12 @@ nothing is cabled into that input yet. Removing the Mod Out or the plug-in remov
 `modulation.removed` warning.
 
 A route into a take's plug-in moves it only while that take plays; for
-another take of the item it waits. Copies sound like the original:
+another take of the item it waits. Copies keep their routes:
 duplicating, splitting, pasting or otherwise copying an item or a clip
 copies the routes into its take's plug-ins, and duplicating a track
-copies every route into its faders, sends and plug-ins. When a copy lands
+copies every route into its faders, sends and plug-ins. A copy at another
+time hears its sources at that time, so it has the same routes, not
+necessarily the same sound. When a copy lands
 where the route cannot follow (its Mod Out is gone, or the copy's track
 feeds the rack that modulates it), the route is left out and the result
 says which, with a `modulation.not_copied` warning. Moving an item to such

@@ -2156,7 +2156,7 @@ its rack or home track) still removes such a route, and the frozen track
 keeps playing its print.
 
 **Take FX (step M5, ADR-0096 amended 2026-11-25 and after review round 187;
-the contract, not yet built).** The target of a route to a take FX is stored
+built 2026-11-26).** The target of a route to a take FX is stored
 as any FX target is, `{object: fx_*, param}`, and no field is added.
 - **Its track.** The take's item or clip decides the track. That track
   gives the route's node (`modulationTargetNode`), its freeze, and the
@@ -2285,13 +2285,14 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     - The new channels keep the default parent send: they get no sends,
       so copying an off parent send would leave them unheard.
 - **Bakes.** A bake whose result replaces modulated take FX is exact, with
-  the modulation printed as it plays, or it is refused while those FX are
-  modulated: `modulation.bake` at the bake's item or track argument, with a
-  hint to remove the routes first or to bake without that take. There is
-  no unmodulated stand-in.
+  the modulation printed as it plays. There is no unmodulated stand-in and
+  no refusal.
   - The bakes are `item.consolidate`, `item.apply-fx`, `item.mix-to-track`
-    and `track.freeze`.
-  - Step 5's test decides which of the two each bake is.
+    and `track.freeze`. Each is pinned exact by a test that plays the track
+    before and after (a route whose source rack is on another channel).
+  - A source with free-running state (an LFO not synced to the transport)
+    renders from the bake's start, so its phase can differ from playback
+    from 0; a synced or Transport-driven source cannot.
   - **An exact bake's stale check covers the routes.** A bake that renders
     first and commits later (`item.consolidate` through
     `item.consolidate.commit`, and the other background bakes) is refused
@@ -2299,9 +2300,10 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     removed or changed in between.
     - `itemEditFingerprint` gathers those routes as `freezeDependencyHash`
       already does for a freeze.
-  - **Refusals come before the render.** `modulation.bake`, and
-    `modulation.limit` for the MIDI merge's copy, are checked when the bake
-    starts, not only in its commit.
+  - **The MIDI merge's route limit.** `item.consolidate`'s MIDI merge
+    removes the merged items, and their routes, in the same transaction as
+    it copies, so its net route count never grows and it cannot reach
+    `modulation.limit`.
 
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot
@@ -2327,7 +2329,7 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
   ±200 % for pan and width.
 - Errors: `modulation.source`, `modulation.target`, `modulation.envelope`,
-  `modulation.duplicate`, `modulation.bake` (M5),
+  `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
   The warning `modulation.not_copied` (M5) carries no hint, so its message
