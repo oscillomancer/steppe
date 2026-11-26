@@ -5657,3 +5657,100 @@ TEST_CASE("a modulated row's mark dims on a frozen track, as the mixer slot's do
     CHECK(name()->markColor() == "ink-faint");
     CHECK(name()->valueText().ends_with(" (modulated)"));
 }
+
+TEST_CASE("a take's FX: Modulate leaves out its own track, and an unheard take's route says why") {
+    // ADR-0096 M5: a take FX's track is its item's; a follower of that track
+    // would close a cycle, so the menu does not offer it. A route into the
+    // FX of a take the plan does not play is inert "take" (modulation.list),
+    // worded from the model: another take heard, or the item muted.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    (void)f.addTrack("Pad");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    auto openMenu = [&]() -> std::vector<ui::MenuItem> {
+        REQUIRE(f.fx->openTake(take));
+        f.fx->select(fx);
+        f.fx->showParamsTab();
+        f.fx->tick();
+        f.frame();
+        ui::Node* name = f.uiRoot().find("fx.param.name." + key);
+        REQUIRE(name);
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        ui::Node* menu = f.uiRoot().find("fx.param.menu");
+        REQUIRE(menu);
+        std::vector<ui::MenuItem> rows;
+        for (const auto& row : ui::menuItems(*menu)) rows.push_back(row);
+        return rows;
+    };
+    std::function<void()> modulate;
+    for (const auto& row : openMenu())
+        if (row.label.starts_with("Modulate: ")) {
+            CHECK(row.enabled);
+            modulate = row.run;
+        }
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::vector<std::string> labels;
+    std::function<void()> lfo;
+    for (const auto& row : ui::menuItems(*sources)) {
+        labels.push_back(row.label);
+        if (row.label == "LFO") lfo = row.run;
+    }
+    CHECK(std::count(labels.begin(), labels.end(), "Follower: Pad") == 1);
+    CHECK(std::count(labels.begin(), labels.end(), "Follower: Keys") == 0);
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target == model::EnvTarget{fx, key});
+    auto idleRow = [&] {
+        std::string out;
+        for (const auto& row : openMenu())
+            if (row.label.starts_with("Modulation idle: ")) out = row.label;
+        f.uiRoot().closePopup();
+        return out;
+    };
+    CHECK(idleRow().empty());  // its take plays
+    // Another take heard: the first take's route sends nothing.
+    auto second = f.run("take.add", f.args({{"item", item}, {"from", take.str()}}));
+    REQUIRE(second);
+    REQUIRE(f.run("take.activate", f.args({{"item", item}, {"take", (*second)["id"].asString()}})));
+    CHECK(idleRow() == "Modulation idle: another take of its item plays");
+    // Heard again but its item muted.
+    REQUIRE(f.run("take.activate", f.args({{"item", item}, {"take", take.str()}})));
+    REQUIRE(f.run("item.set", f.args({{"item", item}, {"mute", true}})));
+    CHECK(idleRow() == "Modulation idle: its item is muted");
+}

@@ -291,13 +291,20 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   (`EngineApp::modulationOffsets`, read each pass; a control redraws only
   when it moves). An inert route (`modulation.list`'s `inert`: nothing
   cabled into its source, the envelope that carries it off or gone, a
-  target that cannot take it, or a latency change) draws idle, its span
+  target that cannot take it, a latency change, or a take FX whose take
+  the plan does not play) draws idle, its span
   without a live value, on the rings, bars and lanes alike
   (`gui::LiveModulation` leaves its offset out; `modulation.list` runs only
   while something plays, and again when the model, the project or the
   reported routes change); the parameter menu under Modulate names the
   reason in a greyed row ("Modulation idle: nothing is cabled into its
-  source"). A drag on its bar edits the depth of the first
+  source"). For `take` (ADR-0096 M5) the reason is the engine's and the
+  model only chooses the words (`gui::takeIdleWords`): "its item is muted"
+  when the item's heard take is the route's, else "another take of its
+  item plays" (or "… of its clip plays"). The FX window's menu on a take's
+  FX (`FxWindow::openTake`) takes the track of the take's item or clip as
+  the plug-in's: the Follower list leaves that track out, and its freeze
+  greys Modulate (`model::trackOfTakeFx`). A drag on its bar edits the depth of the first
   enabled one through
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and

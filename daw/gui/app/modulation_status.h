@@ -3,7 +3,8 @@
 // Inert modulation routes in the GUI (ADR-0096; gui.md §4.5): a route the
 // plan cannot apply, as modulation.list reports it (`inert`: "source" when
 // nothing is cabled into its Mod Out input, "envelope" when the envelope that
-// carries it is off or gone, "target", "latency"), draws idle on the rings,
+// carries it is off or gone, "target", "latency", and "take" when the plan
+// plays no chain for its take FX's take, ADR-0096 M5), draws idle on the rings,
 // bars and lanes, and the parameter's menu names the reason in a greyed row.
 #pragma once
 
@@ -25,6 +26,11 @@ std::map<model::Id, std::string> inertRoutes(cmd::Dispatcher& dispatcher);
 
 // The words for a reason, after "Modulation idle: ".
 std::string inertWords(const std::string& reason);
+// The words for "take", which the engine gives a route into the FX of a take
+// that does not play; the model only chooses between them: "its item is
+// muted" (the item's heard take, muted), else "another take of its item
+// plays" or "… of its clip plays".
+std::string takeIdleWords(const model::Session& s, model::Id fx);
 
 // A greyed menu row naming why `target`'s routes are idle ("Modulation
 // idle: nothing is cabled into its source"), or none when one plays.
