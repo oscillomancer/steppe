@@ -6975,10 +6975,15 @@ TEST_CASE(
     // F1: variant 10 is variant 4 with Other under Listened, its parent send
     // off, turned on with the record rack: Other's send to Listened makes
     // the parent send redundant, so the answer is the record rack's, and
-    // following its hint (the parent send alone) is accepted. Each is
-    // refused with the declared modulation.cycle at its argument, with its
-    // row's hint, and changes nothing.
-    for (int variant = 0; variant < 11; ++variant) {
+    // following its hint (the parent send alone) is accepted. Round 204 F1:
+    // an argument that leaves the stored value as it is picks no row, so
+    // variant 11 (route.set of Other's send to Listened {from: tr_1, to:
+    // Listened, unchanged}) answers /from, and variant 12 (module.set {source:
+    // Other, unchanged, source_sends: true}) answers /source_sends; following
+    // either hint is accepted. Each is refused with the declared
+    // modulation.cycle at its argument, with its row's hint, and changes
+    // nothing.
+    for (int variant = 0; variant < 13; ++variant) {
         INFO("variant " << variant);
         Root root;
         auto app = makeApp(root.path);
@@ -7094,6 +7099,26 @@ TEST_CASE(
             rowPath = "/rack";
             args = j(R"({"modules": {"keys": {"type": "notes"}}})");
             args["rack"] = rack;
+        } else if (variant == 11) {  // a send's source moved to tr_1, its destination kept
+            json::Value send = json::Value::object();
+            send["from"] = other;
+            send["to"] = listened;
+            name = "route.set";
+            path = "/from";
+            args["route"] = run("route.add", send)["id"].asString();
+            args["from"] = "tr_1";
+            args["to"] = listened;
+        } else if (variant == 12) {  // following Other, sends off; its source given again
+            const std::string module = notesIn(rack, other);
+            json::Value offSends = j(R"({"source_sends": false})");
+            offSends["module"] = module;
+            run("module.set", offSends);
+            midiSend(other);
+            name = "module.set";
+            path = "/source_sends";
+            args["module"] = module;
+            args["source"] = other;
+            args["source_sends"] = true;
         } else {  // Synth's Out as Other's input (round 199 probe I; 8, 9 round 200 F3; 10)
             const std::string synth =
                 run("track.add", j(R"({"name": "Synth"})"))["track"].asString();
@@ -7152,6 +7177,12 @@ TEST_CASE(
             json::Value parentOnly = j(R"({"parent_send": true})");
             parentOnly["track"] = args["track"];
             const auto followed = d.execute({"track.set", parentOnly, kTest});
+            CHECK_MESSAGE(followed, (followed ? "" : followed.error().toString()));
+        }
+        if (variant == 11 || variant == 12) {  // its hint followed: that argument left out
+            json::Value kept = args;
+            kept.asObject().erase(variant == 11 ? "from" : "source_sends");
+            const auto followed = d.execute({name, kept, kTest});
             CHECK_MESSAGE(followed, (followed ? "" : followed.error().toString()));
         }
     }

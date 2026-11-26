@@ -388,6 +388,13 @@ inline constexpr std::array kCycleEdgeKinds{CycleEdgeKind::ParentSend, CycleEdge
                                             CycleEdgeKind::NotesFollow, CycleEdgeKind::Modulation};
 static_assert(kCycleEdgeKinds.size() == static_cast<std::size_t>(CycleEdgeKind::Count),
               "every kind of cycle edge is in kCycleEdgeKinds");
+static_assert(
+    [] {
+        for (std::size_t i = 0; i < kCycleEdgeKinds.size(); ++i)
+            if (kCycleEdgeKinds[i] != static_cast<CycleEdgeKind>(i)) return false;
+        return true;
+    }(),
+    "kCycleEdgeKinds lists each kind once, in order");
 // "parent_send", "route", "notes_follow", "modulation".
 std::string_view cycleEdgeWord(CycleEdgeKind kind);
 struct CycleEdge {

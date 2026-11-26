@@ -2299,9 +2299,13 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   When an edit gives the arguments of several rows, the refusal takes the
   first whose new edges the cycle needs (without them the edit's result
   has no cycle), so following its hint leads to an accepted call; when
-  each is needed, the first given; an argument that makes no edge (a
-  parent send or a source's sends turned off, a record rack cleared)
-  picks no row. The modulation commands refuse
+  each is needed, the first given. An argument that makes no edge picks
+  no row: a parent send or a source's sends turned off, a record rack
+  cleared, or a set command's argument equal to the stored value
+  (`route.set` `from`/`to`/`fx`, `module.set` `source`/`source_sends`,
+  `track.set` `parent_send`/`record_rack`, `rack.set` `track`; review
+  round 204). Two changed arguments whose edges share a kind and are each
+  needed are told apart by the table's order. The modulation commands refuse
   in their own checks; `rack.patch` adds its modules through `module.add`,
   which refuses at the module's entry (`/modules/<name>/source` or
   `/modules/<name>/rack`). The check adds every edge with its kind, so the

@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "supple/engine/app.h"
@@ -226,10 +227,63 @@ inline constexpr std::array<CycleRow, 29> kCycleRows{{
      "the move puts a modulated take or FX where its rack hears it",
      "remove the route, or use mode serial"},
 }};
+// Whether a set command's argument leaves the stored value as it is in
+// `before` (route.set from/to/fx, module.set source/source_sends, track.set
+// parent_send/record_rack, rack.set track; round 204 F1): such an argument
+// picks no row. Another command's arguments are new.
+inline bool leavesStored(const CycleRow& r, const json::Value& fields,
+                         const model::Session& before) {
+    const json::Value* v = fields.find(std::string(r.field));
+    if (!v) return true;
+    const auto id = [&](std::string_view key) -> std::optional<model::Id> {
+        const json::Value* f = fields.find(std::string(key));
+        return f && f->isString() ? model::Id::parse(f->asString()) : std::nullopt;
+    };
+    const auto same = [&](const std::optional<model::Id>& stored) {
+        if (v->isNull()) return !stored;
+        return v->isString() && stored && stored->str() == v->asString();
+    };
+    if (r.command == "route.set") {
+        const auto route = id("route");
+        const model::Route* x = route ? before.routes.find(*route) : nullptr;
+        if (!x) return false;
+        if (r.field == "from") return same(x->from.module ? x->from.module : x->from.track);
+        if (r.field == "fx") return same(x->to.fx);
+        if (r.field == "to")
+            return same(x->to.module ? x->to.module
+                        : x->to.fx   ? model::trackOfFx(before, *x->to.fx)
+                                     : x->to.track);
+    } else if (r.command == "module.set") {
+        const auto module = id("module");
+        const model::RackModule* m = module ? before.modules.find(*module) : nullptr;
+        if (!m) return false;
+        if (r.field == "source_sends") return v->isBool() && v->asBool() == m->sourceSends;
+        if (r.field == "source") {
+            if (v->isString() && v->asString() == "none") return m->sourceOff;
+            return !m->sourceOff && same(m->source);
+        }
+    } else if (r.command == "track.set") {
+        const auto track = id("track");
+        const model::Track* t = track ? before.tracks.find(*track) : nullptr;
+        if (!t) return false;
+        if (r.field == "parent_send") return v->isBool() && v->asBool() == t->parentSend.enabled;
+        if (r.field == "record_rack") {
+            const model::Route* in =
+                t->record.input ? before.routes.find(*t->record.input) : nullptr;
+            return same(in ? in->from.module : std::nullopt);
+        }
+    } else if (r.command == "rack.set" && r.field == "track") {
+        const auto rack = id("rack");
+        const model::Rack* k = rack ? before.racks.find(*rack) : nullptr;
+        return k && same(k->track);
+    }
+    return false;
+}
 // The row an edit's refusal takes, of its command's rows whose argument it
-// gives (a parent send or a source's sends turned off, or a record rack
-// cleared, makes no edge; a Notes source cleared does: the module then
-// follows its rack's channel):
+// gives and changes (a parent send or a source's sends turned off, or a
+// record rack cleared, makes no edge; a Notes source cleared does: the
+// module then follows its rack's channel; an argument equal to the stored
+// value makes none: round 204 F1):
 // the first whose new edges the cycle needs (taking them out of the edit's
 // result leaves no cycle: rounds 200 F3, 202 F1), else the first of them
 // (two edges each needed: either argument is a fix), else the command's
@@ -243,14 +297,15 @@ inline bool makesEdge(const CycleRow& r, const json::Value& fields) {
 }
 inline const CycleRow* cycleRow(std::string_view command, const json::Value& fields,
                                 const model::Session* after = nullptr,
-                                const std::vector<model::CycleEdge>& added = {}) {
+                                const std::vector<model::CycleEdge>& added = {},
+                                const model::Session* before = nullptr) {
     const CycleRow* fallback = nullptr;
     const CycleRow* given = nullptr;
     for (const CycleRow& r : kCycleRows) {
         if (r.by != CycleBy::Wrapper || r.command != command) continue;
         if (r.field.empty()) {
             if (!fallback) fallback = &r;
-        } else if (makesEdge(r, fields)) {
+        } else if (makesEdge(r, fields) && !(before && leavesStored(r, fields, *before))) {
             if (!given) given = &r;
             if (!after) continue;
             std::vector<model::CycleEdge> mine;
@@ -264,10 +319,17 @@ inline const CycleRow* cycleRow(std::string_view command, const json::Value& fie
 // The edges `after` has that `before` lacks.
 inline std::vector<model::CycleEdge> addedCycleEdges(const model::Session& before,
                                                      const model::Session& after) {
-    const auto old = model::cycleEdges(before);
+    auto old = model::cycleEdges(before);
+    const auto key = [](const model::CycleEdge& e) {
+        return std::tuple(static_cast<int>(e.kind), e.from.str(), e.to.str());
+    };
+    const auto less = [&](const model::CycleEdge& a, const model::CycleEdge& b) {
+        return key(a) < key(b);
+    };
+    std::sort(old.begin(), old.end(), less);
     std::vector<model::CycleEdge> out;
     for (const model::CycleEdge& e : model::cycleEdges(after))
-        if (std::find(old.begin(), old.end(), e) == old.end()) out.push_back(e);
+        if (!std::binary_search(old.begin(), old.end(), e, less)) out.push_back(e);
     return out;
 }
 // What the registry declares for a command that has rows: its rows' causes
@@ -395,7 +457,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     Status ok = model::checkInvariants(after);
                     if (!ok && ok.error().code == "modulation.cycle") {
                         row = detail::cycleRow(name, fields, &after,
-                                               detail::addedCycleEdges(before, after));
+                                               detail::addedCycleEdges(before, after), &before);
                         Error e = ok.error();
                         e.path = std::string(row->path);
                         e.hint = std::string(row->hint);
