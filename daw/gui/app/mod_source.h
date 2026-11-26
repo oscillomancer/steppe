@@ -59,11 +59,16 @@ std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Sessi
                                          const model::EnvTarget& target);
 
 // "Remove modulation: LFO (Modulators)": one row per route on `target`, by
-// source, each one modulation.remove (one undo step); its refusal goes to
-// actions.onError. None without a route.
+// source, each one modulation.remove (one undo step), greyed for a route in a
+// frozen track's print; its refusal goes to actions.onError in
+// removeRefusalWords. None without a route.
 std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Session& s,
                                          const rack::Catalog* catalog,
                                          const model::EnvTarget& target);
+// A refused remove of `route` in the GUI's own words, by code and path,
+// with no ids: track.frozen names the track; mr.unknown at /args/modulation (it
+// went another way while the menu was open) says it is already gone.
+std::string removeRefusalWords(const model::Session& s, model::Id route, const Error& e);
 // What a parameter menu lists for `target`'s routes, in every menu alike:
 // the source rows, then the remove rows.
 std::vector<ui::MenuItem> modRouteItems(AppActions& actions, const model::Session& s,

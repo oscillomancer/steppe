@@ -7,6 +7,7 @@
 
 #include "app_actions.h"
 #include "rack_scene.h"
+#include "supple/model/freeze.h"
 #include "supple/ui/root.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/object_name.h"
@@ -147,6 +148,17 @@ std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Sessi
     return items;
 }
 
+std::string removeRefusalWords(const model::Session& s, model::Id route, const Error& e) {
+    if (e.code == "track.frozen") {
+        const auto frozen = model::frozenOwner(s, route);
+        return (frozen ? model::trackLabel(s, *frozen) : std::string("Its track")) +
+               " is frozen: unfreeze it to change its modulation";
+    }
+    if (e.code == "mr.unknown" && e.path == "/args/modulation")
+        return "That modulation is already gone";
+    return "The modulation could not be removed";
+}
+
 std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Session& s,
                                          const rack::Catalog* catalog,
                                          const model::EnvTarget& target) {
@@ -154,14 +166,20 @@ std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Sessi
     AppActions* a = &actions;
     const auto routes = views::routesOn(s, target);
     const auto labels = menuLabels(s, catalog, routes);
-    for (std::size_t i = 0; i < routes.size(); ++i)
-        items.push_back({"Remove modulation: " + labels[i], "", [a, route = routes[i]] {
-                             json::Value args = json::Value::object();
-                             args["modulation"] = route.str();
-                             const auto r = a->dispatcher().execute(
-                                 {"modulation.remove", std::move(args), kOrigin});
-                             if (!r && a->onError) a->onError(r.error().message);
-                         }});
+    for (std::size_t i = 0; i < routes.size(); ++i) {
+        ui::MenuItem m;
+        m.label = "Remove modulation: " + labels[i];
+        // A route in a frozen track's print stays with it (the engine
+        // refuses it with track.frozen); a fader's route acts after the print.
+        m.enabled = !model::frozenOwner(s, routes[i]);
+        m.run = [a, route = routes[i]] {
+            json::Value args = json::Value::object();
+            args["modulation"] = route.str();
+            const auto r = a->dispatcher().execute({"modulation.remove", std::move(args), kOrigin});
+            if (!r && a->onError) a->onError(removeRefusalWords(a->app().head(), route, r.error()));
+        };
+        items.push_back(std::move(m));
+    }
     return items;
 }
 

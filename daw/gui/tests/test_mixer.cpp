@@ -4291,3 +4291,59 @@ TEST_CASE("mixer: route rows from two racks that read the same still differ") {
     CHECK(removes[0].find("·") == std::string::npos);
     CHECK(removes[1].ends_with(" (Second)"));
 }
+
+TEST_CASE("mixer: a frozen print's route cannot be removed; refusals read in the GUI's words") {
+    // gui.md §2: the Remove row of a route in a frozen track's print is
+    // greyed (the engine refuses it, track.frozen); a fader's route acts
+    // after the print and stays removable. A refusal names no id.
+    Fixture f;
+    if (!f.ok) return;
+    const auto keys = f.addTrack("channel", "Keys");
+    const auto fx = f.addFx(keys, "Hickory");
+    const std::string param = modulatableParam(f, fx);
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.exec("modulate", R"({"target":{"track":")" + keys + R"(","param":"volume"},"source":"lfo"})");
+    const model::EnvTarget fxTarget{*model::Id::parse(fx), param};
+    const model::EnvTarget fader{*model::Id::parse(keys), "volume"};
+    auto rows = [&](const model::EnvTarget& target) {
+        return gui::modRemoveItems(*f.actions, f.app->head(), nullptr, target);
+    };
+    REQUIRE(rows(fxTarget).size() == 1);
+    CHECK(rows(fxTarget).front().enabled);
+    f.exec("item.add", R"({"track":")" + keys + R"(","bar":1,"notation":"voice v; 1: E4:w"})");
+    f.exec("track.freeze", R"({"track":")" + keys + R"("})");
+    REQUIRE(f.app->head().tracks.find(*model::Id::parse(keys))->freeze);
+    auto frozenRows = rows(fxTarget);
+    REQUIRE(frozenRows.size() == 1);
+    CHECK_FALSE(frozenRows.front().enabled);
+    // Run anyway (an agent's freeze after the menu opened): the refusal in
+    // words, the route kept.
+    f.errors.clear();
+    frozenRows.front().run();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors.back() == "Keys is frozen: unfreeze it to change its modulation");
+    CHECK(f.app->head().modulations.find(*model::Id::parse(route)));
+    // The fader's route is not in the print: its row stays, and removes it.
+    auto faderRows = rows(fader);
+    REQUIRE(faderRows.size() == 1);
+    CHECK(faderRows.front().enabled);
+    faderRows.front().run();
+    CHECK(f.errors.size() == 1);
+    CHECK(rows(fader).empty());
+    // A row whose route went another way while the menu was open.
+    f.exec("track.unfreeze", R"({"track":")" + keys + R"("})");
+    auto stale = rows(fxTarget);
+    REQUIRE(stale.size() == 1);
+    REQUIRE(stale.front().enabled);
+    f.exec("modulation.remove", R"({"modulation":")" + route + R"("})");
+    stale.front().run();
+    REQUIRE(f.errors.size() == 2);
+    CHECK(f.errors.back() == "That modulation is already gone");
+    for (const std::string& e : f.errors) CHECK(e.find("_") == std::string::npos);  // no ids
+}
