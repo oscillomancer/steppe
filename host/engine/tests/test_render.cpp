@@ -626,6 +626,8 @@ TEST_CASE(
         INFO(json::writeCanonical(archive));
         REQUIRE(archive.isObject());
         CHECK(archive.find("settings") == nullptr);
+        REQUIRE(archive.find("factory"));
+        CHECK_FALSE(archive["factory"].asBool());  // round 190 S1
         REQUIRE(archive.find("damaged"));
         json::Value& d = archive["damaged"];
         const std::string code = d["code"].asString();
@@ -665,6 +667,44 @@ TEST_CASE(
     }
     damaged("/args/name/settings/", false);
     removed();
+    // A file that is not a preset: schema.* at the name (round 190 F2).
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "[]";
+    }
+    CHECK(damaged("/args/name", true).rfind("schema.", 0) == 0);
+    removed();
+    // A link to nothing: listed as damaged, and load answers the same, not
+    // preset_unknown; delete removes the link, not its target (round 190
+    // F1). Windows makes a symbolic link only with the privilege (or
+    // developer mode): without it this part is skipped there.
+    {
+        fs::remove(file);
+        const fs::path target = r.dir.path / "elsewhere" / "Gone.json";
+        std::error_code ec;
+        fs::create_symlink(target, file, ec);
+        if (ec) {
+            MESSAGE("no symbolic links here (" << ec.message() << "): the link case skipped");
+        } else {
+            CHECK(damaged("/args/name", true).rfind("file.", 0) == 0);
+            r.run("render.preset.delete", R"({"name":"Archive"})");
+            CHECK_FALSE(fs::exists(fs::symlink_status(file)));
+            CHECK(entry("Archive").isNull());
+            CHECK(r.fails("render.preset.load", R"({"name":"Archive"})").code ==
+                  "render.preset_unknown");
+            // A link whose target is there: delete removes the link only.
+            fs::create_directories(target.parent_path());
+            {
+                std::ofstream out(target);
+                out << "{}";
+            }
+            fs::create_symlink(target, file);
+            r.run("render.preset.delete", R"({"name":"Archive"})");
+            CHECK_FALSE(fs::exists(fs::symlink_status(file)));
+            CHECK(fs::exists(target));
+        }
+        r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    }
     // A file that cannot be read.
 #ifdef _WIN32
     {

@@ -419,7 +419,7 @@ Result:
 
 Render presets, factory then user's, with settings.
 
-default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project. A user preset that cannot be read is {name, damaged: {code, path}}, as render.preset.load answers it; render.preset.delete removes it.
+default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project. A user preset that cannot be read is {name, factory: false, damaged: {code, path}}, as render.preset.load answers it; render.preset.delete removes it.
 
 Kind: `query`. Exposure: `mcp-exec`.
 

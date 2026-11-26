@@ -2115,14 +2115,14 @@ Status presetTarget(const std::optional<std::string>& name, bool isDefault) {
 json::Value presetJson(const RenderPreset& preset) {
     json::Value out = json::Value::object();
     out["name"] = preset.name;
-    if (preset.damaged) {  // {name, damaged: {code, path}} (round 186 F1)
+    out["factory"] = preset.factory;
+    if (preset.damaged) {  // {name, factory, damaged: {code, path}} (round 186 F1)
         json::Value damaged = json::Value::object();
         damaged["code"] = preset.damaged->code;
         damaged["path"] = preset.damaged->path;
         out["damaged"] = std::move(damaged);
         return out;
     }
-    out["factory"] = preset.factory;
     out["settings"] = rs::toJson(preset.settings);
     return out;
 }
@@ -2181,7 +2181,8 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.description =
             "default: the user's render default, or null. Presets live in the user's data "
             "folder (render-presets/), shared by every project. A user preset that cannot "
-            "be read is {name, damaged: {code, path}}, as render.preset.load answers it; "
+            "be read is {name, factory: false, damaged: {code, path}}, as render.preset.load "
+            "answers it; "
             "render.preset.delete removes it.";
         c.tags = {"render"};
         c.args = schema::object<cmd::NoArgs>("no_args").build();

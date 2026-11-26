@@ -338,7 +338,7 @@ Result<std::vector<RenderPreset>> listRenderPresets(const EngineApp& app) {
             // one render.preset.load {name} answers, after the bus's /args.
             auto error = std::move(settings).error();
             markRead(error, "/args/name");
-            user.push_back({name, false, {}, std::move(error)});
+            user.push_back({name, false, {}, std::move(error)});  // factory: false
             continue;
         }
         user.push_back({name, false, std::move(*settings), std::nullopt});
@@ -375,7 +375,7 @@ Status deleteRenderPreset(const EngineApp& app, const std::optional<std::string>
         SUPPLE_TRY(validPresetName(*name));
     }
     // The file is never read, so a damaged preset is removed as any other
-    // (round 186 F1).
+    // (round 186 F1); a link is removed itself, never its target.
     const fs::path path = presetPath(app, name);
     std::error_code ec;
     if (fs::remove(path, ec)) return okStatus();
@@ -395,7 +395,9 @@ Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& n
     SUPPLE_TRY(validPresetName(name));
     const fs::path path = presetPath(app, name);
     std::error_code ec;
-    if (!fs::exists(path, ec))
+    // The entry itself, not what it links to: a link to nothing is listed
+    // as damaged, so load reads it and answers the same (round 190 F1).
+    if (!fs::exists(fs::symlink_status(path, ec)))
         return Error("render.preset_unknown", "no preset \"" + name + "\"", "/name",
                      "render.preset.list shows the presets");
     auto settings = readPreset(path);
