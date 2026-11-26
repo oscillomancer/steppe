@@ -624,3 +624,35 @@ TEST_CASE("item.mix-to-track sums the selected items' strips onto a new muted ch
     REQUIRE(f.app->undo());
     CHECK(f.app->head().tracks.size() == tracks);
 }
+
+TEST_CASE("healing joins take FX routes that match, and refuses ones that differ (M5)") {
+    Fixture f;
+    f.run("rack.add", R"({"track":"tr_1"})");                    // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out"})");  // mo_2
+    f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");  // fx_1
+    f.run("modulation.add", R"({"source":{"module":"mo_2","input":"in_1"},
+        "target":{"fx":"fx_1","param":"gain"},"depth":0.25})");                  // mr_1
+    // Both halves keep the route: the right one on its copied FX.
+    f.run("item.split", R"({"item":"it_1","at":1})");
+    REQUIRE(f.app->head().modulations.size() == 2);
+    const model::Id copy{model::Kind::Modulation, 2};
+    CHECK(f.app->head().modulations.find(copy)->target.object == model::Id::parse("fx_2"));
+    // A depth that differs: refused, its own words and hint.
+    f.run("modulation.set", R"({"modulation":"mr_2","depth":0.5})");
+    auto refused = f.call("item.heal", R"({"items":["it_1","it_2"]})");
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "item.heal_fx");
+    CHECK(refused.error().message.find("modulation routes") != std::string::npos);
+    CHECK(refused.error().hint.find("modulation.set") != std::string::npos);
+    // Matching again: healed, the right half's route goes with its piece and
+    // no route is reported removed (it lives on in the left one).
+    f.run("modulation.set", R"({"modulation":"mr_2","depth":0.25})");
+    const auto healed = f.run("item.heal", R"({"items":["it_1","it_2"]})");
+    if (const json::Value* warnings = healed.find("warnings"))
+        for (const auto& w : warnings->asArray())
+            CHECK(w.find("code")->asString() != "modulation.removed");
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target.object == model::Id::parse("fx_1"));
+    REQUIRE(f.app->undo());
+    CHECK(f.app->head().modulations.size() == 2);
+}

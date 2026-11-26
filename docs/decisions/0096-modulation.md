@@ -59,6 +59,8 @@ changes is in engine.md §1.4.1, "Take FX targets".
   - The plan compiles a take chain only for a take it plays. A route into
     the FX of any other take is still an edge, by amendment M-l. It
     compiles like an inert route, with `before` 0, and sends nothing.
+    `modulation.list` reports such a route as `inert: "take"` (engine.md
+    §1.4.1 says which takes play, and what holds in a comp).
 - **Timing.** A take chain runs ahead of its track by its lead `L`: an
   item's chain by its own latency, a launcher clip's by the node's launch
   lead.

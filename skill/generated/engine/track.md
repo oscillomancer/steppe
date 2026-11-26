@@ -221,7 +221,7 @@ Result:
 
 Duplicate channels or busses with their FX, items, sends and automation.
 
-Each copy goes right after its original, under the same parent, with the same settings and name; its main and input chains (each plugin's settings as it sounds now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends and record input, and the envelopes on the track, its plugins, sends and takes. Not copied: a folder's children, sends into the track, and item groups. Masters cannot be duplicated. One undo step; the copies' ids in the order given.
+Each copy goes right after its original, under the same parent, with the same settings and name; its main and input chains (each plugin's settings as it sounds now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends and record input, the envelopes on the track, its plugins, sends and takes, and every modulation route whose target is on the track (its fader, pan, width, sends' levels and plugins, take FX included). Not copied: a folder's children, sends into the track, and item groups. Masters cannot be duplicated. One undo step; the copies' ids in the order given.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 

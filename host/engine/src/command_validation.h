@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <memory>
+#include <string_view>
+#include <vector>
 
 #include "supple/engine/app.h"
 #include "supple/model/freeze.h"
@@ -81,6 +83,31 @@ inline Status checkItemTrack(const model::Session& s, model::Id track,
 // The item's take list is the caller's to update.
 Status removeTakeObjects(model::EditTxn& t, const model::Session& s, model::Id take);
 
+namespace detail {
+// The argument that names what a command copies, where a copy past the route
+// limit is refused (ADR-0096 M5).
+inline std::string copiedPath(std::string_view command) {
+    if (command == "item.paste" || command == "item.consolidate" ||
+        command == "item.consolidate.commit")
+        return "/items";
+    if (command == "item.add" || command == "clip.duplicate") return "/clip";
+    if (command == "scene.capture") return "/region";
+    if (command == "scene.insert") return "/scene";
+    if (command == "arrangement.build") return "/sequence";
+    if (command == "track.duplicate") return "/tracks";
+    if (command == "launch.commit") return "/performance";
+    if (command == "item.duplicate" || command == "item.split" || command == "clip.add")
+        return "/item";
+    return "";
+}
+// The commands that move a take to another track, whose cycle refusal is at
+// the track that moves it (ADR-0096 M5).
+inline bool movesTakes(std::string_view command) {
+    return command == "item.move" || command == "clip.move" || command == "take.extract" ||
+           command == "item.explode-takes";
+}
+}  // namespace detail
+
 // Validate derived edit values before the invocation succeeds, so a caught Lua
 // error restores this invocation's savepoint even inside a larger transaction.
 template <class Args, class Output>
@@ -135,6 +162,47 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             }
             auto result = original(a, ctx);
             if (!result) return result.error();
+            // The routes this edit's copies made (ADR-0096 M5), settled now
+            // that the copies are placed: one the destination cannot keep is
+            // named, never dropped silently, and a copy past the route limit
+            // is refused whole. Each original whose copy stays lives on, so a
+            // cut (copy, then remove) warns nothing for it.
+            std::vector<model::Id> livesOn;
+            if (app.inTransaction()) {
+                for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
+                    ctx.warn("modulation.not_copied", d.message,
+                             "/modulations/" + d.original.str());
+                const std::size_t routes = app.txn().preview().modulations.size();
+                if (routes > model::kMaxModulations && routes > before.modulations.size())
+                    return Error("modulation.limit",
+                                 "the copy would make " + std::to_string(routes) +
+                                     " modulation routes; a project holds at most " +
+                                     std::to_string(model::kMaxModulations),
+                                 // launch.commit without `performance`
+                                 // commits the last capture: the root.
+                                 name == "launch.commit" && !fields.find("performance")
+                                     ? std::string()
+                                     : detail::copiedPath(name),
+                                 "remove at least " +
+                                     std::to_string(routes - model::kMaxModulations) +
+                                     " routes first (modulation.list), for instance those of "
+                                     "the copied chain, which the copy duplicates");
+                const auto& joined = app.txn().routesLivingOn();
+                livesOn.insert(livesOn.end(), joined.begin(), joined.end());
+                // A move that closes a cycle is refused, never mended by
+                // dropping a route: a move must not change what sounds.
+                if (detail::movesTakes(name) && !before.modulations.empty()) {
+                    Status ok = model::checkInvariants(app.txn().preview());
+                    if (!ok && ok.error().code == "modulation.cycle") {
+                        Error e = ok.error();
+                        const bool explode = name == "item.explode-takes";
+                        e.path = explode ? "/item" : "/track";
+                        e.hint = explode ? "remove the route, or use mode serial"
+                                         : "remove the route, or choose another track";
+                        return e;
+                    }
+                }
+            }
             // Routes whose source or target this edit took away go with it,
             // each named in a warning (ADR-0096, "Cascades"); a route's own
             // commands refuse instead.
@@ -152,6 +220,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
                     if (after.modulations.contains(e.id)) continue;
+                    if (std::find(livesOn.begin(), livesOn.end(), e.id) != livesOn.end())
+                        continue;  // its copy or its twin carries it (M5)
                     const model::Modulation& m = *e.value;
                     removed(e.id, m,
                             after.modules.contains(m.source.module)

@@ -351,6 +351,18 @@ until it is released.
     keeps `takeChain` −1. It compiles like an inert route: no values
     buffer and no delay, `before` 0. It stays an edge for order and
     liveness, and it sends nothing.
+    - `modulation.list` says so: `inert: "take"`, decided by
+      `model::takeFxPlays`, which holds when the take is its item's active
+      take and the item is not muted, or its clip's active take (a muted
+      clip's chain still compiles). That is the rule the plan compiles take
+      chains by. `take` comes before the other reasons, since the plan binds
+      nothing there. What the plan adds at run time (a recording master's
+      lane mute or silence, a render without launches) is not reported.
+    - A comp: `take.comp` splits the item into pieces that each hold a copy
+      of every take, and each copy keeps its routes. A take that plays in
+      only some pieces is played there: its copies' routes are live in
+      those pieces and `take` in the others, each route answering for the
+      piece that holds it.
   - **A render without launches.** `dropClipChains` erases the clip chains
     after compile (offline.cpp). It sets the `takeChain` of their edges to
     −1 as well, so those edges are treated as above. Item chains come

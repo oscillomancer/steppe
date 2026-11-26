@@ -1486,7 +1486,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
   {modulation}`, `modulation.list {track?, fx?, rack?}` (q: each route,
   with `fed_by`, the modules cabled into its Mod Out input and their types,
-  and `inert`: `source` when nothing is cabled in, `target`, or `latency`),
+  and `inert`: `source` when nothing is cabled in, `target`, `envelope`,
+  `latency`, or `take` when its take FX's take does not play),
   `modulation.telemetry {track?}` (q: each route's live target offset and
   its span, M2; no span while nothing is cabled into its input), `modulate {target, source: lfo|follower|random|macro|
   {module, input}, depth?, from?, rack?}` (M2: one undo step. Rack: `rack`,
@@ -2335,7 +2336,9 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
 - `modulation.list` reports each route's signal range (`bipolar` −1..1 or
   `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
   the plan cannot apply it (`source`, `target`, `envelope` when the envelope
-  that carries it is gone or off, `latency`).
+  that carries it is gone or off, `latency`, `take` when the route's take FX
+  is in a take the engine does not play: not its item's or clip's active
+  take, or its item is muted; engine.md §1.4.1).
 - `session.describe` lists the routes under their target's track.
 - A file whose target lost its modulatable flag loads. The engine treats
   that route as inert (engine.md §1.4.1).

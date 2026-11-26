@@ -322,8 +322,8 @@ instructions are in `docs/guides/installing.md`.
     heard at its boundary, starts afresh at each launch, and is cut at the
     switch away after the crossfade. The take's envelopes, and those on its
     FX, are from the clip's start, pass after pass (ADR-0097, amended
-    2026-11-20). Modulation routes do not reach a clip take's FX, as
-    they do not reach an item's (`modulation.target`: take FX come later).
+    2026-11-20). Modulation routes reach a clip take's FX as they reach
+    an item's (ADR-0096 M5; see Modulation routes).
   - Renders play the arrangement unless given a performance:
     `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
     take `performance` ("captured", a `captured_performance`, or the
@@ -963,7 +963,22 @@ instructions are in `docs/guides/installing.md`.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
-  volume, pan and width, and a send's level. A plug-in's offset is signal
+  volume, pan and width, and a send's level. Take FX (M5, schema 2.23): a
+  route into an item's or a clip's take FX is compensated on its track's
+  node, and `modulation.list` names the owner. A take chain is entered one
+  32-frame grid interval early, so its first modulated frame does not
+  depend on the block size; on a track whose clip chain is modulated an
+  unquantized launch applies up to 32 frames later, and a quantized one
+  pressed within 32 more frames of its boundary takes the next. A route
+  into a take that does not play is idle. Copies keep their routes: every
+  command that copies a take copies the routes into its FX in the same
+  undo step, and one the copy cannot keep (its source missing, or a
+  cycle) is dropped and named (`modulation.not_copied`). A copy past 4096
+  routes is refused whole (`modulation.limit`); an overdub's is trimmed
+  instead. `track.duplicate` copies every route whose target is on the
+  track (before M5 it copied none). A move that would close a cycle is
+  refused (`modulation.cycle`), and heal and `take.comp` join only pieces
+  whose routes match. A plug-in's offset is signal
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
   target's is linear between grid points, added after automation and

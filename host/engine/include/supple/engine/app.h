@@ -1469,8 +1469,24 @@ class EngineApp : public cmd::Host {
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already
 // have a new source/offset; `shift` clips its item-relative envelopes for a split.
+// The modulation routes into its FX are copied onto the copies (ADR-0096 M5),
+// after the envelopes, in the originals' id order, and noted on the
+// transaction (EditTxn::copiedRoute) for settleCopiedRoutes.
 Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, model::Id original,
                            model::Take copy, double shift = 0);
+// A route a copy could not keep (ADR-0096 M5): `reason` is source, cycle or
+// limit; `message` names it, the copy's FX and the remedy.
+struct RouteNotCopied {
+    model::Id original, copy;
+    std::string reason, message;
+};
+// Once a command has placed its copies: removes each copied route whose
+// source the destination lacks, then each that closes a cycle, in creation
+// order; with `trimToLimit` (a recording, which is never refused), the
+// copied routes past kMaxModulations too, the last made first.
+// `kept` collects the originals of the copies that stay.
+std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToLimit,
+                                               std::vector<model::Id>* kept = nullptr);
 // A copied take gets its own copy of an unpooled MIDI source; audio and
 // pooled MIDI stay shared.
 void unpoolCopiedSource(model::Take& take, const model::Session& s, model::EditTxn& txn);

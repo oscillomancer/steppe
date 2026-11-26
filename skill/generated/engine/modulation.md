@@ -12,7 +12,7 @@ In an argument table, a member of an object argument is listed under it as `argu
 
 Route a rack's Mod Out to a plug-in parameter or mixer level.
 
-depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range. Another enabled route onto the same target from the same kind of source (the module cabled into the Mod Out input) is allowed with the warning modulation.stacked, which names the routes already there: their offsets add.
+The plug-in sits in a track's chain or input chain, or in a take's chain (an item's or a clip's: copies of the take keep the route). depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range. Another enabled route onto the same target from the same kind of source (the module cabled into the Mod Out input) is allowed with the warning modulation.stacked, which names the routes already there: their offsets add.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -97,7 +97,7 @@ Result:
 
 List modulation routes by target or source rack.
 
-Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print), envelope (a parameter reached through its envelope, which is gone or off) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print), envelope (a parameter reached through its envelope, which is gone or off), latency (its plug-in changed latency while modulated; editing a route into it turns them back on) or take (its plug-in is in the chain of a take that does not play: not its item's or clip's active take, or its item is muted; in a comp, each piece's copy of a take answers for that piece). owner: for a plug-in in a take's chain, the item or clip and the take that hold it; track lists those too.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -210,6 +210,24 @@ Kind: `query`. Exposure: `mcp-exec`.
           "param_name": {
             "type": "string",
             "description": "A plug-in target's display name."
+          },
+          "owner": {
+            "type": "object",
+            "title": "modulation_owner",
+            "properties": {
+              "item": {
+                "type": "string"
+              },
+              "clip": {
+                "type": "string"
+              },
+              "take": {
+                "type": "string"
+              }
+            },
+            "required": ["take"],
+            "additionalProperties": false,
+            "description": "A take FX target's take, and the item or clip that holds it"
           }
         },
         "required": [

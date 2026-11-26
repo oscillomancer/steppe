@@ -740,7 +740,76 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
                 txn.create(std::move(item));
             }
     }
+    // A copy keeps its routes (ADR-0096 M5): each route into one of the
+    // copied FX, onto its copy, with the same source, parameter, depth,
+    // enabled and lane. Whether the destination can keep it is known only
+    // once the command has placed the copy (settleCopiedRoutes).
+    for (const auto& e : source.modulations) {
+        const auto to = ids.find(e.value->target.object);
+        if (to == ids.end() || to->first == original) continue;
+        model::Modulation route = *e.value;
+        route.target.object = to->second;
+        txn.copiedRoute(txn.create(std::move(route)), e.id);
+    }
     return fresh;
+}
+
+std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToLimit,
+                                               std::vector<model::Id>* kept) {
+    std::vector<RouteNotCopied> out;
+    const auto copied = txn.takeCopiedRoutes();
+    if (copied.empty()) return out;
+    const auto drop = [&](model::Id made, model::Id original, std::string reason,
+                          const std::string& why, const std::string& remedy) {
+        const model::Modulation* m = txn.get<model::Modulation>(made);
+        if (!m) return;
+        const model::Id copy = m->target.object;
+        const std::string what = original.str() + " (" + m->source.module.str() + "." +
+                                 m->source.input + " to " + m->target.param + ")";
+        txn.remove<model::Modulation>(made);
+        out.push_back({original, copy, reason,
+                       what + " was not copied to " + copy.str() + ": " + why + "; " + remedy});
+    };
+    // Its source: a paste from a retained version may name a Mod Out the
+    // destination no longer has.
+    std::vector<std::pair<model::Id, model::Id>> sourced;
+    for (const auto& [made, original] : copied) {
+        const model::Modulation* m = txn.get<model::Modulation>(made);
+        if (!m) continue;  // the command removed it again
+        const model::RackModule* module = txn.get<model::RackModule>(m->source.module);
+        if (!module || module->type != model::kModOutModule)
+            drop(made, original, "source", "its source " + m->source.module.str() + " is not here",
+                 "route again with modulation.add once a Mod Out exists");
+        else
+            sourced.emplace_back(made, original);
+    }
+    // Cycles: the copy may sit on a track the source rack hears.
+    std::vector<model::Id> ordered;
+    for (const auto& [made, original] : sourced) ordered.push_back(made);
+    const auto closing = model::modulationsClosingCycles(txn.preview(), ordered);
+    std::vector<std::pair<model::Id, model::Id>> placed;
+    for (const auto& [made, original] : sourced)
+        if (std::find(closing.begin(), closing.end(), made) != closing.end())
+            drop(made, original, "cycle",
+                 "it would close a cycle, the copy's track feeding "
+                 "the source's rack",
+                 "modulate from a rack that the copy's track does not feed");
+        else
+            placed.emplace_back(made, original);
+    // A recording is never refused for the limit: the last copies go.
+    if (trimToLimit) {
+        std::size_t count = txn.preview().modulations.size();
+        while (!placed.empty() && count > model::kMaxModulations) {
+            drop(placed.back().first, placed.back().second, "limit",
+                 "the project holds at most " + std::to_string(model::kMaxModulations) + " routes",
+                 "remove routes, then add it again with modulation.add");
+            placed.pop_back();
+            --count;
+        }
+    }
+    if (kept)
+        for (const auto& [made, original] : placed) kept->push_back(original);
+    return out;
 }
 
 // --- project files ----------------------------------------------------------------------
@@ -3864,8 +3933,16 @@ Result<bool> overdubMidi(model::EditTxn& t, const model::Session& s, const Recor
             x.takes.push_back(tk);
             x.activeTake = tk;
         });
+        // Its routes, settled here and never refused (ADR-0096 M5): a
+        // recording always commits, and the routes past the limit are named.
+        const auto notCopied = settleCopiedRoutes(t, true);
         RecordedInfo info;
         info.warnings = recordingWarnings(r);
+        for (const RouteNotCopied& d : notCopied) {
+            if (!info.warnings) info.warnings.emplace();
+            info.warnings->push_back({"modulation.not_copied", d.message,
+                                      "/modulations/" + d.original.str(), "", r.track.str(), ""});
+        }
         info.track = r.track.str();
         info.item = e.id.str();
         info.take = tk.str();

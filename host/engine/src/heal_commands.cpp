@@ -45,6 +45,13 @@ void registerHealCommands(cmd::Registry& registry) {
         for (const auto& group : *groups) {
             for (std::size_t i = 1; i < group.items.size(); ++i) {
                 const auto s = app.view();
+                // Its routes match the first piece's (healingGroups), which
+                // carries them on: no removal warning (ADR-0096 M5).
+                for (auto take : s.items.find(group.items[i])->takes)
+                    if (const model::Take* tk = s.takes.find(take))
+                        for (model::Id fx : tk->chain)
+                            for (model::Id route : model::modulationsInto(s, fx))
+                                app.txn().routeLivesOn(route);
                 for (auto take : s.items.find(group.items[i])->takes)
                     SUPPLE_TRY(removeTakeObjects(app.txn(), app.view(), take));
                 app.txn().remove<model::Item>(group.items[i]);

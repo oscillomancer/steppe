@@ -1648,9 +1648,11 @@ void registerChainCommands(cmd::Registry& registry) {
             "Each copy goes right after its original, under the same parent, with the same "
             "settings and name; its main and input chains (each plugin's settings as it sounds "
             "now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends "
-            "and record input, and the envelopes on the track, its plugins, sends and takes. Not "
-            "copied: a folder's children, sends into the track, and item groups. Masters cannot "
-            "be duplicated. One undo step; the copies' ids in the order given.";
+            "and record input, the envelopes on the track, its plugins, sends and takes, and "
+            "every modulation route whose target is on the track (its fader, pan, width, sends' "
+            "levels and plugins, take FX included). Not copied: a folder's children, sends into "
+            "the track, and item groups. Masters cannot be duplicated. One undo step; the "
+            "copies' ids in the order given.";
         c.tags = {"track"};
         c.args = schema::object<DuplicateArgs>("track_duplicate_args")
                      .field("tracks", &DuplicateArgs::tracks,
@@ -1762,6 +1764,23 @@ void registerChainCommands(cmd::Registry& registry) {
                             item.envelope = lane;
                             txn.create(std::move(item));
                         }
+                }
+                // Every modulation route whose target is on the track
+                // (ADR-0096 M5): its fader, pan and width, its sends'
+                // levels, its chain and input-chain FX; its take FX's came
+                // with copyTake. Not a send into it or its record input,
+                // whose levels are applied elsewhere.
+                for (const auto& e : s.modulations) {
+                    const Id target = e.value->target.object;
+                    const auto to = ids.find(target);
+                    if (to == ids.end()) continue;
+                    if (const model::Route* r =
+                            target.kind == model::Kind::Route ? s.routes.find(target) : nullptr;
+                        r && r->from.track != source)
+                        continue;
+                    model::Modulation route = *e.value;
+                    route.target.object = to->second;
+                    txn.copiedRoute(txn.create(std::move(route)), e.id);
                 }
                 result.tracks.push_back(fresh.str());
             }

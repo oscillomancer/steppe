@@ -6199,3 +6199,306 @@ TEST_CASE("off Linux, memory locking and the CPU idle request refuse with a Linu
     app->stopEngine();
 }
 #endif
+
+TEST_CASE("modulation commands: a route into a take that does not play is inert: take (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // Transport's `playing` into mo_2.in_1, so a route is fed (no `source`).
+    run("module.add", j(R"({"rack": "rk_1", "type": "transport"})"));  // mo_3
+    run("cable.add", j(R"({"from": "mo_3.playing", "to": "mo_2.in_1"})"));
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string fx = run("fx.add", fxArgs).find("fx")->asString();
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx;
+    add["target"]["param"] = "gain";
+    run("modulation.add", add);
+    // Each route on tr_1: its owner's item, and its inert reason or "".
+    const auto rows = [&] {
+        std::vector<std::pair<std::string, std::string>> out;
+        const json::Value listed = run("modulation.list", j(R"({"track": "tr_1"})"));
+        for (const auto& row : listed.find("modulations")->asArray()) {
+            const json::Value* owner = row.find("owner");
+            REQUIRE(owner);
+            const json::Value* inert = row.find("inert");
+            out.emplace_back(owner->find("item")->asString(), inert ? inert->asString() : "");
+        }
+        return out;
+    };
+    const auto inertOf = [&] {
+        const auto all = rows();
+        REQUIRE(all.size() == 1);
+        return all[0].second;
+    };
+    json::Value which = json::Value::object();
+    which["item"] = item;
+    // The active take: live.
+    CHECK(inertOf().empty());
+    // Another take active (a new, empty one): this one does not play.
+    const std::string second = run("take.add", which).find("id")->asString();
+    which["take"] = second;
+    run("take.activate", which);
+    CHECK(inertOf() == "take");
+    // Active again, live again; its item muted, it does not play.
+    which["take"] = take;
+    run("take.activate", which);
+    CHECK(inertOf().empty());
+    json::Value mute = json::Value::object();
+    mute["item"] = item;
+    mute["mute"] = true;
+    run("item.set", mute);
+    CHECK(inertOf() == "take");
+    mute["mute"] = false;
+    run("item.set", mute);
+    CHECK(inertOf().empty());
+    // A comp: the second half plays the second take. Each piece holds a
+    // copy of the first take with its route: live in the first piece, which
+    // plays it, and `take` in the second, which does not.
+    json::Value comp = j(R"({"spans": [{"from": 2, "to": 4, "index": 1}]})");
+    comp["item"] = item;
+    run("take.comp", comp);
+    const auto pieces = rows();
+    REQUIRE(pieces.size() == 2);
+    const model::Session s = app->view();
+    const auto at = [&](const std::string& piece) {
+        const model::Item* it = s.items.find(*model::Id::parse(piece));
+        REQUIRE(it);
+        return it->position;
+    };
+    const bool firstFirst = at(pieces[0].first) < at(pieces[1].first);
+    CHECK(pieces[firstFirst ? 0 : 1].second.empty());
+    CHECK(pieces[firstFirst ? 1 : 0].second == "take");
+}
+
+TEST_CASE(
+    "modulation commands: a take FX is a target, and copies of its take keep its routes (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto warned = [](const json::Value& r, std::string_view code) {
+        const json::Value* warnings = r.find("warnings");
+        if (!warnings) return false;
+        for (auto w : warnings->asArray())
+            if (w["code"].asString() == code) return true;
+        return false;
+    };
+    // Bass (tr_1) holds an item whose take has a gain in its chain.
+    const auto added =
+        run("item.add", R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})");
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    auto fxAdded = d.execute({"fx.add", fxArgs, kTest});
+    REQUIRE_MESSAGE(fxAdded, (fxAdded ? "" : fxAdded.error().toString()));
+    const std::string takeFx = fxAdded->find("fx")->asString();
+
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = takeFx;
+    add["target"]["param"] = "gain";
+    auto routed = d.execute({"modulation.add", add, kTest});
+    REQUIRE_MESSAGE(routed, (routed ? "" : routed.error().toString()));
+    const auto listed = run("modulation.list", R"({"track": "tr_1"})")["modulations"];
+    REQUIRE(listed.size() == 1);
+    auto row = listed.at(0);
+    REQUIRE(row.find("owner"));
+    CHECK(row["owner"]["item"].asString() == item);
+    CHECK(row["owner"]["take"].asString() == take);
+    CHECK_FALSE(row["owner"].find("clip"));
+
+    // Every copy of the take carries the route onto its own FX: the same
+    // source and depth.
+    const auto routesOnCopies = [&] {
+        const model::Session s = app->view();
+        std::size_t n = 0;
+        for (const auto& e : s.modulations) {
+            CHECK(e.value->source.module == model::Id::parse("mo_2"));
+            CHECK(e.value->depth == 0.25);
+            if (model::takeFxOwner(s, e.value->target.object)) ++n;
+        }
+        return n;
+    };
+    json::Value dup = json::Value::object();
+    dup["item"] = item;
+    dup["to"] = 8.0;
+    const auto duplicated = d.execute({"item.duplicate", dup, kTest});
+    REQUIRE_MESSAGE(duplicated, (duplicated ? "" : duplicated.error().toString()));
+    CHECK_FALSE(warned(*duplicated, "modulation.not_copied"));
+    CHECK(routesOnCopies() == 2);
+    json::Value split = json::Value::object();
+    split["item"] = item;
+    split["at"] = 2.0;
+    REQUIRE(d.execute({"item.split", split, kTest}));
+    CHECK(routesOnCopies() == 3);  // both halves keep it
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    CHECK(routesOnCopies() == 1);
+
+    // Drums (tr_2) is heard by Bass's rack (a follower), so the route cannot
+    // follow the take there: a copy drops it and says so; a move is refused.
+    run("track.add", R"({"name": "Drums"})");  // tr_2
+    run("modulate", R"({"target": {"track": "tr_1", "param": "volume"}, "source": "follower",
+        "from": "tr_2", "rack": "rk_1"})");
+    json::Value paste = json::Value::object();
+    paste["items"] = json::Value::array();
+    json::Value one = json::Value::object();
+    one["item"] = item;
+    one["track"] = "tr_2";
+    one["position"] = 16.0;
+    paste["items"].push_back(one);
+    const auto before = app->view().modulations.size();
+    const auto pasted = d.execute({"item.paste", paste, kTest});
+    REQUIRE_MESSAGE(pasted, (pasted ? "" : pasted.error().toString()));
+    CHECK(warned(*pasted, "modulation.not_copied"));
+    CHECK(app->view().modulations.size() == before);
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    json::Value move = json::Value::object();
+    move["item"] = item;
+    move["track"] = "tr_2";
+    const auto moved = d.execute({"item.move", move, kTest});
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "modulation.cycle");
+    CHECK(moved.error().path == "/args/track");
+    CHECK(moved.error().hint.find("another track") != std::string::npos);
+    CHECK(app->view().items.find(*model::Id::parse(item))->track == model::Id::parse("tr_1"));
+}
+
+TEST_CASE("modulation commands: exploding takes onto tracks may not close a cycle (M5, G2)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // T (tr_3) sits in the buss F (tr_2) with its parent send off, so a rack
+    // on T may follow F and modulate an FX on T's second take: T does not
+    // feed F. A new channel for that take, under F with its send on, would.
+    run("track.add", j(R"({"name": "F", "type": "buss"})"));
+    run("track.add", j(R"({"name": "T", "parent": "tr_2"})"));
+    run("track.set", j(R"({"track": "tr_3", "parent_send": false})"));
+    const auto added = run("item.add", j(R"({"track": "tr_3", "bar": 1, "notation": "1: C4:w"})"));
+    const std::string item = added.find("item")->asString();
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = added.find("take")->asString();
+    const std::string second = run("take.add", copy)["id"].asString();
+    json::Value fx = json::Value::object();
+    fx["take"] = second;
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    const std::string gain = run("fx.add", fx)["fx"].asString();
+    json::Value modulate = j(R"({"source": "follower", "from": "tr_2", "depth": 0.2})");
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const auto routes = app->view().modulations.size();
+    const auto tracks = app->view().tracks.size();
+    json::Value explode = json::Value::object();
+    explode["item"] = item;
+    auto refused = d.execute({"item.explode-takes", explode, kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.cycle");
+    CHECK(refused.error().path == "/args/item");
+    CHECK(refused.error().hint == "remove the route, or use mode serial");
+    CHECK(app->view().tracks.size() == tracks);  // no channel made
+    // Serial keeps every take on T: allowed, the route still on its FX.
+    explode["mode"] = "serial";
+    run("item.explode-takes", explode);
+    CHECK(app->view().modulations.size() == routes);
+    CHECK(model::trackOfTakeFx(app->view(), *model::Id::parse(gain)) == model::Id::parse("tr_3"));
+}
+
+TEST_CASE(
+    "modulation commands: a copy past 4096 routes is refused whole; a recording's is trimmed "
+    "(M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto added = run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "1: C4:w"})"));
+    const std::string item = added.find("item")->asString();
+    json::Value fx = json::Value::object();
+    fx["take"] = added.find("take")->asString();
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    const auto takeFx = *model::Id::parse(run("fx.add", fx)["fx"].asString());
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = takeFx.str();
+    add["target"]["param"] = "gain";
+    const auto original = *model::Id::parse(run("modulation.add", add)["modulation"].asString());
+    // Filled to the limit with routes into the track's own gain (fx_1), then
+    // opened: one more copy of the take's route would pass it.
+    {
+        const model::Session& head = app->head();
+        model::EditTxn t(head, head.version + 1);
+        const model::Id modOut = *model::Id::parse("mo_2"), gain = *model::Id::parse("fx_1");
+        for (std::size_t i = head.modulations.size(); i < model::kMaxModulations; ++i)
+            t.create(model::Modulation{{modOut, "in_1"}, {gain, "p" + std::to_string(i)}, 0.1});
+        auto full = t.commit();
+        REQUIRE_MESSAGE(full, (full ? "" : full.error().toString()));
+        REQUIRE(writeFileAtomic(root.path / "full.json", model::serializeProject(*full)));
+    }
+    run("project.open", j(R"({"path": "full.json"})"));
+    REQUIRE(app->head().modulations.size() == model::kMaxModulations);
+    for (const char* command : {"item.duplicate", "item.split"}) {
+        CAPTURE(command);
+        json::Value args = json::Value::object();
+        args["item"] = item;
+        if (std::string_view(command) == "item.split") args["at"] = 2.0;
+        auto refused = d.execute({command, args, kTest});
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "modulation.limit");
+        CHECK(refused.error().path == "/args/item");
+        CHECK(refused.error().message.find("4097") != std::string::npos);
+        CHECK(refused.error().hint.find("remove at least 1 ") != std::string::npos);
+        CHECK(app->head().items.size() == 1);  // nothing made
+    }
+    // The overdub's settling trims instead: the copy's route goes, named
+    // with the limit as its reason, and the rest of the edit stands.
+    model::EditTxn t(app->head(), app->head().version + 1);
+    model::Modulation copy = *app->head().modulations.find(original);
+    const model::Id made = t.create(copy);
+    t.copiedRoute(made, original);
+    const auto dropped = settleCopiedRoutes(t, true);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].original == original);
+    CHECK(dropped[0].reason == "limit");
+    CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
+    CHECK_FALSE(t.exists<model::Modulation>(made));
+    CHECK(t.preview().modulations.size() == model::kMaxModulations);
+}
