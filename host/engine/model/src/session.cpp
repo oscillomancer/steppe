@@ -295,6 +295,72 @@ Result<Session> EditTxn::commit() {
 
 namespace {
 
+// The graph the cycle check walks. Edges reach it only through add, each
+// with its kind, so the rows of edits that can close a cycle
+// (command_validation.h) cover every kind (a test holds each kind to its
+// rows).
+class CycleGraph {
+  public:
+    void add(CycleEdgeKind kind, Id from, Id to, bool midi = false,
+             std::optional<Id> modulation = std::nullopt) {
+        edges_.push_back({kind, from, to});
+        next_[from].push_back(to);
+        if (midi) midi_.emplace(from, to);
+        if (modulation) modulations_.emplace(std::pair{from, to}, *modulation);
+    }
+    const std::vector<CycleEdge>& edges() const { return edges_; }
+    // Each node to the nodes it feeds, in the order the edges were added.
+    const std::map<Id, std::vector<Id>>& next() const { return next_; }
+    bool midi(Id from, Id to) const { return midi_.contains({from, to}); }
+    // The first modulation route from `from` to `to`.
+    std::optional<Id> modulation(Id from, Id to) const {
+        const auto it = modulations_.find({from, to});
+        return it == modulations_.end() ? std::nullopt : std::optional<Id>(it->second);
+    }
+
+  private:
+    std::vector<CycleEdge> edges_;
+    std::map<Id, std::vector<Id>> next_;
+    std::set<std::pair<Id, Id>> midi_;
+    std::map<std::pair<Id, Id>, Id> modulations_;
+};
+
+// The nodes of the first cycle a depth-first walk finds, its first node
+// repeated at the end; empty when there is none.
+std::vector<Id> findCycle(const CycleGraph& g) {
+    std::map<Id, int> colour;
+    for (const auto& [start, unused] : g.next()) {
+        (void)unused;
+        if (colour[start]) continue;
+        std::vector<std::pair<Id, std::size_t>> stack{{start, 0}};
+        colour[start] = 1;
+        while (!stack.empty()) {
+            auto& [node, i] = stack.back();
+            auto it = g.next().find(node);
+            if (it == g.next().end() || i >= it->second.size()) {
+                colour[node] = 2;
+                stack.pop_back();
+                continue;
+            }
+            const Id next = it->second[i++];
+            if (colour[next] == 1) {
+                const auto first = std::find_if(stack.begin(), stack.end(), [&](const auto& frame) {
+                    return frame.first == next;
+                });
+                std::vector<Id> nodes;
+                for (auto at = first; at != stack.end(); ++at) nodes.push_back(at->first);
+                nodes.push_back(next);
+                return nodes;
+            }
+            if (!colour[next]) {
+                colour[next] = 1;
+                stack.push_back({next, 0});
+            }
+        }
+    }
+    return {};
+}
+
 struct Checker {
     const Session& s;
     std::vector<Error> errors;
@@ -460,12 +526,46 @@ struct Checker {
                 fail(at("fx", e.id), e.id.str() + " is in no chain and no plugin module");
     }
 
-    void routes() {
-        std::map<Id, std::vector<Id>> edges;  // track -> tracks it feeds
-        std::set<std::pair<Id, Id>> midiEdges;
+    // The edges the cycle check walks: every edge is added here, with its
+    // kind.
+    CycleGraph cycleGraph() {
+        CycleGraph g;
         for (const auto& e : s.tracks)
             if (e.value->parent && e.value->parentSend.enabled)
-                edges[e.id].push_back(*e.value->parent);  // cycle edge: parent_send
+                g.add(CycleEdgeKind::ParentSend, e.id, *e.value->parent);
+        for (const auto& e : s.routes) {
+            const Route& r = *e.value;
+            // Racks are nodes too: a track feeds the rack of an In module it
+            // sends to, and a rack its Out modules' channels.
+            auto rackOf = [&](Id module) -> std::optional<Id> {
+                const RackModule* m = s.modules.find(module);
+                return m ? std::optional<Id>(m->rack) : std::nullopt;
+            };
+            std::optional<Id> source = r.from.track;
+            if (r.from.module) source = rackOf(*r.from.module);
+            std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
+            if (r.to.module) target = rackOf(*r.to.module);
+            if (source && target) g.add(CycleEdgeKind::Route, *source, *target, r.midi.has_value());
+            // The source track's MIDI is available before its audio input is
+            // mixed: its incoming sends also feed Notes, without depending on
+            // the track's audio node (a rack may supply that very audio input).
+            if (source && r.midi && r.to.track)
+                for (Id module : midiFollowers(s, *r.to.track, source))
+                    g.add(CycleEdgeKind::NotesFollow, *source, s.modules.find(module)->rack, true);
+        }
+        // A modulation route is an edge from its source's rack to the node
+        // that applies its target (ADR-0096).
+        for (const auto& e : s.modulations) {
+            if (skipRoutes && skipRoutes->count(e.id)) continue;
+            const RackModule* m = s.modules.find(e.value->source.module);
+            const auto target = targetNode(e.value->target);
+            if (!m || !target) continue;  // reported by modulations()
+            g.add(CycleEdgeKind::Modulation, m->rack, *target, false, e.id);
+        }
+        return g;
+    }
+
+    void routes() {
         for (const auto& e : s.routes) {
             const Route& r = *e.value;
             auto endOk = [&](const RouteEnd& x, const char* field, bool from) {
@@ -548,107 +648,44 @@ struct Checker {
             }
             if (r.to.module && !r.midi && !r.from.track)
                 fail(at("routes", e.id, "from"), "an In module takes a send from a track");
-            // Racks are nodes too: a track feeds the rack of an In module it
-            // sends to, and a rack its Out modules' channels.
-            auto rackOf = [&](Id module) -> std::optional<Id> {
-                const RackModule* m = s.modules.find(module);
-                return m ? std::optional<Id>(m->rack) : std::nullopt;
-            };
-            std::optional<Id> source = r.from.track;
-            if (r.from.module) source = rackOf(*r.from.module);
-            std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
-            if (r.to.module) target = rackOf(*r.to.module);
-            if (source && target) {
-                edges[*source].push_back(*target);  // cycle edge: route
-                if (r.midi) midiEdges.emplace(*source, *target);
-            }
-            // The source track's MIDI is available before its audio input is
-            // mixed: its incoming sends also feed Notes, without depending on
-            // the track's audio node (a rack may supply that very audio input).
-            if (source && r.midi && r.to.track)
-                for (Id module : midiFollowers(s, *r.to.track, source)) {
-                    const Id rack = s.modules.find(module)->rack;
-                    edges[*source].push_back(rack);  // cycle edge: notes_follow
-                    midiEdges.emplace(*source, rack);
-                }
         }
-        // A modulation route is an edge from its source's rack to the node
-        // that applies its target (ADR-0096).
-        std::map<std::pair<Id, Id>, Id> modEdges;
-        for (const auto& e : s.modulations) {
-            if (skipRoutes && skipRoutes->count(e.id)) continue;
-            const RackModule* m = s.modules.find(e.value->source.module);
-            const auto target = targetNode(e.value->target);
-            if (!m || !target) continue;        // reported by modulations()
-            edges[m->rack].push_back(*target);  // cycle edge: modulation
-            modEdges.emplace(std::pair{m->rack, *target}, e.id);
+        const CycleGraph g = cycleGraph();
+        const std::vector<Id> cycle = findCycle(g);
+        if (cycle.empty()) return;
+        const Id next = cycle.back();
+        bool midi = false;
+        std::optional<Id> modulation;
+        std::string path;
+        for (std::size_t k = 0; k + 1 < cycle.size(); ++k) {
+            midi = midi || g.midi(cycle[k], cycle[k + 1]);
+            if (!modulation) modulation = g.modulation(cycle[k], cycle[k + 1]);
+            path += (path.empty() ? "" : " -> ") + cycle[k].str();
         }
-        // Cycle detection (iterative DFS with colours).
-        std::map<Id, int> colour;
-        for (const auto& [start, unused] : edges) {
-            (void)unused;
-            if (colour[start]) continue;
-            std::vector<std::pair<Id, std::size_t>> stack{{start, 0}};
-            colour[start] = 1;
-            while (!stack.empty()) {
-                auto& [node, i] = stack.back();
-                auto it = edges.find(node);
-                if (it == edges.end() || i >= it->second.size()) {
-                    colour[node] = 2;
-                    stack.pop_back();
-                    continue;
-                }
-                const Id next = it->second[i++];
-                if (colour[next] == 1) {
-                    const auto first =
-                        std::find_if(stack.begin(), stack.end(),
-                                     [&](const auto& frame) { return frame.first == next; });
-                    bool midi = false;
-                    std::optional<Id> modulation;
-                    std::string path;
-                    for (auto at = first; at != stack.end(); ++at) {
-                        const Id to = at + 1 == stack.end() ? next : (at + 1)->first;
-                        midi = midi || midiEdges.contains({at->first, to});
-                        if (const auto m = modEdges.find({at->first, to});
-                            m != modEdges.end() && !modulation)
-                            modulation = m->second;
-                        path += (path.empty() ? "" : " -> ") + at->first.str();
-                    }
-                    if (modulation) {
-                        // A rack's own rack send has its level applied at
-                        // the rack: a cycle of one node.
-                        const bool self = first + 1 == stack.end() && first->first == next;
-                        errors.emplace_back(
-                            "modulation.cycle",
-                            "modulation " + modulation->str() + " closes a cycle: " + path +
-                                " -> " + next.str(),
-                            "/modulations/" + modulation->str(),
-                            self ? "a rack cannot modulate its own rack send's level, which "
-                                   "it applies itself: modulate the destination's volume instead"
-                                 : "a rack cannot modulate what it hears: modulate another "
-                                   "track, or remove the send into the rack's In module");
-                        return;
-                    }
-                    if (midi) {
-                        errors.emplace_back("route.cycle",
-                                            "routing cycle: " + path + " -> " + next.str(),
-                                            "/routes",
-                                            "change the MIDI route or Notes source so the "
-                                            "destination does not feed the source");
-                        return;
-                    }
-                    fail("/routes", next.kind == Kind::Rack
-                                        ? "routing cycle through rack " + next.str() +
-                                              " (a track that feeds it hears it)"
-                                        : "routing cycle through " + next.str());
-                    return;
-                }
-                if (!colour[next]) {
-                    colour[next] = 1;
-                    stack.push_back({next, 0});
-                }
-            }
+        if (modulation) {
+            // A rack's own rack send has its level applied at the rack: a
+            // cycle of one node.
+            const bool self = cycle.size() == 2;
+            errors.emplace_back("modulation.cycle",
+                                "modulation " + modulation->str() + " closes a cycle: " + path +
+                                    " -> " + next.str(),
+                                "/modulations/" + modulation->str(),
+                                self
+                                    ? "a rack cannot modulate its own rack send's level, which "
+                                      "it applies itself: modulate the destination's volume instead"
+                                    : "a rack cannot modulate what it hears: modulate another "
+                                      "track, or remove the send into the rack's In module");
+            return;
         }
+        if (midi) {
+            errors.emplace_back("route.cycle", "routing cycle: " + path + " -> " + next.str(),
+                                "/routes",
+                                "change the MIDI route or Notes source so the "
+                                "destination does not feed the source");
+            return;
+        }
+        fail("/routes", next.kind == Kind::Rack ? "routing cycle through rack " + next.str() +
+                                                      " (a track that feeds it hears it)"
+                                                : "routing cycle through " + next.str());
     }
 
     void context() {
@@ -1280,6 +1317,36 @@ std::vector<Id> modulationsClosingCycles(const Session& s, const std::vector<Id>
         }
     }
     return closing;
+}
+
+std::string_view cycleEdgeWord(CycleEdgeKind kind) {
+    switch (kind) {
+        case CycleEdgeKind::ParentSend:
+            return "parent_send";
+        case CycleEdgeKind::Route:
+            return "route";
+        case CycleEdgeKind::NotesFollow:
+            return "notes_follow";
+        case CycleEdgeKind::Modulation:
+            return "modulation";
+    }
+    return "";
+}
+
+std::vector<CycleEdge> cycleEdges(const Session& s) {
+    Checker c{s, {}, {}, nullptr};
+    return c.cycleGraph().edges();
+}
+
+std::vector<CycleEdge> reportedCycle(const Session& s) {
+    Checker c{s, {}, {}, nullptr};
+    const CycleGraph g = c.cycleGraph();
+    const std::vector<Id> cycle = findCycle(g);
+    std::vector<CycleEdge> out;
+    for (std::size_t k = 0; k + 1 < cycle.size(); ++k)
+        for (const CycleEdge& e : g.edges())
+            if (e.from == cycle[k] && e.to == cycle[k + 1]) out.push_back(e);
+    return out;
 }
 
 std::vector<Id> modulationsInto(const Session& s, Id fx) {

@@ -2293,18 +2293,28 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   send's source feeds the module's rack), and a modulation route (its
   source's rack feeds the node of its target). Every command and argument
   that can make or redirect such an edge is a row of the table below
-  (review rounds 195 F2, 198 F1, 199). Each declares `modulation.cycle` in
-  the registry, and an edit that closes a cycle is refused at the row's
-  argument with the row's hint and changes nothing. The modulation
-  commands refuse it in their own checks. A test holds the table, the rows
-  in code (`detail::kCycleRows`) and the edges the check walks (each marked
-  in session.cpp) to each other, so a new kind of edge fails it until its
-  rows are added.
+  (review rounds 195 F2, 198 F1, 199, 200). Each declares
+  `modulation.cycle` in the registry, and an edit that closes a cycle is
+  refused at the row's argument with the row's hint and changes nothing.
+  When an edit gives the arguments of several rows, the refusal takes the
+  first whose kind of edge the edit added to the reported cycle; an
+  argument that makes no edge (a parent send or a source's sends turned
+  off, a record rack cleared) picks no row. The modulation commands refuse
+  in their own checks; `rack.patch` adds its modules through `module.add`,
+  which refuses at the module's entry (`/modules/<name>/source` or
+  `/modules/<name>/rack`). The check adds every edge with its kind, so the
+  compiler holds the places it does; a test holds each kind to its rows and
+  the rows in code (`detail::kCycleRows`) to this table, so a new kind of
+  edge fails it until its rows are added. It cannot see a new edge of an
+  existing kind that reaches the check through what feeds it (the Notes
+  modules following a track, a modulation target's node, a new kind of
+  route end); such a change must add its rows by hand.
   - Not rows: a new track (`track.add`, `track.template.load`) has no edge
-    into it; a copy (`track.duplicate`, the take copies) mirrors its
-    source's edges, so only its copied modulation routes can close a
-    cycle, and the copy drops those (`modulation.not_copied`, reason
-    `cycle`); a remove takes edges away, except that `track.remove` leaves
+    into it, and `project.template.load` replaces the whole project; a
+    copy (`track.duplicate`, `module.duplicate` in its own rack, the take
+    copies) mirrors its source's edges, so only its copied modulation
+    routes can close a cycle, and the copy drops those
+    (`modulation.not_copied`, reason `cycle`); a remove takes edges away, except that `track.remove` leaves
     the Notes modules that played the track following their rack's
     channel (a row); undo restores a state that held. A Notes module's own
     source track is no edge (its notes reach the rack upstream of the FX
@@ -2334,6 +2344,9 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
 | `notes_follow` | `module.set` | `source_sends` | `/source_sends` | remove the modulation route first (modulation.remove), or leave its source's sends off |
 | `notes_follow` | `rack.set` | `track` | `/track` | remove the modulation route first (modulation.remove), or keep the rack on its channel |
 | `notes_follow` | `track.remove` | (any) | `/track` | remove the modulation route first (modulation.remove), or give those Notes modules another source (module.set) first |
+| `notes_follow` | `rack.paste` | (any) | `/rack` | remove the modulation route (modulation.remove) or the MIDI send the Notes module would hear, or paste into another rack |
+| `notes_follow` | `rack.preset.load` | (any) | `/rack` | remove the modulation route (modulation.remove) or the MIDI send into the rack's channel, or load the preset into another rack |
+| `notes_follow` | `rack.patch` | `modules` | `/modules` | refused as module.add refuses, at the module's entry (/modules/<name>/source or /modules/<name>/rack): remove the modulation route first (modulation.remove), or give the Notes module another source |
 | `modulation` | `modulation.add` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
 | `modulation` | `modulation.set` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
 | `modulation` | `modulate` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
