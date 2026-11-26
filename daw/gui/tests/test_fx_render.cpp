@@ -6454,3 +6454,67 @@ TEST_CASE("modulation words: a macro's refused step is worded by the step's comm
     REQUIRE_FALSE(wrapped);
     CHECK(wrapped.error().message == own);
 }
+
+TEST_CASE("modulation words: every reason session-model lists has its own words") {
+    // Round 196 F3: a warning's reason has words of its own, never the plain
+    // fallback, for every reason the spec lists (session-model.md, "Each
+    // warning that has more than one cause carries reason"), so a reason
+    // added there fails here until it is worded.
+    // TODO(round 195 F4): read the engine's one list of reasons in code
+    // instead of the spec's prose once the lead's head has it.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const std::filesystem::path spec = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR)
+                                           .parent_path()
+                                           .parent_path()
+                                           .parent_path()
+                                           .parent_path() /
+                                       "docs" / "specs" / "session-model.md";
+    std::ifstream in(spec);
+    REQUIRE(in);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto at = text.find("Each warning that has more than one cause carries `reason`");
+    REQUIRE(at != std::string::npos);
+    const auto end = text.find("\n- ", text.find("- `modulation.stacked`", at));
+    REQUIRE(end != std::string::npos);
+    const std::string list = text.substr(at, end - at);
+    // A reason is a backticked word followed by " (" or " or " in its code's
+    // bullet: "`source` (the copy's …", "`source_removed` or …".
+    std::map<std::string, std::set<std::string>> reasons;
+    std::string code;
+    for (std::size_t i = 0; (i = list.find('`', i)) != std::string::npos;) {
+        const auto close = list.find('`', i + 1);
+        if (close == std::string::npos) break;
+        const std::string word = list.substr(i + 1, close - i - 1);
+        if (list.compare(i - 2, 2, "- ") == 0)
+            code = word;
+        else if (!code.empty() &&
+                 (list.compare(close + 1, 2, " (") == 0 || list.compare(close + 1, 4, " or ") == 0))
+            reasons[code].insert(word);
+        i = close + 1;
+    }
+    INFO(list);
+    REQUIRE(reasons["modulation.not_copied"].size() >= 3);
+    REQUIRE(reasons["modulation.removed"].size() >= 4);
+    CHECK_FALSE(reasons.contains("modulation.stacked"));
+    const model::Session s = f.app->head();
+    for (const auto& [listed, words] : reasons)
+        for (const std::string& reason : words) {
+            INFO(listed << " reason " << reason);
+            const auto with =
+                views::modulationWarningWords(s, "item.paste", listed, "/modulations/mr_1", reason);
+            const auto without =
+                views::modulationWarningWords(s, "item.paste", listed, "/modulations/mr_1", "");
+            REQUIRE(with);
+            REQUIRE(without);
+            // removed's two "removed" reasons share the plain "went with it"
+            // on purpose: the route went with what the delete took.
+            if (reason == "source_removed" || reason == "target_removed")
+                CHECK(*with == *without);
+            else
+                CHECK(*with != *without);
+        }
+}

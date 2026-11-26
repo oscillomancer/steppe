@@ -425,7 +425,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   named through a variable, or a listed file that skips the words at one
   call site, it cannot see, nor a code a command raises without declaring
   it: `route.add` and `track.move` raise `modulation.cycle` undeclared, so
-  they are listed apart until they declare it.
+  they are listed apart until they declare it. Another test reads
+  session-model's reasons and checks each has words other than the plain
+  sentence.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
