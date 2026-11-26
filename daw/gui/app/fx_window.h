@@ -54,8 +54,9 @@ class FxWindow {
         std::function<void(model::Id fx)> enableFx = {};
         // The crash viewer on a report, for a failed effect whose bridge's death left one.
         std::function<void(const std::string& incident)> showCrashReport = {};
-        // The parameter menu's "Show modulation source" rows for a target
-        // (gui::modSourceItems; none without a route).
+        // The parameter menu's "Show modulation source" and "Remove
+        // modulation" rows for a target (gui::modRouteItems; none without a
+        // route).
         std::function<std::vector<ui::MenuItem>(const model::EnvTarget&)> sourceItems = {};
     };
 

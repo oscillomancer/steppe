@@ -326,7 +326,11 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   right-click menu (the strips' menu in the track panel and the mixer, the
   FX window's parameter menu) has **Show modulation source** for one route
   and one row per route for several ("Show modulation source: LFO
-  (Modulators)"; `gui::modSourceItems`).
+  (Modulators)"; `gui::modSourceItems`), then **Remove modulation: LFO
+  (Modulators)**, one row per route by source, each one
+  `modulation.remove` and one undo step (`gui::modRemoveItems`; a refusal,
+  such as a frozen track's, shows in the status line). Both menus take the
+  rows from `gui::modRouteItems`, so they list the same.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
