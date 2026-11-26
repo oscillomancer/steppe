@@ -991,7 +991,12 @@ instructions are in `docs/guides/installing.md`.
   whose routes match. All four bakes print the modulation exactly; a
   consolidate or mix-to-track is refused as stale when anything its render
   read changed before its commit, a route's source and the tracks feeding
-  it included (a freeze's hash leaves the source racks out, by design). A
+  it included (a freeze's hash leaves the source racks out, by design).
+  That check costs main-thread time at a bake's start, its commit and its
+  publish, a known cost not yet optimised: on the 96-track capacity
+  session, item.mix-to-track's start (one fingerprint and the job's
+  set-up) took 24.7 ms, and a fingerprint over all 96 tracks 48 ms
+  (review round 193, a dev build on Linux). A
   plug-in's offset is signal
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
