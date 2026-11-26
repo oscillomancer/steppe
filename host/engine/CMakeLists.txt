@@ -65,6 +65,7 @@ set(_engine_test_sources
   tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
   tests/test_commands.cpp tests/test_context_commands.cpp tests/test_clip_launcher.cpp
   tests/test_clip_player.cpp tests/test_clip_player_live.cpp tests/test_clip_player_rack.cpp
+  tests/test_launch_unheard.cpp
   tests/test_clip_player_rate.cpp tests/test_clip_player_rate_commit.cpp tests/test_clip_player_rate_fades.cpp
   tests/test_clip_player_rate_stretch.cpp tests/test_clip_player_rate_presses.cpp
   tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_held.cpp

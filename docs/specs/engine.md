@@ -668,6 +668,47 @@ the same.*
   the engine's life, since its tracks' entries may be stale (round 178
   F4: which launch was lost cannot be told exactly, so none is
   restored). A new engine (Restart audio) starts clean.
+  **A launch applied but not heard is taken back** (ADR-0097, revision
+  2026-11-26, review round 192 F6). The anticipative renderer applies a
+  launch in the frames it renders ahead, up to its render-ahead span
+  before the listener, and the in-callback executor applies a launch's
+  early half (prelaunch, prewarm, a modulated clip chain's entry) before
+  its switch. A pause or a seek that ends the epoch before the switch is
+  heard leaves that work unheard:
+  - **Heard** means handed to the device callback, not the output latency
+    later. Each executor knows where hearing ended in the epoch it leaves:
+    the callback at its first cycle in the new epoch (the stream it had
+    played), the renderer in `relocate` (`playedStream`, after it waits for
+    the callback to see a pause's epoch, as before, and now a seek's too
+    while a node holds undo records). The main thread reads the same ends
+    from a small ring (`heardEnds_`, eight epochs).
+  - A slot's switch is heard when its key, the target plus the track's
+    channel shift (`timelineShift`), is below that end. A stop exactly at
+    the switch frame is not heard; one frame later it is, keeps its ack
+    and is not placed again.
+  - Each node keeps undo records of what an apply changed (`LaunchUndo`,
+    16 per node, carried by `carryLaunch`): its launch state, the prelaunch
+    and prewarm halves, the reader rotation, a feed's state. On leaving an
+    epoch an executor undoes, newest first, the records whose key is at or
+    past the heard end, so a node with several unheard switches goes back
+    to its state at the heard frame. A full ring drops its oldest record
+    and is counted (`launchUndoLost_`, warned; never expected).
+  - The main thread removes the unheard entries of an ended epoch from the
+    log (a return so removed is logged again at the start of the epoch it
+    goes on in), voids the unheard applied slots once both executors are
+    done with them, and places them again in their order (epoch, then
+    target) at the next play, by the existing path for voided slots. Every
+    kind of slot is judged alike: a clip launch, a stop, a return to the
+    arrangement, a scene's slots (each its own, at the same target) and a
+    class move's return.
+  - What an unheard launch derived goes with it: its prelaunch and its
+    warm-up's readers (a pitch-keeping playrate's primed stretch), so the
+    node gives at the next play what the in-callback executor gives. No
+    launch schedules another (there are no follow actions or chained
+    launches), so nothing else derives from one.
+  - A launch ack dropped by a full ring is judged once its epoch's heard
+    end is known: a dropped ack for an unheard slot does not count toward
+    `launch_unlogged`.
   A capture includes each return within its span in the log's order, and
   one with a return is not as heard (`edited_during`, §3.1), for the
   edit behind it alone: a return comes from a plan compiled for an edit
@@ -2292,6 +2333,15 @@ by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
 the capture ends.
 
+**Heard.** A frame is heard when the executors hand it to the device
+callback, not the output latency later (§1.4.2, "A launch applied but not
+heard is taken back"). A capture that a stop or seek ends holds no launch
+whose switch was not heard by then: the renderer may have applied it
+ahead, but it is taken back, and the launch placed again is logged once,
+in the new epoch. In between, `launch.state` reports it queued. A capture
+committed within one device period of the stop, before the callback has
+seen the new epoch, can still hold such a launch (a stated limit, STATUS).
+
 **The selector.** `render.mix`, `render.stems`, `render.dry-run` and
 `render.queue.add` take an optional `performance`, one of:
 - `"captured"`: the capture `EngineApp::launchCapture()` returns (the
@@ -2342,7 +2392,7 @@ refused. `tail_s`, `trim`,
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
-| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2) |
+| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2); a lost ack for a launch taken back unheard does not count |
 | `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
 | `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
 | `other_version` | the version rendered is not the capture's own |

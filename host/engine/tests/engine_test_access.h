@@ -196,6 +196,14 @@ struct EngineTestAccess {
     static std::uint64_t returnAcksDropped(const Engine& e) { return e.returnAcksDropped_.load(); }
     static std::uint64_t returnAcksDuplicated(const Engine& e) { return e.returnAcksDuplicated_; }
     static std::uint64_t launchAcksDropped(const Engine& e) { return e.launchAcksDropped_.load(); }
+    // The renderer's launch acks dropped as by a full ring (ADR-0097, dated
+    // 2026-11-26: judged once their switch is known to be heard).
+    static void dropRendererAcks(Engine& e, bool on) { e.dropRendererAcksForTests_.store(on); }
+    // A track's channel's shift in the latest plan (its launches' switch
+    // frame is their target plus it).
+    static std::int64_t launchShift(const Engine& e, model::Id track) {
+        return Engine::launchShift(e.latestPlan_.load(), track);
+    }
     // The in-callback executor's ack ring made full with filler, as if it
     // were tiny (the test thread runs the Manual backend's cycles, so
     // nothing pushes meanwhile); emptyLaunchRing discards what it holds,

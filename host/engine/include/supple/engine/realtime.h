@@ -984,8 +984,8 @@ class Engine {
     // launch log, and launch.state's tracks, may miss a launch that was
     // heard; sticky for the engine's life (round 178 F4).
     bool launchesUnlogged() const {
-        return launchAcksLost_ ||
-               launchAcksDropped_.load(std::memory_order_relaxed) != launchAcksDropSeen_;
+        return launchAcksLost_ || !launchAckDropsWaiting_.empty() ||
+               launchAckDropsUnknown_.load(std::memory_order_relaxed) != launchAckDropsUnknownSeen_;
     }
     // Main thread: launch.commit wrote the capture in `version`
     // (EngineApp's captureUncommitted, the stop's warning).
@@ -1300,6 +1300,8 @@ class Engine {
     // attempts are late, as if the renderer had passed their hand, so they
     // prepare again (the third fails, and a recovery seek follows).
     int lateAttemptsForTests_ = 0;
+    // Tests: the renderer's launch acks are dropped as by a full ring.
+    std::atomic<bool> dropRendererAcksForTests_{false};
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -1417,6 +1419,69 @@ class Engine {
     std::array<std::uint64_t, 2> launchLastEpoch_{};
     std::array<std::int64_t, 2> launchLastStream_{};
     std::array<bool, 2> launchLastValid_{};
+    // Where each epoch's hearing ended (ADR-0097, dated 2026-11-26): the
+    // frames of it the device callback was handed, [0, end). A launch whose
+    // switch frame (its slot's target plus its channel's shift) is at or
+    // past it was not heard: what an executor applied for it is taken back,
+    // its log entry goes, and it is placed again. Written by the callback
+    // as it leaves an epoch (an epoch it skipped: 0), by epoch number
+    // modulo the size; read by the main thread and the executors.
+    struct HeardEnd {
+        std::atomic<std::uint64_t> epoch{UINT64_MAX};
+        std::atomic<std::int64_t> end{0};
+    };
+    std::array<HeardEnd, 8> heardEnds_{};
+    std::atomic<std::uint64_t> heardEndsEntered_{0};  // the newest epoch the callback entered
+    void noteHeardEnd(std::uint64_t left, std::uint64_t entered, std::int64_t end) SUPPLE_RT;
+    // Where `epoch`'s hearing ended; absent while the callback is still in
+    // it, or once its entry was reused (8 epochs on).
+    std::optional<std::int64_t> heardEnd(std::uint64_t epoch) const SUPPLE_RT;
+    // Executor-private, by class: the epoch it last left and where its
+    // hearing ended, as that executor took it (the callback as it leaves
+    // the epoch, the renderer in relocate once the callback has left it).
+    std::array<std::uint64_t, 2> launchLeftEpoch_{UINT64_MAX, UINT64_MAX};
+    std::array<std::int64_t, 2> launchLeftEnd_{};
+    std::optional<std::int64_t> launchHeardEnd(std::size_t c, std::uint64_t epoch) const SUPPLE_RT;
+    // Executors, at their first launchesAt of a new epoch: each of this
+    // class's nodes takes back what it applied in the epoch it left that
+    // was not heard (detail::takeBackLaunches).
+    void takeBackNodes(detail::Plan& p, int liveClass, std::size_t c) SUPPLE_RT;
+    // An executor leaving epoch `left`, heard up to `end`: the slots it applied
+    // there whose switch was not heard are done for it (`mine`) now, while
+    // stopped too, so the main thread can take them back and place them
+    // again for the play start (ADR-0097, dated 2026-11-26).
+    void leaveLaunchEpoch(std::uint8_t mine, const detail::Plan* plan, std::uint64_t left,
+                          std::int64_t end) SUPPLE_RT;
+    // Counted by the executors, warned once each by service: a take-back
+    // over an epoch whose hearing end was unknown (heard was assumed), and
+    // one that needed a record a full ring had dropped (not exact).
+    std::atomic<std::uint64_t> launchTakeBackUnknown_{0}, launchUndoLost_{0};
+    std::uint64_t launchTakeBackUnknownSeen_ = 0, launchUndoLostSeen_ = 0;
+    // A launch ack an executor's full ring dropped: its epoch and switch
+    // frame, so that the main thread counts it as unlogged only once it
+    // knows the switch was heard (a full drop ring: counted at once).
+    struct AckDrop {
+        std::uint64_t epoch = 0;
+        std::int64_t frame = 0;
+    };
+    std::array<std::unique_ptr<SpscRing<AckDrop, 64>>, 2> launchAckDrops_{
+        std::make_unique<SpscRing<AckDrop, 64>>(), std::make_unique<SpscRing<AckDrop, 64>>()};
+    std::atomic<std::uint64_t> launchAckDropsUnknown_{0};
+    std::uint64_t launchAckDropsUnknownSeen_ = 0;
+    std::vector<AckDrop> launchAckDropsWaiting_;  // main thread: not yet judged
+    // Main thread: judges the dropped acks it can (heard: the log misses a
+    // launch, launchAcksLost_), keeping those it cannot yet.
+    void judgeAckDrops();
+    // Main thread: what was applied in an ended epoch but not heard: its log
+    // entries go (a return moves to the epoch the transport went on in) and
+    // its slots are voided, to be placed again (placeLaunchesAgain).
+    void takeBackUnheard();
+    // Main thread: an applied slot of an ended epoch still to be taken back
+    // (unheard, or that epoch's end not known yet): never reused meanwhile.
+    bool unheardApplied(const LaunchSlot& s) const;
+    // The switch frame of `track`'s launches in `plan` (its target plus the
+    // channel's shift, as launch.state and the take-back compare).
+    static std::int64_t launchShift(const detail::Plan* plan, model::Id track);
     std::unique_ptr<SpscRing<LaunchAck, 1024>> rendererLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =

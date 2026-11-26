@@ -419,7 +419,13 @@ instructions are in `docs/guides/installing.md`.
       while a device cycle is in flight, so a launch made while stopped,
       or a capture armed, in that moment starts that much early (review
       round 74 F3; the renderer waits for that cycle, the main thread's
-      reading does not).
+      reading does not);
+    - a launch applied ahead (by the anticipative renderer, or its early
+      half in callback) and not heard before a pause or seek is taken
+      back and placed again at the next play, and leaves the log
+      (ADR-0097, revision 2026-11-26); a capture committed within one
+      device period of the stop, before the callback has seen the new
+      epoch, can still hold such a launch.
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

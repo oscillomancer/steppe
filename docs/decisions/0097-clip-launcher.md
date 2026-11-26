@@ -1370,6 +1370,19 @@ or leaves the anticipative executor's live region without a continuous handoff i
 the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
 engine.md §1.4.2 has the rules.
 
+### Revision 2026-11-26: a launch applied ahead and unheard is taken back
+
+Review round 192 F6 found that a pause, a pause and return, or a seek before a launch's switch was
+heard left the anticipative renderer's apply in place: the track played the clip straight on at the
+next play, and the log claimed a launch never heard. The in-callback executor's early half (240
+frames of a modulated clip chain's input) had the same defect. Decided (the lead's plan, approved by
+the co-director with five additions): heard means handed to the device callback; each executor
+records undo records for each apply and, on leaving an epoch, takes back those at or past where
+hearing ended, newest first; the main thread removes their log entries, voids their slots and places
+them again in order at the next play. Every kind of slot is judged alike; a dropped ack for an
+unheard slot is not `launch_unlogged`; a stop exactly at the switch frame is unheard. engine.md
+§1.4.2 and §3.1 have the rules.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take
