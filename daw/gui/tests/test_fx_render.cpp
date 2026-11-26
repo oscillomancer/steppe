@@ -5604,3 +5604,56 @@ TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs fo
     f.snapshot("fx-rack-playing.png");
     f.app->stopEngine();
 }
+
+TEST_CASE("a modulated row's mark dims on a frozen track, as the mixer slot's does") {
+    // gui.md §2: the mark is drawn dimmed while every route is off or its
+    // track is frozen; the accessible text keeps "(modulated)".
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id track = f.addTrack("Keys");
+    REQUIRE(f.run("item.add",
+                  f.args({{"track", track.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}})));
+    auto made =
+        f.run("fx.add", f.args({{"track", track.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    json::Value args = json::Value::object();
+    args["target"] = std::move(target);
+    args["source"] = "lfo";
+    REQUIRE(f.run("modulate", args));
+    REQUIRE(f.fx->open(track));
+    f.fx->tick();
+    f.frame();
+    auto name = [&] { return dynamic_cast<ui::Label*>(f.uiRoot().find("fx.name." + fx.str())); };
+    REQUIRE(name());
+    CHECK(name()->mark() == views::kModMark);
+    CHECK(name()->markColor() == "signal-cv");
+    REQUIRE(f.run("track.freeze", f.args({{"track", track.str()}})));
+    f.fx->tick();
+    f.frame();
+    REQUIRE(name());
+    CHECK(name()->markColor() == "ink-faint");
+    CHECK(name()->valueText().ends_with(" (modulated)"));
+}
