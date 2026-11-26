@@ -400,7 +400,8 @@ std::optional<json::Value> Server::handle(json::Value request) {
             "describe {group} lists a group's commands and describe {command} gives one "
             "command's arguments. "
             "Successful command results may include warnings: command warnings followed by "
-            "bus diagnostics {code: string, message: string, path: string}. Paths are retained "
+            "bus diagnostics {code: string, message: string, path: string}, with reason: string "
+            "(a fixed word for the cause) where the code names its causes. Paths are retained "
             "as emitted. Non-object results with bus warnings become {result: value, warnings: "
             "[...]}. Batch warnings stay on each step's result.";
         return response(*id, std::move(result));

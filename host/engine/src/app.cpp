@@ -3945,7 +3945,8 @@ Result<bool> overdubMidi(model::EditTxn& t, const model::Session& s, const Recor
         for (const RouteNotCopied& d : notCopied) {
             if (!info.warnings) info.warnings.emplace();
             info.warnings->push_back({"modulation.not_copied", d.message,
-                                      "/modulations/" + d.original.str(), "", r.track.str(), ""});
+                                      "/modulations/" + d.original.str(), "", r.track.str(), "",
+                                      d.reason});
         }
         info.track = r.track.str();
         info.item = e.id.str();
@@ -4161,6 +4162,7 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakesNow(const std::vector<Re
                 ev["hint"] = w.hint;
                 ev["track"] = track;
                 ev["file"] = w.file.empty() ? info.file : w.file;
+                if (w.reason) ev["reason"] = *w.reason;  // the code's cause, as a command's has
                 emit("record.warning", std::move(ev));
             }
         }

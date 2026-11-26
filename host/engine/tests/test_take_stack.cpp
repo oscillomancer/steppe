@@ -18,6 +18,7 @@
 #include "realtime_common.h"
 #include "recording.h"
 #include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/json/json.h"
 #include "supple/json/parse.h"
@@ -1026,6 +1027,69 @@ TEST_CASE(
     CHECK(f.notes(item.takes[0]) == f.notes(model::Id{model::Kind::Take, 1}));
     REQUIRE(StackFixture::warned((*done)[0], "record.follow_kept"));
     CHECK((*done)[0].warnings->front().message.find("another take") != std::string::npos);
+}
+
+TEST_CASE("an overdub past the route limit says why in its record.warning event (round 194)") {
+    // The item's take has a gain modulated from the rack's Mod Out; the
+    // project holds the most routes it may. The overdub's copy of the take
+    // copies the route, which the commit drops (a recording is never
+    // refused): the record.warning event carries it as data, its code,
+    // path and reason, as the commit's reply does.
+    MidiFixture f;
+    f.run("track.set", R"({"track":"tr_1","record_mode":"midi_overdub"})");
+    f.run("rack.add", R"({"track":"tr_1"})");  // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out","x":300,"y":40})");  // mo_2
+    json::Value fx = json::Value::object();
+    fx["take"] = f.app->head().items.find(model::Id{model::Kind::Item, 1})->takes.at(0).str();
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    auto gain = f.bus->execute({"fx.add", fx, origin});
+    REQUIRE_MESSAGE(gain, (gain ? "" : gain.error().toString()));
+    json::Value add =
+        json::parse(R"({"source":{"module":"mo_2","input":"in_1"},"depth":0.25})").value();
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = gain->find("fx")->asString();
+    add["target"]["param"] = "gain";
+    auto routed = f.bus->execute({"modulation.add", add, origin});
+    REQUIRE_MESSAGE(routed, (routed ? "" : routed.error().toString()));
+    const std::string original = routed->find("modulation")->asString();
+    // The rest of the routes go into a gain on the track's chain, which the
+    // overdub does not copy.
+    auto onTrack = f.bus->execute(
+        {"fx.add", json::parse(R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})").value(),
+         origin});
+    REQUIRE_MESSAGE(onTrack, (onTrack ? "" : onTrack.error().toString()));
+    {
+        const model::Session& head = f.app->head();
+        model::EditTxn t(head, head.version + 1);
+        const model::Id modOut{model::Kind::Module, 2};
+        const model::Id target = *model::Id::parse(onTrack->find("fx")->asString());
+        for (std::size_t i = head.modulations.size(); i < model::kMaxModulations; ++i)
+            t.create(model::Modulation{{modOut, "in_1"}, {target, "p" + std::to_string(i)}, 0.1});
+        auto full = t.commit();
+        REQUIRE_MESSAGE(full, (full ? "" : full.error().toString()));
+        REQUIRE(writeFileAtomic(f.dir / "full.json", model::serializeProject(*full)));
+    }
+    f.run("project.open", R"({"path":"full.json"})");
+    REQUIRE(f.app->head().modulations.size() == model::kMaxModulations);
+    (void)f.app->takeEvents();
+    auto done = f.app->commitTakes({f.played(0.5, 1.0)});
+    REQUIRE(done);
+    std::vector<json::Value> warnings;
+    for (auto& [topic, payload] : f.app->takeEvents())
+        if (topic == "record.warning") warnings.push_back(payload);
+    std::string seen;
+    for (const json::Value& w : warnings) seen += json::writeCompact(w) + "\n";
+    INFO(seen);
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].find("code")->asString() == "modulation.not_copied");
+    CHECK(warnings[0].find("path")->asString() == "/modulations/" + original);
+    REQUIRE(warnings[0].find("reason"));
+    CHECK(warnings[0].find("reason")->asString() == "limit");
+    CHECK(warnings[0].find("track")->asString() == "tr_1");
+    // The commit's own reply says the same.
+    REQUIRE((*done)[0].warnings);
+    CHECK((*done)[0].warnings->front().reason == std::optional<std::string>("limit"));
+    CHECK(f.app->head().modulations.size() == model::kMaxModulations);
 }
 
 TEST_CASE("midi_overdub keeps its own rule: a take with the played notes added") {

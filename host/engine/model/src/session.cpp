@@ -1305,8 +1305,8 @@ bool sameModulations(const Session& s, Id a, Id b) {
     return keys(a) == keys(b);
 }
 
-std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s) {
-    std::vector<std::pair<Id, std::string>> out;
+std::vector<StrandedModulation> strandedModulations(const Session& s) {
+    std::vector<StrandedModulation> out;
     Checker c{s, {}, {}, nullptr};
     c.modulations();
     const std::string prefix = "/modulations/";
@@ -1317,7 +1317,8 @@ std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s) {
         const std::string field = e.path.substr(slash + 1);
         if (field != "source" && field != "target") continue;
         const auto id = Id::parse(e.path.substr(prefix.size(), slash - prefix.size()));
-        if (id && (out.empty() || out.back().first != *id)) out.emplace_back(*id, e.message);
+        if (id && (out.empty() || out.back().route != *id))
+            out.push_back({*id, field == "source", e.message});
     }
     return out;
 }

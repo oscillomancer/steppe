@@ -195,6 +195,7 @@ void appendWarnings(json::Value& result, const std::vector<Warning>& warnings) {
         value["code"] = warning.code;
         value["message"] = warning.message;
         value["path"] = warning.path;
+        if (!warning.reason.empty()) value["reason"] = warning.reason;
         result["warnings"].push_back(std::move(value));
     }
 }
@@ -1349,7 +1350,8 @@ void nestedRows(std::string& text, const std::string& key, const json::Value& sc
 namespace {
 constexpr const char* kReferenceNotes =
     "\nSuccessful replies may include `warnings`: command warnings followed by bus "
-    "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
+    "diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed "
+    "word for the cause, where the code names its causes. Paths are retained as "
     "supplied by the decoder or "
     "handler. "
     "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
@@ -1642,7 +1644,8 @@ std::string luaStubs(const Registry& registry) {
         "-- Do not edit: `<slug>-engine registry --lua` writes it, "
         "tools/gen/update-generated.sh regenerates it.\n";
     text +=
-        "-- Successful replies can include .warnings: command warnings then {code,message,path}\n";
+        "-- Successful replies can include .warnings: command warnings then {code,message,path}\n"
+        "-- (and reason, where the code names its causes)\n";
     text +=
         "-- bus diagnostics. Non-object results with bus warnings become "
         "{result=...,warnings=...}.\n";

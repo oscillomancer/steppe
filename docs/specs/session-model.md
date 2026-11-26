@@ -2357,16 +2357,35 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
   Each command declares in the registry the codes it answers:
-  `modulation.add`, `modulation.set` and `modulate` their route checks;
+  `modulation.add`, `modulation.set` and `modulate` their route checks
+  (`modulate` not `modulation.envelope`: it adds the envelope itself);
   every command that copies routes (M5) `modulation.limit`, and every one
-  that moves a take to another track `modulation.cycle`, both declared by
-  the edit wrapper that raises them; `item.heal` `item.heal_fx`; and the
-  background bakes and their commits `item.consolidate_stale` and
-  `item.mix_stale`. A test keeps the declarations and the raised codes
-  together. Warnings have no registry: `modulation.not_copied`,
-  `modulation.stacked` and `modulation.removed` are listed here only.
-  The warning `modulation.not_copied` (M5) carries no hint, so its message
-  holds the remedy.
+  that moves a take or a track-chain FX to another track
+  `modulation.cycle`, both declared by the edit wrapper that raises them;
+  `item.heal` `item.heal_fx`; and the background bakes and their commits
+  `item.consolidate_stale` and `item.mix_stale`. A test keeps the
+  declarations and the raised codes together: in the route commands'
+  source each code against the command that raises it, and each declared
+  route code against what that command can raise. Warnings have no
+  registry: `modulation.not_copied`, `modulation.stacked` and
+  `modulation.removed` are listed here only. The warning
+  `modulation.not_copied` (M5) carries no hint, so its message holds the
+  remedy.
+  Each warning that has more than one cause carries `reason`, a fixed word
+  for it (command-bus.md), so a client tells the causes apart without the
+  model or the message:
+  - `modulation.not_copied`: `source` (the copy's source Mod Out is not in
+    the destination), `cycle` (the copy's track would feed the source's
+    rack) or `limit` (a recording past the route limit). A recording's
+    warning (`recording_warning`) carries it too.
+  - `modulation.removed`: `source_removed` or `target_removed` (the edit
+    removed the route's module, or its FX, track or route), and
+    `source_unfit` or `target_unfit` (the end remains but no longer fits,
+    for instance a send turned MIDI).
+  - `modulation.stacked` has one cause, a second enabled route onto the
+    target from the same kind of source, so it carries none; the routes
+    already there are named in its message, and `modulation.list` lists
+    them with the target.
 - Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds
   through it) onto a target that another enabled route already reaches from the
   same kind of source (the type of the module cabled into its Mod Out input; an

@@ -264,6 +264,9 @@ struct EngineStatus {
 
 struct RecordingWarning {
     std::string code, message, path, hint, track, file;
+    // A fixed word for the cause, where the code names its causes
+    // (modulation.not_copied: session-model.md).
+    std::optional<std::string> reason = std::nullopt;
 };
 
 struct RecordedInfo {

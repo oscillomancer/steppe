@@ -974,11 +974,15 @@ instructions are in `docs/guides/installing.md`.
   "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same
   undo step, and one the copy cannot keep (its source missing, or a
-  cycle) is dropped and named (`modulation.not_copied`). A copy past 4096
+  cycle) is dropped and named (`modulation.not_copied`, with a `reason`:
+  source, cycle or limit; a removed route's `modulation.removed` says
+  which end went or stopped fitting, and a recording's `record.warning`
+  event carries the reason too). A copy past 4096
   routes is refused whole (`modulation.limit`); an overdub's is trimmed
   instead. `track.duplicate` copies every route whose target is on the
-  track (before M5 it copied none). A move that would close a cycle is
-  refused (`modulation.cycle`), and heal and `take.comp` join only pieces
+  track (before M5 it copied none). A move that would close a cycle (a
+  take's, or since round 193 a track FX's by `fx.move`) is refused
+  (`modulation.cycle`), and heal and `take.comp` join only pieces
   whose routes match. All four bakes print the modulation exactly; a
   consolidate or mix-to-track is refused as stale when anything its render
   read changed before its commit, a route's source and the tracks feeding

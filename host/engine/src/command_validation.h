@@ -185,8 +185,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             std::vector<model::Id> livesOn;
             if (app.inTransaction()) {
                 for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
-                    ctx.warn("modulation.not_copied", d.message,
-                             "/modulations/" + d.original.str());
+                    ctx.warn("modulation.not_copied", d.message, "/modulations/" + d.original.str(),
+                             d.reason);
                 const std::size_t routes = app.txn().preview().modulations.size();
                 if (routes > model::kMaxModulations && routes > before.modulations.size())
                     return Error("modulation.limit",
@@ -225,12 +225,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             // whose target stopped fitting (a send turned MIDI) goes here.
             if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
                 const auto removed = [&](model::Id route, const model::Modulation& m,
-                                         const std::string& why) {
+                                         const std::string& why, const char* reason) {
                     ctx.warn("modulation.removed",
                              route.str() + " (" + m.source.module.str() + "." + m.source.input +
                                  " to " + m.target.object.str() + " " + m.target.param +
                                  ") was removed: " + why,
-                             "/modulations/" + route.str());
+                             "/modulations/" + route.str(), reason);
                 };
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
@@ -238,14 +238,17 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     if (std::find(livesOn.begin(), livesOn.end(), e.id) != livesOn.end())
                         continue;  // its copy or its twin carries it (M5)
                     const model::Modulation& m = *e.value;
-                    removed(e.id, m,
-                            after.modules.contains(m.source.module)
-                                ? "its target " + m.target.object.str() + " was removed"
-                                : "its source " + m.source.module.str() + " was removed");
+                    if (after.modules.contains(m.source.module))
+                        removed(e.id, m, "its target " + m.target.object.str() + " was removed",
+                                "target_removed");
+                    else
+                        removed(e.id, m, "its source " + m.source.module.str() + " was removed",
+                                "source_removed");
                 }
-                for (const auto& [route, why] : model::strandedModulations(after)) {
-                    removed(route, *after.modulations.find(route), why);
-                    app.txn().remove<model::Modulation>(route);
+                for (const model::StrandedModulation& d : model::strandedModulations(after)) {
+                    removed(d.route, *after.modulations.find(d.route), d.why,
+                            d.atSource ? "source_unfit" : "target_unfit");
+                    app.txn().remove<model::Modulation>(d.route);
                 }
             }
             if (edit) SUPPLE_TRY(model::validateFrozenTransition(before, app.view()));

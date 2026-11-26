@@ -2,6 +2,7 @@
 -- Steppe 0.6.0 scripting reference, generated from the command registry.
 -- Do not edit: `<slug>-engine registry --lua` writes it, tools/gen/update-generated.sh regenerates it.
 -- Successful replies can include .warnings: command warnings then {code,message,path}
+-- (and reason, where the code names its causes)
 -- bus diagnostics. Non-object results with bus warnings become {result=...,warnings=...}.
 -- The `q` table of a script (libs/lua-bus, ADR-0006): every command is a
 -- function, `q.run(name, args)` reaches any of them by name, `q.batch(label, body)`

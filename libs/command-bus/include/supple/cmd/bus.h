@@ -70,8 +70,11 @@ class Context {
         assert(std::is_const_v<S> || it->second.mutableAccess);
         return *static_cast<S*>(const_cast<void*>(it->second.pointer));
     }
-    void warn(std::string code, std::string message, std::string path = {}) {
-        warnings_.push_back({std::move(code), std::move(message), std::move(path)});
+    // `reason`: a fixed word for the cause, for a code that names its causes.
+    void warn(std::string code, std::string message, std::string path = {},
+              std::string reason = {}) {
+        warnings_.push_back(
+            {std::move(code), std::move(message), std::move(path), std::move(reason)});
     }
     const std::vector<Warning>& warnings() const { return warnings_; }
     // The arguments a command's resolve step settled on: what the dispatcher logs and

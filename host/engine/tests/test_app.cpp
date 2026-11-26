@@ -5199,7 +5199,9 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
     registerEngineCommands(registry);
     cmd::Dispatcher d(registry, *app);
     app->setupFixture(d, "song_with_modulation");
-    const auto removedBy = [&](std::string name, std::string_view args) {
+    // Each names its cause (round 193, the GUI): the FX is the target; the
+    // rack and its Mod Out (the source) go with the module, rack or track.
+    const auto removedBy = [&](std::string name, std::string_view args, const char* reason) {
         CAPTURE(name);
         auto r = d.execute({name, j(args), kTest});
         REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
@@ -5210,15 +5212,28 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
         for (auto w : warnings->asArray())
             named |= w["code"].asString() == "modulation.removed" &&
                      w["message"].asString().find("mr_1") != std::string::npos &&
-                     w["path"].asString() == "/modulations/mr_1";
+                     w["path"].asString() == "/modulations/mr_1" && w.find("reason") &&
+                     w["reason"].asString() == reason;
         CHECK(named);
         REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
         CHECK(app->view().modulations.size() == 1);  // undo brings the route back
     };
-    removedBy("fx.remove", R"({"fx": "fx_1"})");
-    removedBy("module.remove", R"({"module": "mo_2"})");
-    removedBy("rack.remove", R"({"rack": "rk_1"})");
-    removedBy("track.remove", R"({"track": "tr_1"})");
+    removedBy("fx.remove", R"({"fx": "fx_1"})", "target_removed");
+    removedBy("module.remove", R"({"module": "mo_2"})", "source_removed");
+    removedBy("rack.remove", R"({"rack": "rk_1"})", "source_removed");
+    removedBy("track.remove", R"({"track": "tr_1"})", "source_removed");
+    // A source that stays but no longer fits (a module that is not a Mod
+    // Out): strandedModulations says which end, which the warning words
+    // source_unfit. No command makes one; the model is checked directly.
+    model::EditTxn t(app->view(), 1);
+    model::Modulation stray = *app->view().modulations.find(*model::Id::parse("mr_1"));
+    stray.source.module = *model::Id::parse("mo_1");  // the rack's Out
+    t.modify<model::Modulation>(*model::Id::parse("mr_1"),
+                                [&](model::Modulation& m) { m = stray; });
+    const auto stranded = model::strandedModulations(t.preview());
+    REQUIRE(stranded.size() == 1);
+    CHECK(stranded[0].route == *model::Id::parse("mr_1"));
+    CHECK(stranded[0].atSource);
 }
 
 TEST_CASE("fx.describe marks the parameters a modulation route can take") {
@@ -5275,6 +5290,7 @@ TEST_CASE("modulation commands: a modulated send turned MIDI loses its route, wi
     CHECK(w["code"].asString() == "modulation.removed");
     CHECK(w["path"].asString() == "/modulations/mr_1");
     CHECK(w["message"].asString().find(sendId + " volume") != std::string::npos);
+    CHECK(w["reason"].asString() == "target_unfit");  // the send stays, unfit
 }
 
 TEST_CASE("modulation commands: a track's volume, pan and width, and a send's level") {
@@ -6694,11 +6710,14 @@ TEST_CASE(
         REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
         return *r;
     };
-    const auto warned = [](const json::Value& r, std::string_view code) {
+    const auto warned = [](const json::Value& r, std::string_view code,
+                           std::string_view reason = {}) {
         const json::Value* warnings = r.find("warnings");
         if (!warnings) return false;
         for (auto w : warnings->asArray())
-            if (w["code"].asString() == code) return true;
+            if (w["code"].asString() == code &&
+                (reason.empty() || (w.find("reason") && w["reason"].asString() == reason)))
+                return true;
         return false;
     };
     // Bass (tr_1) holds an item whose take has a gain in its chain.
@@ -6940,4 +6959,16 @@ TEST_CASE(
     CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
     CHECK_FALSE(t.exists<model::Modulation>(made));
     CHECK(t.preview().modulations.size() == model::kMaxModulations);
+    // A copy whose source the destination lacks (a paste from a retained
+    // version naming a Mod Out since removed) goes first, with reason
+    // source (round 193: the warning carries it).
+    model::EditTxn u(app->head(), app->head().version + 1);
+    model::Modulation orphan = *app->head().modulations.find(original);
+    orphan.source.module = *model::Id::parse("mo_1");  // the rack's Out, not a Mod Out
+    const model::Id strayCopy = u.create(orphan);
+    u.copiedRoute(strayCopy, original);
+    const auto unsourced = settleCopiedRoutes(u, false);
+    REQUIRE(unsourced.size() == 1);
+    CHECK(unsourced[0].reason == "source");
+    CHECK_FALSE(u.exists<model::Modulation>(strayCopy));
 }
