@@ -2233,10 +2233,10 @@ first use, and no plug-in code runs early to warm it.
     false, damaged: {code, path}}`, with no `settings`. Its `code` and
     `path` are what `render.preset.load {name}` answers: the file's own
     codes (`file.*`, `json.parse.*`, and `schema.*` for a file that is not
-    a preset) at `/args/name` or a top-level member under it (`/args/name/
-    schema`), and a setting's at `/args/name/settings/…` (round 186 F1). A
-    link to nothing is such a file (`file.*`), for load too (round 190
-    F1). The list itself is not refused for it.
+    a preset) at `/args/name` or a top-level member under it
+    (`/args/name/schema`), and a setting's at `/args/name/settings/…`
+    (round 186 F1). A link to nothing is such a file (`file.*`), for load
+    too (round 190 F1). The list itself is not refused for it.
   - `render.preset.save {name | default: true, settings?}` (action): saves
     the given settings, or the effective settings, without `stems.tracks`,
     `matrix` and custom bounds.
