@@ -3740,6 +3740,24 @@ TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on it
     CHECK(after.modulations.find(*model::Id::parse(route)));
     f.exec("history.undo", "{}");
     CHECK(f.app->head().modulations.size() == 2);
+    // Random is an LFO too: two rows that would read the same also name
+    // their Mod Out input, so each says which route it removes.
+    f.exec("modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"random"})");
+    f.refresh();
+    menu = menuAt(f.centre(f.strip(a).fader));
+    REQUIRE(menu);
+    removes.clear();
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation: ")) removes.push_back(item.label);
+    f.root->closePopups();
+    REQUIRE(removes.size() == 3);
+    CHECK(removes[0].starts_with("Remove modulation: LFO ("));
+    CHECK(removes[0].ends_with(") \u00b7 Mod 1"));
+    CHECK(removes[1].starts_with("Remove modulation: Mod 4 ("));
+    CHECK(removes[1].find("\u00b7") == std::string::npos);
+    CHECK(removes[2].starts_with("Remove modulation: LFO ("));
+    CHECK_FALSE(removes[2].ends_with(") \u00b7 Mod 1"));
+    CHECK(removes[2].find(") \u00b7 Mod ") != std::string::npos);
 }
 
 TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {
