@@ -1002,6 +1002,15 @@ struct LaunchUndo {
     // that half set (next, warm), not what a switch made after it set
     // (review round 201 F1).
     bool early = false;
+    // The launch slot it applies (an index into the engine's slots), and
+    // whether it applied there as a relocation in a later epoch than the
+    // slot's own. An executor judges each record once, at its leave of the
+    // epoch (the slot's verdict, or a relocation's frame against the end),
+    // and marks those to undo (round 203 F1).
+    int slot = -1;
+    std::uint64_t generation = 0;
+    bool relocated = false;
+    bool undo = false;
 };
 inline constexpr std::size_t kLaunchUndos = 16;
 
@@ -1753,12 +1762,15 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // rack's Notes feed `feed`, before the executor does it: its switch frame
 // `key`, in `epoch`. The record, to complete with the reader rotation; null
 // for none (offline, which hears everything it renders).
-LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch) SUPPLE_RT;
+LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch,
+                           int slot = -1) SUPPLE_RT;
 // The executor left `epoch`, whose hearing ended at `heardEnd` (the frames
-// [0, heardEnd) reached the device callback): every record of that epoch
-// whose key is at or past it is undone, newest first, and the node (and
-// its feeds) relocated again; the records are cleared. Whether anything
-// was undone; `inexact` set when a dropped record was needed.
+// [0, heardEnd) reached the device callback): every record it marked to
+// undo (LaunchUndo::undo, from its slot's verdict) is undone, newest first,
+// an early half whose switch was heard (its key below `heardEnd`) dropped,
+// and the node (and its feeds) relocated again; the records are cleared.
+// Whether anything was undone; `inexact` set when a dropped record was
+// needed.
 bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
                       bool* inexact = nullptr) SUPPLE_RT;
 // Forgets the node's records (a relocation without a take-back).

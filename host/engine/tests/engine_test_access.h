@@ -225,7 +225,7 @@ struct EngineTestAccess {
     static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
         std::vector<LaunchLogEntry> out;
         for (std::size_t i = 0; i < e.launchLog_.size(); ++i)
-            if (e.launchIsReturn_[i]) out.push_back(e.launchLog_[i]);
+            if (e.launchMeta_[i].isReturn) out.push_back(e.launchLog_[i]);
         return out;
     }
     // A full ring, as the in-callback executor would have met it: its

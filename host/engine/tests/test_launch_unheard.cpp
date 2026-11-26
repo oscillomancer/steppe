@@ -759,3 +759,134 @@ TEST_CASE(
         CHECK(logs[1] == logs[0]);
     }
 }
+
+TEST_CASE("a heard launch stays heard however many epochs pass, playing or stopped (round 203 F1)" *
+          doctest::description("rt")) {
+    // cl_1 heard on bar 2 (played past it), then:
+    //  - 70 seeks, each with 2 cycles and a service (H2): the log keeps cl_1,
+    //    launch.state and the node agree after every seek, and a capture
+    //    started after them lists cl_1 and is as heard;
+    //  - 65 seeks of one cycle each before a service (H; epoch 0's ring
+    //    entry reused before any service read it): as 62;
+    //  - paused, 70 seeks while stopped with a service each, then play (H3):
+    //    as 10.
+    // Both executors.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    const auto heardThen = [&](Manual& e) {
+        e.engine.play();
+        e.run(20);
+        (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+        e.run(3100);
+        e.engine.service();
+    };
+    const auto cl1 = [](const std::vector<LaunchLogEntry>& log) {
+        std::size_t n = 0;
+        for (const LaunchLogEntry& le : log) n += le.clip == id("cl_1");
+        return n;
+    };
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        const EngineOptions o = ahead ? EngineOptions{.workers = 0} : kInCallback;
+        {  // H2
+            Manual e(s, p.app->projectDir(), o, 32, 48000 * 6);
+            heardThen(e);
+            for (int i = 1; i <= 70; ++i) {
+                INFO("after seek " << i);
+                e.engine.seek(2.5);
+                e.run(e.done + 2);
+                e.engine.service();
+                CHECK(cl1(e.engine.launchLog()) == 1);
+                CHECK(e.plays() == "clip cl_1");
+                CHECK(e.node() == e.plays());
+            }
+            REQUIRE(e.engine.captureLaunches(true));
+            e.run(e.done + 100);
+            e.engine.service();
+            const auto capture = e.engine.launchCapture();
+            REQUIRE(capture);
+            CHECK(cl1(capture->launches) == 1);
+            CHECK(capture->facts == Engine::CaptureFacts{});
+            e.engine.stop();
+        }
+        // H, H3: the many runs against their controls, from the last seek or play.
+        const auto seeksThen = [&](int seeks, bool stopped) {
+            Manual e(s, p.app->projectDir(), o, 32, 48000 * 8);
+            heardThen(e);
+            if (stopped) {
+                e.engine.pause();
+                e.run(e.done + 10);
+                e.engine.service();
+            }
+            for (int i = 0; i < seeks; ++i) {
+                e.engine.seek(2.5);
+                e.run(e.done + (stopped ? 2 : 1));
+                if (stopped) e.engine.service();
+            }
+            e.engine.service();
+            if (stopped) e.engine.play();
+            const std::int64_t from = e.done;
+            e.run(e.done + 4);
+            e.engine.service();
+            CHECK(e.node() == e.plays());
+            CHECK(e.plays() == "clip cl_1");
+            e.run(e.done + 3000);
+            e.engine.service();
+            CHECK(cl1(e.engine.launchLog()) == 1);
+            const std::uint32_t latency = e.engine.outputLatency();
+            e.engine.stop();
+            const auto& out = e.backend.capture().channels[0];
+            return std::vector<float>(out.begin() + latency + std::size_t(from) * 32,
+                                      out.begin() + latency + std::size_t(from + 2900) * 32);
+        };
+        for (const bool stopped : {false, true}) {
+            INFO((stopped ? "H3: scrubbing while stopped" : "H: seeks before a service"));
+            const auto many = seeksThen(stopped ? 70 : 65, stopped);
+            const auto few = seeksThen(stopped ? 10 : 62, stopped);
+            INFO(differences(many, 0, few, few.size()));
+            CHECK(many == few);
+            CHECK(std::any_of(few.begin(), few.end(), [](float v) { return v != 0.0f; }));
+        }
+    }
+}
+
+TEST_CASE(
+    "a capture over the frames a late renderer leave rendered is not as heard (round 203 F2)" *
+    doctest::description("rt")) {
+    // As the late-leave test: cl_1 applied ahead and unheard (2990 cycles),
+    // the renderer's leave late at a seek to 2.5 s. A capture armed just
+    // before the seek (pending across it) or turned on just after starts in
+    // the new epoch, over frames the renderer rendered with cl_1 before it
+    // settled: not as heard. The in-callback run's same captures are.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const bool before : {true, false}) {
+        INFO(std::string(before ? "armed before the seek" : "turned on after it"));
+        for (const bool ahead : {false, true}) {
+            INFO(std::string(ahead ? "anticipative, its leave late" : "in-callback"));
+            Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                     48000 * 6);
+            e.engine.play();
+            e.run(20);
+            (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+            e.run(2990);
+            e.engine.service();
+            EngineTestAccess::rendererLeaveLate(e.engine, ahead);
+            if (before) REQUIRE(e.engine.captureLaunches(true));
+            e.engine.seek(2.5);
+            if (!before) REQUIRE(e.engine.captureLaunches(true));
+            e.run(e.done + 1);
+            e.engine.service();
+            EngineTestAccess::rendererLeaveLate(e.engine, false);
+            e.run(e.done + 400);
+            e.engine.service();
+            const auto capture = e.engine.launchCapture();
+            REQUIRE(capture);
+            REQUIRE(capture->placed);
+            CHECK(capture->facts.launchUnsettled == ahead);
+            e.engine.stop();
+        }
+    }
+}

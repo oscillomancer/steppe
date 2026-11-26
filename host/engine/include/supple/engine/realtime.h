@@ -21,6 +21,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1359,6 +1360,19 @@ class Engine {
         // the one key every executor records and the main thread judges
         // (review round 201 F2).
         std::atomic<std::int64_t> key{INT64_MIN};
+        // The key as of the switch itself (round 203 F3): an early half
+        // sets `key` from its plan's shift; the first switch sets it again
+        // from the shift it switches with, and a later switch of the other
+        // executor that finds another shift marks the capture.
+        std::atomic<bool> keyAtSwitch{false};
+        // Its verdict, written once by the callback as it leaves the slot's
+        // epoch (an epoch it skipped: unheard): 0 none yet, 1 heard, 2 not
+        // (round 203 F1). The executors' take-backs read it.
+        std::atomic<std::uint8_t> verdict{0};
+        // The executors that have left its epoch and taken back by its
+        // verdict (as `done`'s bits): it is voided and placed again only
+        // after all of them.
+        std::atomic<std::uint8_t> left{0};
         std::atomic<double> anchorBeat{0};
         // Main thread only: what to re-place after a miss or a new epoch.
         LaunchRequest request;
@@ -1369,6 +1383,8 @@ class Engine {
         std::uint8_t action = 0;
         std::int64_t stream = 0, anchorSample = 0, songFrame = 0;
         std::int64_t key = 0;  // its switch frame as heard (LaunchSlot::key)
+        int slot = -1;         // the slot it applied (none: a return)
+        std::uint64_t slotGeneration = 0;
         double anchorBeat = 0;
         // A return to the arrangement carryLaunch made at the adoption of
         // plan `generation`, at `stream` (no slot, clip or song frame: the
@@ -1463,24 +1479,38 @@ class Engine {
     // The renderer's pending leave settled once the callback's end for it is
     // known: its unheard slots done, its nodes taken back. False while
     // still unknown.
-    bool settleLeave(detail::Plan& p, int liveClass) SUPPLE_RT;
+    bool settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SUPPLE_RT;
     // Counted where a verdict came late or had to be taken as unheard (a
     // renderer that went on before the callback left the epoch, an end
     // reused before it was read): a capture over it is not as heard
     // (launch_unsettled).
-    std::atomic<std::uint64_t> launchUnsettled_{0};
+    mutable std::atomic<std::uint64_t> launchUnsettled_{0};
     std::uint64_t launchUnsettledSeen_ = 0;
-    std::optional<std::int64_t> launchHeardEnd(std::size_t c, std::uint64_t epoch) const SUPPLE_RT;
     // Executors, at their first launchesAt of a new epoch: each of this
     // class's nodes takes back what it applied in the epoch it left that
     // was not heard (detail::takeBackLaunches).
-    void takeBackNodes(detail::Plan& p, int liveClass, std::size_t c) SUPPLE_RT;
+    // An executor leaving `epoch`, heard to `end`: marks each record of that
+    // epoch to undo by its slot's verdict (a relocation's record by its frame
+    // against `end`), then takes back (round 203 F1: at the leave, never
+    // later).
+    void takeBackNodes(detail::Plan& p, int liveClass, std::uint64_t epoch,
+                       std::int64_t end) SUPPLE_RT;
     // An executor leaving epoch `left`, heard up to `end`: the slots it applied
     // there whose switch was not heard are done for it (`mine`) now, while
     // stopped too, so the main thread can take them back and place them
     // again for the play start (ADR-0097, dated 2026-11-26).
+    // `judge` (the callback): writes each applied slot's verdict first, for
+    // `left` by `end` and, as unheard, for the epochs up to `entered` it
+    // skipped.
     void leaveLaunchEpoch(std::uint8_t mine, const detail::Plan* plan, std::uint64_t left,
-                          std::int64_t end) SUPPLE_RT;
+                          std::int64_t end, bool judge = false,
+                          std::uint64_t entered = 0) SUPPLE_RT;
+    // Whether a slot is heard: its verdict once written, else its key
+    // against `end`.
+    bool slotHeard(const LaunchSlot& s, const detail::Plan* plan, std::int64_t end) const SUPPLE_RT;
+    // After its take-back: the executor `mine` left the applied slots of the
+    // epochs [left, entered) (at least `left`).
+    void markLeft(std::uint8_t mine, std::uint64_t left, std::uint64_t entered) SUPPLE_RT;
     // Counted by the executors, warned once each by service: a take-back
     // over an epoch whose hearing end was unknown (heard was assumed), and
     // one that needed a record a full ring had dropped (not exact).
@@ -1523,10 +1553,36 @@ class Engine {
     // arrangement an executor acked as it adopted a plan without the
     // track's clip (carryLaunch): at a frame it shares with a launch it
     // sorts first, since a launch there was applied after the adoption.
-    std::vector<std::uint8_t> launchIsReturn_;
-    // Each entry's switch frame as heard (its ack's key; a return the main
-    // thread logs: its frame plus the channel's shift), in the log's order.
-    std::vector<std::int64_t> launchKeys_;
+    // Beside each entry, in the log's order: whether it is a return; its
+    // switch frame as heard (its ack's key; a return the main thread logs:
+    // its frame plus the channel's shift); whether it was judged heard (then
+    // never judged again: round 203 F1); and the slot and generation it
+    // applied (none: a return), whose verdict judges it.
+    struct LogMeta {
+        bool isReturn = false;
+        std::int64_t key = 0;
+        bool settled = false;
+        int slot = -1;
+        std::uint64_t generation = 0;
+    };
+    std::vector<LogMeta> launchMeta_;
+    // Whether entry `i` was heard: nullopt while its verdict is not in.
+    std::optional<bool> entryHeard(std::size_t i) const;
+    // Main thread: each ended epoch's hearing end, copied from the ring the
+    // first time a service reads it (absent: the ring entry was reused
+    // before any service read it, taken as unheard); epochs from
+    // `judgedUpTo_` on are not judged yet.
+    mutable std::map<std::uint64_t, std::optional<std::int64_t>> judgedEnds_;
+    mutable std::uint64_t judgedUpTo_ = 0;
+    void readHeardEnds() const;
+    // `epoch`'s judged end: nullopt while not judged yet; an inner nullopt
+    // when it was lost (unheard).
+    std::optional<std::optional<std::int64_t>> judgedEnd(std::uint64_t epoch) const;
+    // The renderer's span after a late leave, until its settle (round 203
+    // F2): the epoch it went on in and the stream where it settled
+    // (INT64_MAX until then); a capture overlapping it is not as heard.
+    std::atomic<std::uint64_t> launchLateEpoch_{UINT64_MAX};
+    std::atomic<std::int64_t> launchLateEnd_{INT64_MAX};
     // Main thread: the returns logged, by track, epoch and plan generation:
     // one acked twice is logged once.
     struct ReturnKey {
@@ -1634,6 +1690,7 @@ class Engine {
         // Its start and end on the song's running count (heardSong), and the
         // song sample it began at.
         std::int64_t startSong = 0, endSong = 0, startSample = 0;
+        std::int64_t startStream = 0;  // its epoch's stream frame where it began
         LoopRange loop;
         bool placed = false;  // LaunchCapture's
         std::uint64_t version = 0, committedIn = 0;

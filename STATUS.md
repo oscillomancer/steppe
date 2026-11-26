@@ -427,8 +427,12 @@ instructions are in `docs/guides/installing.md`.
       callback has left the stopped epoch (about one device period) is
       not as heard while it lists a launch of that epoch whose verdict is
       not in (`launch_unsettled`), and so is one over a renderer leave
-      that came before the callback's (a timed-out wait) or an end reused
-      before it was read; the GUI's as-heard line does not word
+      that came before the callback's (a timed-out wait), one begun over
+      the frames that renderer rendered before it settled, or one whose
+      epoch end no service read before its ring entry was reused (64
+      epochs without a service); a launch's verdict is made once, so a
+      heard launch stays heard however many epochs follow (round 203);
+      the GUI's as-heard line does not word
       `launch_unsettled` yet (gui-lead).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's

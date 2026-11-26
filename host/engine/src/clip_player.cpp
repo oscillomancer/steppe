@@ -1431,7 +1431,8 @@ void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT {
     n.launchWarmValid = true;
 }
 
-LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch) SUPPLE_RT {
+LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch,
+                           int slot) SUPPLE_RT {
     if (n.launchUndoCount == kLaunchUndos) {  // drop the oldest (most likely heard)
         const LaunchUndo& lost = n.launchUndos[0];
         if (lost.epoch == epoch) {
@@ -1446,6 +1447,7 @@ LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t ep
     u.epoch = epoch;
     u.key = key;
     u.feed = feed;
+    u.slot = slot;
     if (feed >= 0) {
         const NotesFeed& f = n.rack->notes[static_cast<std::size_t>(feed)];
         u.feedId = f.id;
@@ -1475,7 +1477,7 @@ bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
     bool any = false;
     for (std::size_t i = n.launchUndoCount; i-- > 0;) {
         const LaunchUndo& u = n.launchUndos[i];
-        if (u.epoch != epoch || u.key < heardEnd) continue;  // heard: it stays
+        if (u.epoch != epoch || !u.undo) continue;  // heard: it stays
         any = true;
         if (u.feed >= 0) {
             if (!n.rack || static_cast<std::size_t>(u.feed) >= n.rack->notes.size()) continue;

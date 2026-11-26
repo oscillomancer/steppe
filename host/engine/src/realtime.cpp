@@ -2211,10 +2211,16 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // 2026-11-26): everything it processed there was handed to the device.
         const std::int64_t heard =
             rtPosEpoch_.load(std::memory_order_relaxed) == rtEpoch_ ? rtStream_.load() : 0;
+        // Both classes (it runs every node): the slots' verdicts, written
+        // before the end is published (a renderer settling by it reads
+        // them), then what it applied there and was not heard goes back,
+        // here at the leave (round 203 F1).
+        leaveLaunchEpoch(3, plan, rtEpoch_, heard, true, xport.epoch);
         noteHeardEnd(rtEpoch_, xport.epoch, heard);
         launchLeftEpoch_[1] = rtEpoch_;
         launchLeftEnd_[1] = heard;
-        leaveLaunchEpoch(3, plan, rtEpoch_, heard);  // both classes: it runs every node
+        if (plan) takeBackNodes(*plan, -1, rtEpoch_, heard);
+        markLeft(3, rtEpoch_, xport.epoch);
         // The callback's own meter coordinates (P5.3c). With no anticipation it
         // is both renderer and player, so what it processes is what is heard;
         // the anticipative path keeps these in pullAhead/liveRender.
@@ -2776,15 +2782,22 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         leftEnd = playedStream(previous);
     else
         leftEnd = heardEnd(previous);
-    if (leftEnd) {
+    if (launchLeavePending_ != UINT64_MAX) {
+        // Still waiting for an earlier leave's verdicts: it applied nothing
+        // since, so its records are that epoch's (settled first).
+    } else if (leftEnd) {
         launchLeftEpoch_[0] = previous;
         launchLeftEnd_[0] = *leftEnd;
         leaveLaunchEpoch(1, plan_, previous, *leftEnd);
+        if (plan_) takeBackNodes(*plan_, 0, previous, *leftEnd);
+        markLeft(1, previous, epoch);
     } else {
         launchLeavePending_ = previous;
         // What it renders meanwhile may still hold a switch that was not
-        // heard: a capture over it is not as heard.
+        // heard: a capture over it, or over those frames, is not as heard.
         if (undos) {
+            launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+            launchLateEpoch_.store(epoch, std::memory_order_release);
             launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
             notifyMain();
         }
@@ -3265,10 +3278,12 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
         // Where the epoch it leaves stopped being heard: what it consumed of
         // it (ADR-0097, dated 2026-11-26), before it plays anything newer.
         const std::int64_t heard = playedStream(rtEpoch_);
+        leaveLaunchEpoch(2, livePlan_, rtEpoch_, heard, true, xport.epoch);  // first (above)
         noteHeardEnd(rtEpoch_, xport.epoch, heard);
         launchLeftEpoch_[1] = rtEpoch_;
         launchLeftEnd_[1] = heard;
-        leaveLaunchEpoch(2, livePlan_, rtEpoch_, heard);
+        if (livePlan_) takeBackNodes(*livePlan_, 1, rtEpoch_, heard);
+        markLeft(2, rtEpoch_, xport.epoch);
         rtEpoch_ = xport.epoch;
         rtOffset_ = 0;
         rtPrimed_ = false;

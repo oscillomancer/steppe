@@ -1393,6 +1393,16 @@ wait timed out applies and takes back nothing until the callback's end is known;
 lists a launch whose verdict is not in, or that ran over such a late or taken-as-unheard verdict, is
 not as heard (`launch_unsettled`).
 
+Review round 203 (same date) found that the main thread judged a log entry again at every service,
+so 64 epochs after a heard launch its ring entry was reused and the launch was taken back as unheard.
+Decided: a verdict is made once and stored. The callback writes each slot's verdict as it leaves the
+epoch, before publishing the end; each executor takes back at its own leave by those verdicts; the
+main thread judges each entry once (a slot's by its verdict, a return by the end it copies at its
+first read) and never looks at a heard one again. "Unknown = unheard" is kept only for an epoch no
+service read in time. The key is the one set at the switch; a shift change between an early half and
+its switch, or between the executors' switches, marks the capture rather than being approximated, and
+so does a capture begun over the frames a late renderer leave rendered before it settled.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take
