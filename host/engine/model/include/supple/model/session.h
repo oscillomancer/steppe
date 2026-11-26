@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -248,6 +249,16 @@ class EditTxn {
     // inside a batch read their earlier steps' effects through this).
     Session preview() const;
 
+    // A modulation route made by copying `original` (ADR-0096 M5): checked
+    // once the command has placed its copies (its source, cycles, the
+    // limit), which only the whole edit can tell. In creation order.
+    void copiedRoute(Id made, Id original) { copiedRoutes_.emplace_back(made, original); }
+    std::vector<std::pair<Id, Id>> takeCopiedRoutes() { return std::exchange(copiedRoutes_, {}); }
+    // A route an edit removes while a twin lives on (a join's right-hand
+    // routes): no modulation.removed warning names it (ADR-0096 M5).
+    void routeLivesOn(Id route) { routesLivingOn_.push_back(route); }
+    const std::vector<Id>& routesLivingOn() const { return routesLivingOn_; }
+
     // Validates and returns the new session. The transaction is spent.
     Result<Session> commit();
 
@@ -270,6 +281,8 @@ class EditTxn {
     mutable TxnBuilders builders_;
     std::map<Id, Change::Op> changes_;
     std::vector<Id> created_;
+    std::vector<std::pair<Id, Id>> copiedRoutes_;  // (made, original)
+    std::vector<Id> routesLivingOn_;
     bool committed_ = false;
     bool projectChanged_ = false;
 };
@@ -291,10 +304,26 @@ Status validateStripRules(const Session& s);
 std::optional<Id> trackOfFx(const Session& s, Id fx);
 // The track whose FX chain or input chain holds `fx`, if any.
 std::optional<Id> trackOfChainFx(const Session& s, Id fx);
+// Where a take FX is (ADR-0096 M5): its take, the item or clip that holds the
+// take, and that item's or clip's track.
+struct TakeFxOwner {
+    Id take, owner, track;  // owner: an it_* or a cl_*
+};
+std::optional<TakeFxOwner> takeFxOwner(const Session& s, Id fx);
+// Whether the engine plays that take (ADR-0096 M5): it is its item's active
+// take and the item is not muted, or its clip's active take. The plan
+// compiles a take chain for no other (plan.cpp, the take chains), and a
+// route into the FX of a take it does not play is inert, reported by
+// modulation.list as `take`. What the plan adds at run time (a lane mute,
+// a recording's silence, a render without launches) is not the model's.
+bool takeFxPlays(const Session& s, const TakeFxOwner& owner);
+// The track that holds the item or clip whose take's chain holds `fx`, if any.
+std::optional<Id> trackOfTakeFx(const Session& s, Id fx);
 // The plan node that applies a modulation route's target (ADR-0096): the
-// track of an FX in a chain or input chain, the track of a mixer target, or
-// for a send's level the node that applies it (its source strip, or the
-// rack of a rack send). nullopt for a target no route may have.
+// track of an FX in a chain or input chain, or in a take's chain (the track
+// of the take's item or clip, M5), the track of a mixer target, or for a
+// send's level the node that applies it (its source strip, or the rack of a
+// rack send). nullopt for a target no route may have.
 std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target);
 // Removes the modulation routes whose source or target is gone or no longer
 // fits the invariants, or that close a cycle: a file that went through an
@@ -305,6 +334,17 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
 // unfit (a removed module, FX, track or route; a send turned MIDI), with the
 // reason, in id order. Commands remove them and warn modulation.removed.
 std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s);
+// Of the routes in `ordered`, those that close a cycle, taken in that order:
+// each is checked with the routes outside `ordered` and the earlier ones that
+// did not, so the same ones are found every time (ADR-0096 M5: the routes a
+// copy made, once the copies are placed).
+std::vector<Id> modulationsClosingCycles(const Session& s, const std::vector<Id>& ordered);
+// Whether the modulation routes into FX `a` and into FX `b` match one for
+// one: the same source module and input, parameter, depth, enabled and lane
+// (ADR-0096 M5: what item.heal and take.comp require of the pieces they join).
+bool sameModulations(const Session& s, Id a, Id b);
+// The modulation routes into FX `fx`, in id order.
+std::vector<Id> modulationsInto(const Session& s, Id fx);
 // The plugin module that holds `fx` (ADR-0062), if any.
 std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its

@@ -105,7 +105,7 @@ TEST_CASE("modulation: a route saves, reopens and serializes the same") {
     CHECK(Id::parse("mo_1")->kind == Kind::Module);
 
     const std::string bytes = serializeProject(*s);
-    CHECK(bytes.find("\"supple.project/2.22\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.23\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     REQUIRE(doc.find("modulations"));
     json::Value& m = doc["modulations"]["mr_1"];
@@ -667,4 +667,146 @@ TEST_CASE("modulation: a lost mr counter never reuses an id another branch holds
                     (opened->branchesDropped ? opened->branchesDropped->toString() : ""));
     CHECK(opened->store.head("agent/claude/keep")->modulations.contains(second));
     CHECK(opened->store.head("main")->next[Kind::Modulation] > second.n);
+}
+
+// --- Take FX targets (ADR-0096 step M5) ------------------------------------
+
+namespace {
+// An item on `track` whose one (empty) take holds a plug-in in its chain.
+struct TakeFx {
+    Id item, take, fx;
+};
+TakeFx addTakeFx(EditTxn& t, Id track, double position = 0) {
+    FxInstance fx;
+    fx.plugin = {"clap", "test.filter", "", "", ""};
+    const Id fxId = t.create(fx);
+    Take take;
+    take.chain = {fxId};
+    const Id tk = t.create(take);
+    Item item;
+    item.track = track;
+    item.position = position;
+    item.length = 4;
+    item.takes = {tk};
+    item.activeTake = tk;
+    return {t.create(item), tk, fxId};
+}
+}  // namespace
+
+TEST_CASE("modulation: a take FX is a target; its node is the track that holds the item (M5)") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    const TakeFx on = addTakeFx(t, f.b);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    Id id;
+    auto routed = with(*s, route(f.modOut, on.fx, "cutoff", -0.5), &id);
+    REQUIRE_MESSAGE(routed, (routed ? "" : routed.error().toString()));
+    CHECK(modulationTargetNode(*routed, {on.fx, "cutoff"}) == f.b);
+    CHECK(trackOfTakeFx(*routed, on.fx) == f.b);
+    CHECK_FALSE(trackOfChainFx(*routed, on.fx));
+    const auto owner = takeFxOwner(*routed, on.fx);
+    REQUIRE(owner);
+    CHECK(owner->take == on.take);
+    CHECK(owner->owner == on.item);
+    CHECK(owner->track == f.b);
+    // The depth is a plug-in's.
+    CHECK(invariantPath(with(*s, route(f.modOut, on.fx, "cutoff", 1.5))) ==
+          "/modulations/mr_1/depth");
+
+    // It saves and reopens as any route, under the new minor.
+    const std::string bytes = serializeProject(*routed);
+    CHECK(bytes.find("\"supple.project/2.23\"") != std::string::npos);
+    auto reopened = parseProject(bytes);
+    REQUIRE_MESSAGE(reopened, (reopened ? "" : reopened.error().toString()));
+    REQUIRE(reopened->modulations.find(id));
+    CHECK(*reopened->modulations.find(id) == *routed->modulations.find(id));
+    CHECK(serializeProject(*reopened) == bytes);
+
+    // Its FX removed, the route goes with it.
+    EditTxn r(*routed, routed->version + 1);
+    r.modify<Take>(on.take, [](Take& tk) { tk.chain.clear(); });
+    r.remove<FxInstance>(on.fx);
+    auto removed = r.commit();
+    REQUIRE_MESSAGE(removed, (removed ? "" : removed.error().toString()));
+    CHECK(removed->modulations.empty());
+}
+
+TEST_CASE("modulation: a route into a take FX on a track the rack hears closes a cycle (M5)") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    RackModule in;
+    in.rack = f.rack;
+    in.type = std::string(kInModule);
+    const Id inModule = t.create(in);
+    Route send;
+    send.from.track = f.b;
+    send.to.module = inModule;
+    t.create(send);
+    const TakeFx onB = addTakeFx(t, f.b);
+    const TakeFx onA = addTakeFx(t, f.a, 8);
+    auto fed = t.commit();
+    REQUIRE_MESSAGE(fed, (fed ? "" : fed.error().toString()));
+    const auto cycle = with(*fed, route(f.modOut, onB.fx, "cutoff", 0.5));
+    REQUIRE_FALSE(cycle);
+    CHECK(cycle.error().code == "modulation.cycle");
+    CHECK(cycle.error().path == "/modulations/mr_1");
+    // A take on a track the rack does not hear is no cycle.
+    CHECK(with(*fed, route(f.modOut, onA.fx, "cutoff", 0.5)));
+}
+
+TEST_CASE("modulation: routes into a frozen track's take FX are in its freeze hash (M5)") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    const TakeFx on = addTakeFx(t, f.b);
+    auto s = t.commit();
+    REQUIRE(s);
+    const auto hash = freezeDependencyHash(*s, f.b);
+    Id id;
+    auto routed = with(*s, route(f.modOut, on.fx, "cutoff", 0.5), &id);
+    REQUIRE(routed);
+    CHECK(freezeDependencyHash(*routed, f.b) != hash);
+    CHECK(freezeDependencyHash(*routed, f.a) == freezeDependencyHash(*s, f.a));
+}
+
+TEST_CASE("modulation: the routes that close cycles are found in the order given (M5)") {
+    // B sends into the rack's In, so every route from the rack into B's
+    // take FX closes a cycle; each is found, in the order given.
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    const TakeFx on = addTakeFx(t, f.b);
+    RackModule in;
+    in.rack = f.rack;
+    in.type = std::string(kInModule);
+    const Id inModule = t.create(in);
+    Route send;
+    send.from.track = f.b;
+    send.to.module = inModule;
+    t.create(send);
+    const Id first = t.create(route(f.modOut, on.fx, "cutoff", 0.5));
+    const Id second = t.create(route(f.modOut, on.fx, "resonance", 0.5));
+    const Session preview = t.preview();
+    // Each closes the cycle alone; once the first is set aside, the second
+    // is checked without it and still closes one.
+    CHECK(modulationsClosingCycles(preview, {first, second}) == std::vector<Id>{first, second});
+}
+
+TEST_CASE("modulation: sameModulations compares routes one for one (M5)") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    const TakeFx left = addTakeFx(t, f.b);
+    const TakeFx right = addTakeFx(t, f.b, 4);
+    auto s = t.commit();
+    REQUIRE(s);
+    CHECK(sameModulations(*s, left.fx, right.fx));  // none on either
+    auto one = with(*s, route(f.modOut, left.fx, "cutoff", 0.5));
+    REQUIRE(one);
+    CHECK_FALSE(sameModulations(*one, left.fx, right.fx));
+    auto both = with(*one, route(f.modOut, right.fx, "cutoff", 0.5));
+    REQUIRE(both);
+    CHECK(sameModulations(*both, left.fx, right.fx));
+    auto deeper = with(*one, route(f.modOut, right.fx, "cutoff", 0.25));
+    REQUIRE(deeper);
+    CHECK_FALSE(sameModulations(*deeper, left.fx, right.fx));
+    CHECK(modulationsInto(*both, right.fx).size() == 1);
 }

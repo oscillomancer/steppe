@@ -298,10 +298,13 @@ namespace {
 struct Checker {
     const Session& s;
     std::vector<Error> errors;
-    // Each FX in a track's chain or input chain, to its track: built once per
-    // check, on the first modulation route that asks (trackOfChainFx scans
-    // every track's chains).
+    // Each FX a route may target, to its track: those in a track's chain or
+    // input chain, and those in a take's chain, to the track of the take's
+    // item or clip (ADR-0096 M5). Built once per check, on the first
+    // modulation route that asks (it scans every chain).
     std::optional<std::map<Id, Id>> chainFx;
+    // Routes the cycle check leaves out (modulationsClosingCycles).
+    const std::set<Id>* skipRoutes = nullptr;
 
     std::optional<Id> trackOfChainFx(Id fx) {
         if (!chainFx) {
@@ -310,6 +313,13 @@ struct Checker {
                 for (Id id : e.value->chain) chainFx->emplace(id, e.id);
                 for (Id id : e.value->inputChain) chainFx->emplace(id, e.id);
             }
+            const auto takes = [&](const std::vector<Id>& ids, Id track) {
+                for (Id take : ids)
+                    if (const Take* tk = s.takes.find(take))
+                        for (Id id : tk->chain) chainFx->emplace(id, track);
+            };
+            for (const auto& e : s.items) takes(e.value->takes, e.value->track);
+            for (const auto& e : s.clips) takes(e.value->takes, e.value->track);
         }
         const auto found = chainFx->find(fx);
         if (found == chainFx->end()) return std::nullopt;
@@ -566,6 +576,7 @@ struct Checker {
         // that applies its target (ADR-0096).
         std::map<std::pair<Id, Id>, Id> modEdges;
         for (const auto& e : s.modulations) {
+            if (skipRoutes && skipRoutes->count(e.id)) continue;
             const RackModule* m = s.modules.find(e.value->source.module);
             const auto target = targetNode(e.value->target);
             if (!m || !target) continue;  // reported by modulations()
@@ -771,7 +782,8 @@ struct Checker {
                 fail(at("modulations", e.id, "target"),
                      o.str() + " " + param +
                          " cannot be modulated (a plug-in parameter in a track's chain or input "
-                         "chain; a track's volume, pan or width; a send's volume)");
+                         "chain or a take's chain; a track's volume, pan or width; a send's "
+                         "volume)");
                 continue;
             }
             if (!std::isfinite(m.depth) || std::abs(m.depth) > range)
@@ -1082,7 +1094,7 @@ Status validateNumeric(const Session& s) {
 Status checkInvariants(const Session& s) {
     SUPPLE_TRY(validateAudioWarp(s));
     SUPPLE_TRY(validateNumeric(s));
-    Checker c{s, {}, {}};
+    Checker c{s, {}, {}, nullptr};
     if (!(s.project->sampleRate >= 8000 && s.project->sampleRate <= 384000))
         c.fail("/project/sample_rate", "sample rate out of range");
     if (auto strips = validateStripRules(s); !strips) {
@@ -1230,7 +1242,7 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
     std::vector<std::pair<Id, std::string>> dropped;
     const std::string prefix = "/modulations/mr_";
     while (!s.modulations.empty()) {
-        Checker c{s, {}, {}};
+        Checker c{s, {}, {}, nullptr};
         c.modulations();  // gone or unfit referents first, then cycles
         if (c.errors.empty()) c.routes();
         std::optional<Id> id;
@@ -1254,9 +1266,48 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
     return dropped;
 }
 
+std::vector<Id> modulationsClosingCycles(const Session& s, const std::vector<Id>& ordered) {
+    std::set<Id> skip(ordered.begin(), ordered.end());
+    std::vector<Id> closing;
+    for (Id id : ordered) {
+        skip.erase(id);
+        Checker c{s, {}, {}, &skip};
+        c.routes();
+        if (std::any_of(c.errors.begin(), c.errors.end(),
+                        [](const Error& e) { return e.code == "modulation.cycle"; })) {
+            closing.push_back(id);
+            skip.insert(id);
+        }
+    }
+    return closing;
+}
+
+std::vector<Id> modulationsInto(const Session& s, Id fx) {
+    std::vector<Id> out;
+    for (const auto& e : s.modulations)
+        if (e.value->target.object == fx) out.push_back(e.id);
+    return out;
+}
+
+bool sameModulations(const Session& s, Id a, Id b) {
+    using Key = std::tuple<Id, std::string, std::string, double, bool, bool>;
+    const auto keys = [&](Id fx) {
+        std::vector<Key> out;
+        for (const auto& e : s.modulations) {
+            const Modulation& m = *e.value;
+            if (m.target.object == fx)
+                out.emplace_back(m.source.module, m.source.input, m.target.param, m.depth,
+                                 m.enabled, m.lane);
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    return keys(a) == keys(b);
+}
+
 std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s) {
     std::vector<std::pair<Id, std::string>> out;
-    Checker c{s, {}, {}};
+    Checker c{s, {}, {}, nullptr};
     c.modulations();
     const std::string prefix = "/modulations/";
     for (const Error& e : c.errors) {
@@ -1280,9 +1331,40 @@ std::optional<Id> trackOfChainFx(const Session& s, Id fx) {
     return std::nullopt;
 }
 
+std::optional<TakeFxOwner> takeFxOwner(const Session& s, Id fx) {
+    const auto find = [&](const std::vector<Id>& takes) -> std::optional<Id> {
+        for (Id take : takes)
+            if (const Take* tk = s.takes.find(take))
+                if (std::find(tk->chain.begin(), tk->chain.end(), fx) != tk->chain.end())
+                    return take;
+        return std::nullopt;
+    };
+    for (const auto& e : s.items)
+        if (auto take = find(e.value->takes)) return TakeFxOwner{*take, e.id, e.value->track};
+    for (const auto& e : s.clips)
+        if (auto take = find(e.value->takes)) return TakeFxOwner{*take, e.id, e.value->track};
+    return std::nullopt;
+}
+
+bool takeFxPlays(const Session& s, const TakeFxOwner& owner) {
+    if (const Item* item = owner.owner.kind == Kind::Item ? s.items.find(owner.owner) : nullptr)
+        return !item->mute && item->activeTake == owner.take;
+    if (const Clip* clip = owner.owner.kind == Kind::Clip ? s.clips.find(owner.owner) : nullptr)
+        return clip->activeTake == owner.take;
+    return false;
+}
+
+std::optional<Id> trackOfTakeFx(const Session& s, Id fx) {
+    if (auto owner = takeFxOwner(s, fx)) return owner->track;
+    return std::nullopt;
+}
+
 std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target) {
     const Id o = target.object;
-    if (o.kind == Kind::Fx) return trackOfChainFx(s, o);
+    if (o.kind == Kind::Fx) {
+        if (auto track = trackOfChainFx(s, o)) return track;
+        return trackOfTakeFx(s, o);  // ADR-0096 M5
+    }
     if (o.kind == Kind::Track && s.tracks.contains(o)) return o;
     if (const Route* r = o.kind == Kind::Route ? s.routes.find(o) : nullptr) {
         if (r->from.track) return r->from.track;
