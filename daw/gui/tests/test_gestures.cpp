@@ -1141,14 +1141,16 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
         f.root->damageAll();
         f.root->frame(false);
     };
-    auto dimmedWidth = [&] {
-        float w = 0;
-        for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans()) w += d.w;
-        return w;
-    };
     paint();
     const ui::Rect lanes = f.view->lanesRect();
     const ui::Rect laneRow = f.view->rowRect(*lane);
+    // The dimmed part of this lane (a copied take's lane, below, has its own).
+    auto dimmedWidth = [&] {
+        float w = 0;
+        for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans())
+            if (std::abs(d.y - f.view->rowRect(*lane).y) < 0.5f) w += d.w;
+        return w;
+    };
     const ui::Rect body = f.rectOf(item);
     const float visible = std::min(laneRow.right(), lanes.right()) - std::max(laneRow.x, lanes.x);
     const float played =
@@ -1163,6 +1165,7 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
         REQUIRE(gui::writePng(std::filesystem::path(out) / "take-fx-lane-dimmed.png",
                               f.root->readBack()));
+    const std::size_t lanesBefore = f.view->trackLayout().rows().size();
     // Another take active: the effect plays nowhere, so all of the lane is dimmed.
     auto second = f.dispatcher->execute(
         {"take.add",
@@ -1181,6 +1184,20 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     };
     activate(secondTake);
     REQUIRE(f.view->trackLayout().indexOfEnv(env) == lane);
+    // The copy (take.add {from}, copyTake) brings its envelope and its lane;
+    // each lane names its own take, so the two read apart.
+    CHECK(f.view->trackLayout().rows().size() == lanesBefore + 1);
+    {
+        const model::Session& now = f.app->head();
+        std::vector<std::string> notes;
+        for (const auto& e : now.envelopes)
+            if (e.value->target.param == key && e.value->target.object.kind == model::Kind::Fx) {
+                const auto scale = f.view->trackLayout().scaleOf(*e.value);
+                notes.push_back(views::laneTitle(*e.value, now, scale ? &*scale : nullptr).note);
+            }
+        std::sort(notes.begin(), notes.end());
+        CHECK(notes == std::vector<std::string>{"(take: Take 1)", "(take: Take 2)"});
+    }
     CHECK(static_cast<double>(dimmedWidth()) ==
           doctest::Approx(static_cast<double>(visible)).epsilon(0.01));
     activate(take.str());
@@ -1200,7 +1217,9 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     f.click({past, area.y + area.h * 0.25f});
     CHECK(f.app->head().envelopes.find(env)->points.size() == 4);
     // The item moved to another track takes its take's lane along.
-    const model::Id other = f.view->trackLayout().rows()[*lane + 1].track;
+    model::Id other = track;
+    for (std::size_t r = *lane + 1; r < f.view->trackLayout().rows().size() && other == track; ++r)
+        other = f.view->trackLayout().rows()[r].track;
     REQUIRE(other != track);
     auto moved = f.dispatcher->execute(
         {"item.move",
