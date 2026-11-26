@@ -2098,13 +2098,29 @@ edited in its roll, not on the timeline. For a MIDI clip:
   start and past its end the lane is dimmed as the roll is, and the curve
   holds its end value there, dashed. Clip time takes no writing mode and no
   automation items, so a lane has no read/write cell;
+- a take FX parameter a modulation route shows (`lane`, ADR-0096 M5) has
+  its lane there too, after its effect's envelopes. Without an envelope on
+  it the lane draws the parameter's value as a line in the curve's colour
+  (`views::targetValue`) and takes no press but **hide**; a hidden envelope
+  on it gives the lane its curve, as on the timeline. On every lane whose
+  parameter is modulated, the band and the live value are drawn as on the
+  timeline's lanes (§4.3: `views::modulationBand` around the base in faint
+  `signal-cv`, the bright stroke and dot at the playhead from the engine's
+  offsets), from the arrange's feed (`MidiEditor::setModulation`: its
+  unipolar test and live offsets); the lanes redraw when the offsets or the
+  playhead move. Hiding a modulated parameter's lane, by **hide** or the
+  menus, turns its envelope's `visible` and every route's `lane` off in one
+  undo step (`gui::setLaneShown`, as the parameter menus do, §2);
 - the Lanes menu adds Take volume, Take pan and Take mute (disabled, with a
   row saying why, while the take FX hold no instrument: `env.take_midi`),
-  then for each take effect its envelopes and **parameters…**, the list of
+  then for each take effect its envelopes, its modulation-only lanes (ticked;
+  unticking hides them), and **parameters…**, the list of
   the parameters it describes (`fx.describe`; a plain plug-in describes
-  none, as on the timeline). Ticking one without an envelope makes one with
+  none, as on the timeline), ticked while an envelope or a route shows its
+  lane. Ticking one without an envelope or a route makes an envelope with
   a point at the clip's start at the parameter's value now (a take
-  envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
+  envelope's: 0 dB, centre, unmuted); a modulated one shows its route's
+  lane instead; unticking hides it. Refusals go to the
   status line.
 
 **An audio clip's pane** (mock 93). An audio clip opens in the same panel
@@ -2148,7 +2164,8 @@ Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
 beats", "a clip-time lane selects points, moves them together, shapes
 them", "a clip-time lane takes a marquee, and copies, cuts and pastes
-points", and the CC lane case.
+points", "a modulated clip take FX parameter gets its lane, band and live
+value", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its

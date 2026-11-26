@@ -1295,8 +1295,10 @@ route, named by its source, and leaves the rack as it is.
 
 A plug-in in a take's own chain (**Take FX…** on an item or a clip) can be
 modulated the same way, from its parameter menu in the FX window. The
-item's or clip's inspector then shows its **Modulation** row, and the
-parameter's lane is under the item's track. The modulation follows the take: it
+item's or clip's inspector then shows its **Modulation** row. The
+parameter's lane is under the item's track, or, for a clip, in the MIDI
+editor's lanes under the roll, with the band the modulation can add and,
+while it plays, its value now. The modulation follows the take: it
 plays while that take is the one heard, and the menu says "Modulation
 idle: another take of its item plays" (or "its item is muted") when it
 does not.

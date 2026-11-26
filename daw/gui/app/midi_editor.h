@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -82,6 +83,16 @@ struct RollEnvLane {
     views::EnvScale scale;
     double fallback = 0;  // the value without points
     std::string title;    // "Volume (take)", "Teasel · Drive (take)": the lane's one name
+    // A take FX parameter a modulation route shows (`lane`, ADR-0096 M5)
+    // without any envelope on it: its value and the band, no points, no
+    // press but hide; `env` and `envelope` name nothing.
+    bool modOnly = false;
+    model::EnvTarget target;
+    // The lane's node id: "midi.env.<env>", or "midi.mod.<fx>.<param>".
+    std::string key() const {
+        return modOnly ? "midi.mod." + target.object.str() + "." + target.param
+                       : "midi.env." + env.str();
+    }
 };
 
 // What the roll, keyboard and velocity lane share.
@@ -117,6 +128,9 @@ struct RollState {
     // (volume, pan, mute, then the take FX in chain order); none for an item,
     // whose take lanes are on the timeline.
     std::vector<RollEnvLane> envLanes;
+    // The lanes (keys) whose last paint drew a modulation band, and a live
+    // value at the playhead (ADR-0096 M5; for tests).
+    std::set<std::string> lanesBanded, lanesLive;
     // The clip-time lanes' point selection (gui.md §4.7, as the timeline's):
     // one lane's at a time, its points named by position and value, so
     // points an edit removed simply leave it.
@@ -339,6 +353,18 @@ class MidiEditor {
     // The peak service an audio clip's waveform reads (the app's); none: no
     // waveform is drawn. peaksReady() repaints it when a pyramid arrives.
     void setPeaks(peaks::PeakService* peaks) { peaks_ = peaks; }
+    // Modulation on the clip-time lanes (ADR-0096 M5, gui.md §4.7): which
+    // sources are 0..1, for the band, and the engine's live offsets (the
+    // arrange's, each pass), for the live dot. Unset: every source counts
+    // as -1..1 and no live value is drawn.
+    void setModulation(const views::UnipolarSource* unipolar,
+                       const std::map<model::Id, double>* live) {
+        unipolar_ = unipolar;
+        live_ = live;
+    }
+    const views::UnipolarSource& unipolarSource() const;
+    const model::Session& head() const;
+    const std::map<model::Id, double>* liveOffsets() const { return live_; }
     peaks::PeakService* peaks() const { return peaks_; }
     void peaksReady();
     std::string_view wheelBehaviour(unsigned mods) const;
@@ -518,11 +544,14 @@ class MidiEditor {
                    std::optional<std::uint64_t> expectedVersion = {},
                    std::string_view what = "Lanes");
     std::unique_ptr<PluginScales> scales_;
-    ui::Node* envColumn_ = nullptr;        // the clip-time lanes, under the CC lane
-    std::vector<model::Id> envNodes_;      // the envelopes envColumn_ has lanes for
-    ui::Toggle* writtenButton_ = nullptr;  // a following take's Written cell
-    ui::Button* passButton_ = nullptr;     // its Pass cell, while passes differ
-    std::vector<double> passStarts_;       // each pass's first heard song beat
+    ui::Node* envColumn_ = nullptr;      // the clip-time lanes, under the CC lane
+    std::vector<std::string> envNodes_;  // the lanes envColumn_ has nodes for (keys)
+    const views::UnipolarSource* unipolar_ = nullptr;
+    const std::map<model::Id, double>* live_ = nullptr;
+    std::map<model::Id, double> liveDrawn_;  // the offsets the lanes last drew
+    ui::Toggle* writtenButton_ = nullptr;    // a following take's Written cell
+    ui::Button* passButton_ = nullptr;       // its Pass cell, while passes differ
+    std::vector<double> passStarts_;         // each pass's first heard song beat
     void openPassMenu();
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
