@@ -39,7 +39,9 @@ Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
             json::Value args = json::Value::object();
             args["track"] = id.str();
             auto one = dispatcher.execute({"track.remove", std::move(args), origin});
-            if (!one) return one;
+            // Its Notes modules left playing their rack's channel would loop
+            // a modulation: said in the GUI's words.
+            if (!one) return views::modulationRefusal(session, "track.remove", one.error());
             if (warnings) views::collectWarnings(*warnings, *one);
         }
         return json::Value::object();

@@ -6498,3 +6498,56 @@ TEST_CASE("status: a recording's dropped modulation routes are said in the GUI's
     shell.engineEvents({{"record.warning", other}, {"record.warning", warning("mr_1")}});
     CHECK(shell.statusNote().starts_with("the take overlaps a locked item; A modulation"));
 }
+
+TEST_CASE("input menu: a rack's Out that would loop a modulation is refused in the GUI's words") {
+    // gui.md §2 (round 199 F2): track.set's record_rack, a rack's Out as the
+    // channel's input, can close a modulation cycle: Cee feeds a follower
+    // that modulates Tee, and Tee's MIDI send reaches Synth's Notes module,
+    // so Synth's Out as Cee's input loops. The input menu says it in the
+    // GUI's words, as the rack's Out and not the parent send, without ids.
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto cee = call("track.add", R"({"name":"Cee"})")["track"].asString();
+    const auto tee = call("track.add", R"({"name":"Tee"})")["track"].asString();
+    call("modulate", R"({"target":{"track":")" + tee +
+                         R"(","param":"volume"},"source":"follower","from":")" + cee + R"("})");
+    auto rack = call("rack.add", R"({"name":"Synth"})");
+    const std::string home = rack["track"].asString(), out = rack["out"].asString();
+    call("module.add", R"({"rack":")" + rack["rack"].asString() + R"(","type":"notes"})");
+    call("route.add", R"({"from":")" + tee + R"(","to":")" + home + R"(","midi":{}})");
+    const auto ceeId = *model::Id::parse(cee);
+    a.ui.selectedTracks = {cee};
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    std::string error;
+    shell.onError = [&](const std::string& text) { error = text; };
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    shell.openInputMenu(ceeId, {100, 100, 20, 20});
+    a.root->frame(false);
+    auto* menu = a.root->find("tcp.input." + cee);
+    REQUIRE(menu);
+    std::function<void()> pickOut;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.shortcut == "rack" && item.label.starts_with("Synth")) pickOut = item.run;
+    REQUIRE(pickOut);
+    a.root->closePopups();
+    const auto version = a.app->head().version;
+    pickOut();
+    INFO(error);
+    CHECK(a.app->head().version == version);
+    CHECK(error.starts_with("Taking that rack's Out as the input would loop its modulation"));
+    CHECK(error.find("parent send") == std::string::npos);
+    for (const char* id : {"tr_", "mr_", "rk_", "mo_", "modulation."})
+        CHECK(error.find(id) == std::string::npos);
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}

@@ -1235,7 +1235,12 @@ void FxWindow::buildChain(ui::Node& body) {
         rh.exec = [this](const std::string& command, json::Value args, const std::string& gesture) {
             const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}, gesture};
             auto r = dispatcher_.execute({command, std::move(args), origin});
-            if (!r) setStatus(command + ": " + r.error().message);
+            if (!r) {
+                if (auto words = views::modulationRefusalWords(app_.head(), command, r.error()))
+                    setStatus(*words);
+                else
+                    setStatus(command + ": " + r.error().message);
+            }
         };
         rh.learn = [this](LearnRequest request) {
             if (hooks_.openLearn) hooks_.openLearn(std::move(request));

@@ -31,15 +31,6 @@ std::optional<std::string> copying(std::string_view command) {
     return std::nullopt;
 }
 
-// What a command that moves a take does, as the start of a sentence;
-// nullopt for any other.
-std::optional<std::string> movingTake(std::string_view command) {
-    if (command == "item.move") return "Moving the item there";
-    if (command == "clip.move") return "Moving the clip there";
-    if (command == "take.extract") return "Moving the take there";
-    return std::nullopt;
-}
-
 // The commands that make, change or remove a route keep their own words
 // (gui.md §2): only what M5 adds to copies, moves and joins is said here.
 bool routeCommand(std::string_view command) {
@@ -53,6 +44,122 @@ std::string capitalized(std::string text) {
 }
 
 constexpr std::string_view kRemove = "Remove modulation in the plug-in parameter's menu";
+
+// The argument a refusal names: "to" for "/args/to" (or "/to").
+std::string_view argumentOf(std::string_view path) {
+    if (path.starts_with("/args")) path.remove_prefix(5);
+    if (path.starts_with("/")) path.remove_prefix(1);
+    return path.substr(0, path.find('/'));
+}
+
+// The words for each edit that can close a modulation cycle, by command and
+// the argument it is refused at (session-model.md, "Edits that can close a
+// modulation cycle"). A command with one row here takes it whatever the
+// path; one with several takes its argument's, or none.
+struct CycleWords {
+    std::string_view command, argument, cause, remedy;
+};
+constexpr CycleWords kCycleWords[] = {
+    {"track.move", "parent",
+     "Moving the track there would loop its modulation: it would feed the "
+     "rack that modulates it.",
+     "Put it elsewhere"},
+    {"track.set", "parent_send",
+     "The parent send would loop its modulation: the parent feeds the "
+     "rack that modulates the track.",
+     "Leave it off"},
+    {"track.set", "record_rack",
+     "Taking that rack's Out as the input would loop its modulation: "
+     "the track feeds the rack that modulates what plays into it.",
+     "Pick another rack's Out"},
+    {"route.add", "to",
+     "The send would loop its modulation: where it goes feeds, or plays a Notes "
+     "module in, the rack that modulates the sending track.",
+     "Send it elsewhere"},
+    {"route.add", "fx",
+     "The key route would loop its modulation: the plug-in it keys feeds the "
+     "rack that modulates the sending track.",
+     "Key another plug-in"},
+    {"route.set", "to",
+     "The send would loop its modulation: where it goes feeds, or plays a Notes "
+     "module in, the rack that modulates the sending track.",
+     "Keep its destination"},
+    {"route.set", "from",
+     "The send would loop its modulation: where it goes feeds, or plays a "
+     "Notes module in, the rack that modulates the sending track.",
+     "Keep its source"},
+    {"route.set", "fx",
+     "The key route would loop its modulation: the plug-in it keys feeds the "
+     "rack that modulates the sending track.",
+     "Keep the plug-in it keys"},
+    {"route.set", "route",
+     "The send would loop its modulation: where it goes feeds, or plays a "
+     "Notes module in, the rack that modulates the sending track.",
+     "Leave the send as it was"},
+    {"module.add", "source",
+     "A Notes module playing that track would loop its modulation: a MIDI "
+     "send from what its rack modulates reaches the track.",
+     "Choose another track for it to play"},
+    {"module.add", "rack",
+     "A Notes module here would loop its modulation: it plays the rack's "
+     "channel, which a MIDI send from what the rack modulates reaches.",
+     "Add it, then choose another track for it to play"},
+    {"module.set", "source",
+     "Playing that track would loop its modulation: a MIDI send from what "
+     "the rack modulates reaches it.",
+     "Choose another track"},
+    {"module.set", "source_sends",
+     "Hearing MIDI sends would loop its modulation: one comes from "
+     "what the rack modulates.",
+     "Leave them off"},
+    {"rack.set", "track",
+     "Moving the rack's home there would loop its modulation: its Notes "
+     "module would hear what the rack modulates.",
+     "Keep it on its channel"},
+    {"track.remove", "track",
+     "Deleting the track would loop its modulation: the Notes modules "
+     "that played it would play their rack's channel instead and hear "
+     "what the rack modulates.",
+     "Choose what they play first"},
+    {"fx.move", "track",
+     "Moving the plug-in there would loop its modulation: that track feeds the "
+     "rack that modulates the plug-in.",
+     "Choose another track"},
+    {"item.move", "track",
+     "Moving the item there would loop its modulation: that track feeds the "
+     "rack that modulates the take's plug-ins.",
+     "Choose another track"},
+    {"clip.move", "track",
+     "Moving the clip there would loop its modulation: that track feeds the "
+     "rack that modulates the take's plug-ins.",
+     "Choose another track"},
+    {"take.extract", "track",
+     "Moving the take there would loop its modulation: that track feeds "
+     "the rack that modulates the take's plug-ins.",
+     "Choose another track"},
+    {"item.explode-takes", "item",
+     "Exploding the takes would put one on a track that feeds the "
+     "rack modulating its plug-ins, so the modulation would loop.",
+     "Explode them in sequence on this track"},
+};
+
+std::optional<std::string> cycleWords(std::string_view command, std::string_view path) {
+    const std::string_view argument = argumentOf(path);
+    const CycleWords* only = nullptr;
+    int rows = 0;
+    for (const CycleWords& w : kCycleWords) {
+        if (w.command != command) continue;
+        ++rows;
+        only = &w;
+        if (w.argument == argument)
+            return std::string(w.cause) + " " + std::string(w.remedy) +
+                   ", or remove the modulation first (" + std::string(kRemove) + ").";
+    }
+    if (rows == 1)
+        return std::string(only->cause) + " " + std::string(only->remedy) +
+               ", or remove the modulation first (" + std::string(kRemove) + ").";
+    return std::nullopt;
+}
 
 }  // namespace
 
@@ -68,37 +175,7 @@ std::optional<std::string> modulationRefusalWords(const model::Session&, std::st
                " modulation routes, the most a project holds. Remove some first (" +
                std::string(kRemove) + "); a copied chain brings its routes with it.";
     }
-    if (e.code == "modulation.cycle") {
-        if (command == "route.add" || command == "route.set")
-            return "The send would loop its modulation: where it goes feeds the rack that "
-                   "modulates the sending track. Send it elsewhere, or remove the modulation "
-                   "first (" +
-                   std::string(kRemove) + ").";
-        if (command == "track.set")  // its parent_send, the only field that can loop
-            return "The parent send would loop its modulation: the parent feeds the rack that "
-                   "modulates the track. Leave it off, or remove the modulation first (" +
-                   std::string(kRemove) + ").";
-        if (command == "track.move")
-            return "Moving the track there would loop its modulation: it would feed the rack "
-                   "that modulates it. Put it elsewhere, or remove the modulation first (" +
-                   std::string(kRemove) + ").";
-        if (command == "fx.move")
-            return "Moving the plug-in there would loop its modulation: that track feeds the "
-                   "rack that modulates the plug-in. Choose another track, or remove the "
-                   "modulation first (" +
-                   std::string(kRemove) + ").";
-        if (command == "item.explode-takes")
-            return "Exploding the takes would put one on a track that feeds the rack "
-                   "modulating its plug-ins, so the modulation would loop. Explode them in "
-                   "sequence on this track, or remove the modulation first (" +
-                   std::string(kRemove) + ").";
-        const auto verb = movingTake(command);
-        if (!verb) return std::nullopt;
-        return *verb +
-               " would loop its modulation: that track feeds the rack that modulates the "
-               "take's plug-ins. Choose another track, or remove the modulation first (" +
-               std::string(kRemove) + ").";
-    }
+    if (e.code == "modulation.cycle") return cycleWords(command, e.path);
     if (e.code == "item.heal_fx" && command == "item.heal")
         return "The pieces' take plug-ins differ (the plug-ins, their settings, their "
                "automation or their modulation), so they cannot be joined. Make them match (" +

@@ -357,8 +357,8 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   the racks so named, "· Mod 1 · rack 2".
   **Modulation words** (ADR-0096 M5, `views::modulation_words.h`). What M5
   adds to the commands that copy, move or join takes reaches the user in
-  the GUI's own words, keyed on the command and the code, and a warning
-  also on its `reason` (command-bus.md; its path only names the route),
+  the GUI's own words, keyed on the command and the code, a cycle refusal
+  also on the argument it is refused at, and a warning also on its `reason` (command-bus.md; its path only names the route),
   never the engine's message, its hint, a command's name or an id
   (`views::modulationRefusal`, `views::modulationNote`). The refusals:
   `modulation.limit` from a copy ("Pasting would make more than 4096
@@ -372,15 +372,26 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   the plug-in there would loop its modulation: that track feeds the rack
   that modulates the plug-in. …", where the FX window and the mixer run
   it, though their moves stay on one track, which cannot loop; a send,
-  `route.add`, "The send would loop its modulation: where it goes feeds the
-  rack that modulates the sending track. …", and a track moved into a
-  folder or buss, `track.move`, "Moving the track there would loop its
-  modulation: it would feed the rack that modulates it. …", and the
-  parent send turned on, `track.set`, "The parent send would loop its
-  modulation: the parent feeds the rack that modulates the track. …",
-  where the mixer, the routing matrix and the track panel run them
-  (`route.set` as `route.add`); any other
-  command keeps its own words), and `item.heal_fx` from **Heal splits**
+  `route.add`, "The send would loop its modulation: where it goes feeds, or
+  plays a Notes module in, the rack that modulates the sending track. …"
+  (a key route its own), a track moved into a folder or buss,
+  `track.move`, "Moving the track there would loop its modulation: it
+  would feed the rack that modulates it. …", the parent send turned on,
+  `track.set` `parent_send`, "The parent send would loop its modulation:
+  the parent feeds the rack that modulates the track. …", and a rack's Out
+  picked as a channel's input, `track.set` `record_rack`, "Taking that
+  rack's Out as the input would loop its modulation: …", where the mixer,
+  the routing matrix, the track panel and the input menu run them
+  (`route.set` as `route.add`); the rack window's Notes gestures, a
+  Notes module's Plays track (`module.set` `source`: "Playing that track
+  would loop its modulation: a MIDI send from what the rack modulates
+  reaches it. …"), Hear MIDI sends (`source_sends`), Add module Notes
+  (`module.add`, playing the rack's channel) and the tab's Home:
+  (`rack.set`); and Track: delete selected or the track menu's Delete
+  (`track.remove`) when a Notes module that played the track would then
+  play its rack's channel and hear what the rack modulates. Each row of
+  session-model's table of the edits that can close a cycle has words, by
+  its command and argument; any other command keeps its own words), and `item.heal_fx` from **Heal splits**
   ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
   them match (…), or consolidate them instead."). The warnings, which have
   no registry (session-model lists them), go to the status line as a note
@@ -425,11 +436,16 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   words or is listed with the path it runs it by (the gestures through
   their runner, the launcher through `runLauncher`, and the files whose
   `item.add` copies no route; `track.set` is followed by where it sets
-  `parent_send`, its one field that can loop), and a command listed as
+  `parent_send` or `record_rack`, its fields that can loop), and a command listed as
   not run is named only where that holds (`take.add` in the demo
   generator). A command named through a variable, a listed file that
   skips the words at one call site, or a code a command raises without
-  declaring it, it cannot see. Another test takes every reason in
+  declaring it, it cannot see. The cycle refusals it walks by
+  session-model's table, row by row: each row has words that name no take
+  unless a take moves, the rows of one command read apart, and a row the
+  GUI does not dispatch (`route.set`'s ends, `module.add` with a source) is
+  listed as such, so a new row fails until it is one or the other.
+  Another test takes every reason in
   `model::kRouteWarningReasons` and checks each has words other than the
   plain sentence.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate

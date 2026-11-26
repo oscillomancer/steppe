@@ -818,7 +818,9 @@ Result<json::Value> RackWindow::exec(const std::string& command, json::Value arg
     cmd::Origin origin = kOrigin;
     origin.gesture = gesture;
     auto r = dispatcher_.execute({command, std::move(args), origin});
-    if (!r) report(r.error());
+    // A Notes source, Hear MIDI sends, a Notes module added or a rack's
+    // home that would loop a modulation, in the GUI's words (gui.md §2).
+    if (!r) report(views::modulationRefusal(app_.head(), command, r.error()));
     return r;
 }
 
@@ -1761,7 +1763,7 @@ Status RackWindow::addWired(const std::string& type, ui::Point sp,
         args["x"] = std::round(x);
         args["y"] = std::round(py - 20);
         auto added = dispatcher_.execute({"module.add", std::move(args), kOrigin});
-        if (!added) return added;
+        if (!added) return views::modulationRefusal(app_.head(), "module.add", added.error());
         made = *added;
         if (key.empty()) return made;
         model::CableEnd end{*model::Id::parse(str(made, "module")), key};

@@ -4,10 +4,12 @@
 // move or join takes (gui.md §2, "Modulation words"): the refusals
 // modulation.limit, modulation.cycle and item.heal_fx, and the warnings
 // modulation.not_copied and modulation.removed. Each is keyed on the
-// command and the code, and a warning also on its reason, the cause the
-// bus names (command-bus.md); a command answers each code at one path, so
-// the path adds nothing but a warning's route. None carries the engine's
-// message, its hint, a command's name or a raw id.
+// command and the code; a cycle refusal also on the argument it is refused
+// at (session-model.md's table of the edits that can close one: track.set's
+// parent send is not its rack's Out); a warning also on its reason, the
+// cause the bus names (command-bus.md), its path naming only its route.
+// None carries the engine's message, its hint, a command's name or a raw
+// id.
 // modulation.stacked is a route command's warning (modulate,
 // modulation.add), which keep their own words, so it has none here.
 #pragma once

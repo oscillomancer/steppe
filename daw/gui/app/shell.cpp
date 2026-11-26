@@ -1054,7 +1054,12 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
         const bool input =
             args.find("record_input") || args.find("record_midi") || args.find("record_rack");
         if (auto r = selectionEdit_.set(std::move(args), gesture); !r) {
-            if (onError) onError(r.error().message);
+            // A parent send or a rack's Out as the input that would loop a
+            // modulation in the GUI's words; any other refusal with names.
+            if (onError)
+                onError(views::objectNames(app_.head(), views::modulationRefusal(
+                                                            app_.head(), "track.set", r.error()))
+                            .message);
         } else if (input && !selectionEdit_.inputReplacement().empty())
             setStatus(selectionEdit_.inputReplacement());
         return;
