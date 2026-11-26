@@ -104,6 +104,9 @@ class Lanes : public ui::Node {
     struct Stats {
         std::size_t rows = 0, items = 0, columns = 0, notes = 0, pending = 0, fades = 0;
         std::vector<std::string> labels;  // each item's name bar text, as drawn ("": none)
+        // Each item's name mark as drawn: its colour token ("signal-cv",
+        // "ink-faint"), "" for none (views::takeNameMark).
+        std::vector<std::string> marks;
     };
     const Stats& stats() const { return stats_; }
     // Tests: as if the GL layers had failed (paintGl then draws nothing).

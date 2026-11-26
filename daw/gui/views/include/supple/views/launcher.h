@@ -250,6 +250,9 @@ class LauncherPane : public ui::Node {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
+        // Their name marks' colour tokens as drawn (views::takeNameMark; ""
+        // for none).
+        std::vector<std::string> marks;
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
         bool dropTakes = false;      // the cell under a drop outlined as taking it (focus)

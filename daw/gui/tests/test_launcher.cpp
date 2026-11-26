@@ -84,6 +84,7 @@ struct LauncherFixture {
         REQUIRE(fonts);
         engine::AppOptions options;
         options.workdir = dir;
+        options.pluginPath = {std::filesystem::path(SUPPLE_CLAP_DIR)};  // the stock plug-ins only
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -3315,4 +3316,45 @@ TEST_CASE("launcher: a fader drag asks for the refusals once a frame while shown
     agreeWithEngine(f, "shown again after a hidden drag");
     CHECK(f.errors.empty());
     f.exec("engine.stop", "{}");
+}
+
+TEST_CASE("launcher: a clip whose active take's FX is modulated carries the mark") {
+    // gui.md §4.13 (ADR-0096 M5; views::takeNameMark): the mark after the
+    // clip's name, dimmed while every route is off.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.view->launcherShown());
+    views::LauncherPane& pane = f.view->launcherPane();
+    auto marks = [&] {
+        f.sync();
+        f.root->damageAll();
+        f.root->frame(false);
+        return pane.stats.marks;
+    };
+    CHECK(marks() == std::vector<std::string>{"", "", ""});
+    const std::string take = f.app->head().clips.find(*model::Id::parse("cl_3"))->activeTake->str();
+    const std::string fx =
+        f.exec("fx.add", R"({"take":")" + take + R"(","plugin":"Hickory"})")["fx"].asString();
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    std::string param;
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    CHECK(marks() == std::vector<std::string>{"", "", ""});  // a plug-in alone: no mark
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    CHECK(marks() == std::vector<std::string>{"", "", "signal-cv"});
+    CHECK(pane.stats.names == std::vector<std::string>{"Kit A", "Kit B", "Root"});
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    CHECK(marks() == std::vector<std::string>{"", "", "ink-faint"});
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    marks();
+    f.snapshot("launcher-modulated-clip.png");
 }

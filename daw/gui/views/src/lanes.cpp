@@ -53,6 +53,7 @@ class LaneLabels : public ui::Node {
         // What this paint draws (also when the GL layers failed and
         // paintGl's reset never runs; round 165 F5).
         lanes_.stats_.labels.clear();
+        lanes_.stats_.marks.clear();
         for (const auto& e : s.envelopes)
             if (e.value->visible && e.value->target.object.kind == model::Kind::Take)
                 takeEnvelopes_.push_back({e.value->target.object, &*e.value});
@@ -129,10 +130,33 @@ class LaneLabels : public ui::Node {
                                       t.color("ink").withAlpha(alpha));
                 const float textX = frozen ? markX + 14.0f : markX;
                 const float textW = std::max(0.0f, r.right() - textX - 26.0f - timebaseW - followW);
+                // A modulated FX of its heard take (ADR-0096 M5): the mark
+                // right after the name, which elides before it; dimmed as a
+                // slot's is, while every route is off or the track is frozen.
+                const NameMark modMark = takeNameMark(s, item->activeTake);
+                const std::string markInk =
+                    modMark.mark.empty() ? std::string()
+                                         : (modMark.on && !frozen ? "signal-cv" : "ink-faint");
+                lanes_.stats_.marks.push_back(markInk);
+                const float modW =
+                    modMark.mark.empty()
+                        ? 0.0f
+                        : c.textWidth(modMark.mark, ui::Font::UiBold, t.type("caption"));
+                const float nameW = std::max(0.0f, textW - (modW > 0 ? modW + 4 : 0.0f));
                 if (barShown)
-                    c.text({textX, r.y, textW, Lanes::kNameBar}, name, ui::Font::UiBold,
+                    c.text({textX, r.y, nameW, Lanes::kNameBar}, name, ui::Font::UiBold,
                            t.type("caption"), t.color("ink").withAlpha(alpha),
                            ui::kLeft | ui::kMiddle);
+                if (barShown && modW > 0 && textW >= modW) {
+                    const float drawn =
+                        name.empty()
+                            ? -4.0f
+                            : std::min(c.textWidth(name, ui::Font::UiBold, t.type("caption")),
+                                       nameW);
+                    c.text({textX + drawn + 4, r.y, modW + 1, Lanes::kNameBar}, modMark.mark,
+                           ui::Font::UiBold, t.type("caption"), t.color(markInk).withAlpha(alpha),
+                           ui::kLeft | ui::kMiddle);
+                }
                 // A badge when the item carries more than one take.
                 if (item->takes.size() > 1 && barShown) {
                     const ui::Rect badge{r.right() - 18, r.y + 3, 14, 12};

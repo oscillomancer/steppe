@@ -1020,16 +1020,21 @@ instructions are in `docs/guides/installing.md`.
   plain CLAP plug-in. With M4 a parameter reached through its envelope
   (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
   inert route draws idle, with the reason in the parameter menu. A
-  modulated plug-in shows "~" on its mixer slot, after its name in the FX
-  window's chain list, and on its chain's "fx" (track panel and mixer),
-  dimmed while its routes are off or its track is frozen. A lane's header names the parameter first and
+  modulated plug-in shows "~" on its mixer slot and after its name in the
+  FX window's chain list (both dimmed while its routes are off or its
+  track is frozen), and on its chain's "fx" (track panel and mixer; dimmed
+  while its routes are off). A lane's header names the parameter first and
   has a "mod" cell (a modulation-only lane gets title, mod and hide). The
   inspector lists one track's routes (past four, "N routes"), and the
   controls' menus have Show modulation source; each opens the rack window
   with the source picked. The same menus remove a route (Remove
   modulation: <source>, one undo step, greyed for a route in a frozen
   print, refusals in the GUI's words); no two rows of a menu of routes
-  read the same. The FX window's live value on a modulated slider is
+  read the same. A take's FX (ADR-0096 M5) modulate from the FX window as
+  a track's do; the item's or clip's name then carries the "~", its
+  inspector lists the routes of its heard take, and a route into a take
+  that does not play says why ("another take of its item plays", "its item
+  is muted"). The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
