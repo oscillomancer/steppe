@@ -1676,7 +1676,7 @@ struct TakeRoute {
     model::Session s;
     Id a, b, rack, modOut, gain, take, item, route;
     TakeRoute(const ConstantFile& file, const char* source, std::optional<double> depth,
-              bool latent = false) {
+              bool latent = false, model::Isolation isolation = model::Isolation::InProcess) {
         model::Project project;
         project.console9 = false;
         model::EditTxn t(model::Session::create(project), 1);
@@ -1699,6 +1699,7 @@ struct TakeRoute {
         }
         model::FxInstance fx;
         fx.plugin.id = kGain;
+        fx.isolation = isolation;
         fx.patch =
             json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value();
         gain = t.create(fx);
@@ -1918,4 +1919,187 @@ TEST_CASE("modulation: a mixer target behind a chain under 32 samples stays on t
             const Live live = playLive(s, options, block, frames);
             CHECK(maxDiff(live.left, live.latency, reference.left, 48000) == 0.0);
         }
+}
+
+// --- Review round 192 F1: S1, S2, R1, R4, the bridge ----------------------------------
+
+namespace {
+// The master's output of `s` played live from `startSeconds` (a locate when
+// not 0), with `loop` (seconds) on when given; `swap`, if any, loaded after
+// `swapAfter` cycles. Its output latency with it.
+struct Played {
+    std::vector<float> left;
+    std::size_t latency = 0;
+};
+Played played(const model::Session& s, const EngineOptions& options, std::uint32_t block,
+              std::int64_t frames, double startSeconds = 0.0,
+              std::optional<std::pair<double, double>> loop = {},
+              const model::Session* swap = nullptr, std::int64_t swapAfter = 0) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames + 4096});
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+    REQUIRE(engine.load(s));
+    REQUIRE(engine.awaitPlan());
+    if (loop) engine.setLoop(loop->first, loop->second, true);
+    if (startSeconds > 0) engine.seek(startSeconds);
+    engine.play();
+    const auto run = [&](std::int64_t cycles) {
+        if (cycles <= 0) return;
+        if (options.anticipative)
+            runAheadOnState(engine, backend, cycles, block);
+        else
+            backend.run(cycles);
+    };
+    const std::int64_t cycles = (frames + 4096) / block;
+    if (swap) {
+        run(swapAfter);
+        REQUIRE(engine.load(*swap));
+        run(cycles - swapAfter);
+    } else {
+        run(cycles);
+    }
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.bridgeLateCycles() == 0);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    return {backend.capture().channels[0], engine.outputLatency()};
+}
+}  // namespace
+
+TEST_CASE("modulation: a take FX route played from an off-grid locate equals offline (M5, S1)" *
+          doctest::description("rt")) {
+    // From 12005 (375 x 32 + 5), before the item's onset at 12240: the chain
+    // enters at the locate, a path the play from 0 does not take; real time
+    // equals the offline render from there, in both executors, latent or not.
+    ConstantFile file;
+    constexpr double kStart = 12005.0 / 48000.0;
+    const std::int64_t frames = 24000;
+    for (const bool latent : {false, true}) {
+        const TakeRoute route(file, "beat_phase", 0.2, latent);
+        for (const std::uint32_t block : {128u, 512u}) {
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(
+                    route.s, pool,
+                    {.startSeconds = kStart, .endSeconds = kStart + 0.6, .blockSize = block})
+                    .value();
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("latent " << latent << ", block " << block << ", anticipative "
+                               << options.anticipative);
+                const Played got = played(route.s, options, block, frames, kStart);
+                CHECK(maxDiff(got.left, got.latency, offline.audio.channels[0],
+                              std::size_t(frames)) == 0.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("modulation: a latent take chain's route across a loop's early wrap (M5, S2)" *
+          doctest::description("rt")) {
+    // The loop starts 16 frames before the item's onset (12240) and ends
+    // after the item (48000 frames long), so the chain is idle at each wrap
+    // and is entered again around it: its input wraps early (processTake's
+    // early branch), by its 64-sample lead, and the chain must be entered a
+    // grid interval before the onset after each wrap, as before the first,
+    // for the route (on stage 1) to reach it as offline. Loop lengths off
+    // the 32-frame grid start the blocks of each later pass off it too;
+    // these put a block's end (at 128 and at 512, in pass 2 or 3) off the
+    // grid between the entry's frame and the onset's, 80 and 48 frames
+    // before the loop end.
+    ConstantFile file;
+    const TakeRoute route(file, "beat_phase", 0.2, true);
+    constexpr std::int64_t kLoopStart = 12224;
+    constexpr int kPasses = 3;
+    // Offline (no loop), the block size changes nothing.
+    const auto whole = render(route.s, 1.5, 128);
+    for (const std::uint32_t block : {37u, 512u})
+        CHECK(render(route.s, 1.5, block).left == whole.left);
+    for (const std::int64_t loopEnd : {62456, 62468, 62440, 62616}) {
+        const std::int64_t pass = loopEnd - kLoopStart;
+        const std::pair<double, double> loop{double(kLoopStart) / 48000.0,
+                                             double(loopEnd) / 48000.0};
+        // Each pass from the loop start plays as that span offline.
+        const std::vector<float> span(whole.left.begin() + kLoopStart,
+                                      whole.left.begin() + loopEnd);
+        CHECK(std::any_of(span.begin(), span.end(), [](float v) { return v != 0.0f; }));
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("loop end " << loopEnd << ", block " << block << ", anticipative "
+                                 << options.anticipative);
+                const Played got =
+                    played(route.s, options, block, loopEnd + pass * kPasses, 0.0, loop);
+                const std::size_t L = got.latency;
+                // To the first wrap, the render without a loop.
+                CHECK(maxDiff(got.left, L, whole.left, std::size_t(loopEnd)) == 0.0);
+                for (int k = 1; k <= kPasses; ++k) {
+                    INFO("pass " << k + 1);
+                    CHECK(maxDiff(got.left, L + std::size_t(loopEnd + (k - 1) * pass), span,
+                                  std::size_t(pass)) == 0.0);
+                }
+            }
+    }
+}
+
+TEST_CASE("modulation: removing a playing take FX's last route returns it to its base (M5, R1)" *
+          doctest::description("rt")) {
+    // Played routed, then the plan swapped for one without the route: the
+    // stage still owes the route's 0 and sends it, so after the swap the
+    // output is the unrouted render's.
+    ConstantFile file;
+    const TakeRoute routed(file, "playing", -0.25), plain(file, "playing", std::nullopt);
+    const auto unrouted = render(plain.s, 1.5, 128);
+    CHECK(unrouted.left != render(routed.s, 1.5, 128).left);
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const Played got = played(routed.s, options, 128, 72000, 0.0, {}, &plain.s, 200);
+        // Well after the swap (25600 frames in, the plan in place by 0.75 s).
+        const auto from = std::size_t(36000);
+        const std::vector<float> tail(unrouted.left.begin() + std::ptrdiff_t(from),
+                                      unrouted.left.begin() + std::ptrdiff_t(from + 24000));
+        CHECK(maxDiff(got.left, got.latency + from, tail, 24000) == 0.0);
+    }
+}
+
+TEST_CASE("modulation: a modulated take moved to another track with its route removed (M5, R4)" *
+          doctest::description("rt")) {
+    // One plan swap moves the item to channel C and removes its route: the
+    // moved chain's stage is found by its take in the new node, its memo
+    // carried, so the route's 0 still reaches the plug-in there.
+    ConstantFile file;
+    TakeRoute routed(file, "playing", -0.25);
+    model::EditTxn add(routed.s, 2);
+    const Id c = addChannel(add);
+    const model::Session withC = commit(add);
+    model::EditTxn move(withC, 3);
+    move.modify<model::Item>(routed.item, [&](model::Item& it) { it.track = c; });
+    move.remove<model::Modulation>(routed.route);
+    const model::Session moved = commit(move);
+    const auto expected = render(moved, 1.5, 128);
+    CHECK(expected.left != render(withC, 1.5, 128).left);
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const Played got = played(withC, options, 128, 72000, 0.0, {}, &moved, 200);
+        const auto from = std::size_t(36000);
+        const std::vector<float> tail(expected.left.begin() + std::ptrdiff_t(from),
+                                      expected.left.begin() + std::ptrdiff_t(from + 24000));
+        CHECK(maxDiff(got.left, got.latency + from, tail, 24000) == 0.0);
+    }
+}
+
+TEST_CASE("modulation: a take FX route through the bridge plays as in process (M5)" *
+          doctest::description("rt")) {
+    ConstantFile file;
+    const auto reference = render(TakeRoute(file, "beat_phase", 0.2, true).s, 1.0, 128);
+    for (const auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+        INFO("isolation " << static_cast<int>(isolation));
+        const TakeRoute route(file, "beat_phase", 0.2, true, isolation);
+        CHECK(render(route.s, 1.0, 128).left == reference.left);
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative);
+            const Played got = played(route.s, engine::test::patient(options), 128, 48000);
+            CHECK(maxDiff(got.left, got.latency, reference.left, 48000) == 0.0);
+        }
+    }
 }

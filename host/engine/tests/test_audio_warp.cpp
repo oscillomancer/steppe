@@ -281,6 +281,25 @@ TEST_CASE("background source preparation returns complete immutable data") {
     CHECK((**result)->takes.at({model::Kind::Take, 1}).data->frames() == 96000);
 }
 
+TEST_CASE("take.add {from} copies a peered take out of its bundle (round 192 F1 g)") {
+    // A take in a warp bundle copied within its item stands alone: the copy
+    // has no warp peers, and the bundle keeps its two. Before take.add went
+    // through copyTake the copy kept the source's peers verbatim, which the
+    // bundle check refused (warp.peers), since the copy was not among them.
+    WarpHost h;
+    h.run("take.hits.set", R"({"take":"tk_1","positions":[0.3,0.8]})");
+    h.run("item.duplicate", R"({"item":"it_1","to":0})");
+    h.run("audio.quantize", R"({"items":["it_1","it_2"],"grid":0.25})");
+    REQUIRE(h.app->head().takes.find({model::Kind::Take, 1})->warpPeers.size() == 2);
+    const auto copied = h.run("take.add", R"({"item":"it_1","from":"tk_1"})");
+    const auto id = model::Id::parse(copied.find("id")->asString());
+    REQUIRE(id);
+    const model::Session s = h.app->head();
+    CHECK(s.takes.find(*id)->warpPeers.empty());
+    CHECK(s.takes.find({model::Kind::Take, 1})->warpPeers.size() == 2);
+    CHECK(s.takes.find({model::Kind::Take, 2})->warpPeers.size() == 2);
+}
+
 TEST_CASE("audio bundles retain shared preparation through stem selection and copy remapping") {
     WarpHost h;
     h.run("take.hits.set", R"({"take":"tk_1","positions":[0.3,0.8]})");

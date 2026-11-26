@@ -6430,6 +6430,158 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "modulation commands: track.duplicate copies every route into the track (round 192 F1 f)") {
+    // Its fader, pan and width, its send's level, its chain FX and its take
+    // FX: each route onto the copy's counterpart, with the same source and
+    // depth, in one undo step. A route into another track is not copied.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("track.add", j(R"({"name": "Verb", "type": "buss"})"));  // tr_2
+    run("track.add", j(R"({"name": "Keys"})"));                  // tr_3
+    const std::string send =
+        run("route.add", j(R"({"from": "tr_3", "to": "tr_2"})")).find("id")->asString();
+    const std::string chainFx =
+        run("fx.add", j(R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})"))
+            .find("fx")
+            ->asString();
+    const auto added =
+        run("item.add", j(R"({"track": "tr_3", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    json::Value takeFxArgs = json::Value::object();
+    takeFxArgs["take"] = added.find("take")->asString();
+    takeFxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string takeFx = run("fx.add", takeFxArgs).find("fx")->asString();
+    const auto route = [&](const char* input, json::Value target, double depth) {
+        json::Value args = json::Value::object();
+        args["source"] = json::Value::object();
+        args["source"]["module"] = "mo_2";
+        args["source"]["input"] = input;
+        args["target"] = std::move(target);
+        args["depth"] = depth;
+        run("modulation.add", args);
+    };
+    route("in_1", j(R"({"track": "tr_3", "param": "volume"})"), -6);
+    route("in_1", j(R"({"track": "tr_3", "param": "pan"})"), 100);
+    route("in_2", j(R"({"track": "tr_3", "param": "width"})"), -40);
+    json::Value sendTarget = json::Value::object();
+    sendTarget["route"] = send;
+    sendTarget["param"] = "volume";
+    route("in_3", sendTarget, 3);
+    json::Value chainTarget = json::Value::object();
+    chainTarget["fx"] = chainFx;
+    chainTarget["param"] = "gain";
+    route("in_4", chainTarget, 0.25);
+    json::Value takeTarget = json::Value::object();
+    takeTarget["fx"] = takeFx;
+    takeTarget["param"] = "gain";
+    route("in_5", takeTarget, -0.25);
+    route("in_6", j(R"({"track": "tr_1", "param": "volume"})"), -3);  // another track's
+    REQUIRE(app->view().modulations.size() == 7);
+
+    const std::string copy =
+        run("track.duplicate", j(R"({"tracks": ["tr_3"]})")).find("tracks")->at(0).asString();
+    const model::Session s = app->view();
+    CHECK(s.modulations.size() == 13);
+    const model::Id copied = *model::Id::parse(copy);
+    const model::Track& dup = *s.tracks.find(copied);
+    REQUIRE(dup.chain.size() == 1);
+    // The copy's send to tr_2, and its item's take FX.
+    std::optional<model::Id> dupSend, dupTakeFx;
+    for (const auto& e : s.routes)
+        if (e.value->from.track == copied) dupSend = e.id;
+    for (const auto& e : s.items)
+        if (e.value->track == copied) dupTakeFx = s.takes.find(e.value->takes.at(0))->chain.at(0);
+    REQUIRE(dupSend);
+    REQUIRE(dupTakeFx);
+    const auto one = [&](model::Id object, const std::string& param, const char* input,
+                         double depth) {
+        std::size_t n = 0;
+        for (const auto& e : s.modulations) {
+            const model::Modulation& m = *e.value;
+            if (m.target.object != object || m.target.param != param) continue;
+            ++n;
+            CHECK(m.source.module == model::Id::parse("mo_2"));
+            CHECK(m.source.input == input);
+            CHECK(m.depth == depth);
+        }
+        return n;
+    };
+    CHECK(one(copied, "volume", "in_1", -6) == 1);
+    CHECK(one(copied, "pan", "in_1", 100) == 1);
+    CHECK(one(copied, "width", "in_2", -40) == 1);
+    CHECK(one(*dupSend, "volume", "in_3", 3) == 1);
+    CHECK(one(dup.chain[0], "gain", "in_4", 0.25) == 1);
+    CHECK(one(*dupTakeFx, "gain", "in_5", -0.25) == 1);
+    CHECK(one(*model::Id::parse("tr_1"), "volume", "in_6", -3) == 1);  // not copied
+    REQUIRE(app->undo());
+    CHECK(app->view().modulations.size() == 7);
+}
+
+TEST_CASE("modulation: a route through a take FX's envelope moves it, at any block size (M5, R3)") {
+    // The fixed gain's gain is reached only through its envelope (ADR-0096
+    // M4). In a take's chain the lane runs on the plan's grid as a track
+    // chain's does, so the route moves the print, the same at 37, 128 and
+    // 512, and a disabled route leaves the envelope's level.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("module.add", j(R"({"rack": "rk_1", "type": "transport"})"));  // mo_3
+    run("cable.add", j(R"({"from": "mo_3.playing", "to": "mo_2.in_1"})"));
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const auto takeFx = [&](const char* plugin) {
+        json::Value args = json::Value::object();
+        args["take"] = added.find("take")->asString();
+        args["plugin"] = plugin;
+        return run("fx.add", args).find("fx")->asString();
+    };
+    takeFx("com.suppleaudio.test.sine");
+    const std::string gain = takeFx("com.suppleaudio.test.fixed-gain");
+    json::Value env = j(R"({"param": "0", "points": [{"bar": 1, "value": 0.5}]})");
+    env["fx"] = gain;
+    run("env.add", env);
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": -0.2})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = gain;
+    add["target"]["param"] = "0";
+    const std::string route = run("modulation.add", add).find("modulation")->asString();
+    const auto mix = [&](std::uint32_t block) {
+        OfflineSettings settings;
+        settings.endSeconds = 1.0;
+        settings.blockSize = block;
+        auto r = app->renderMix(settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return r->audio.channels[0];
+    };
+    const auto routed = mix(128);
+    CHECK(mix(37) == routed);
+    CHECK(mix(512) == routed);
+    json::Value off = json::Value::object();
+    off["modulation"] = route;
+    off["enabled"] = false;
+    run("modulation.set", off);
+    const auto level = mix(128);
+    CHECK(std::any_of(level.begin(), level.end(), [](float v) { return v != 0.0f; }));
+    CHECK(level != routed);
+}
+
+TEST_CASE(
     "modulation commands: a take FX is a target, and copies of its take keep its routes (M5)") {
     Root root;
     auto app = makeApp(root.path);
