@@ -380,8 +380,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   names the route from the session before the command ("The modulation of
   Hickory's gain went with it."; "A modulation route went with it." where
   that session no longer holds it), or counts them ("*N* modulation routes
-  went with it."); `modulation.stacked` "The new modulation adds to one already
-  there from the same kind of source: their movements add up." They are
+  went with it."). `modulation.stacked` is a route command's warning
+  (`modulate`, `modulation.add`), whose words are their own, so it has none
+  here. They are
   said where the GUI runs those commands: the timeline's gestures (one
   runner for every item edit), the launcher (`ArrangeView::runLauncher`)
   and Capture as scene, the bound actions (Item: split, explode takes),

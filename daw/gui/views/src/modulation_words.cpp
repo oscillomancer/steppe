@@ -91,9 +91,6 @@ Error modulationRefusal(const model::Session& s, std::string_view command, Error
 
 std::optional<std::string> modulationWarningWords(const model::Session& s, std::string_view,
                                                   std::string_view code, std::string_view path) {
-    if (code == "modulation.stacked")
-        return "The new modulation adds to one already there from the same kind of source: "
-               "their movements add up.";
     constexpr std::string_view prefix = "/modulations/";
     std::optional<model::Id> id;
     if (path.starts_with(prefix)) id = model::Id::parse(path.substr(prefix.size()));
@@ -125,7 +122,7 @@ std::string modulationNote(const model::Session& s, std::string_view command,
     const json::Value* warnings = result.isObject() ? result.find("warnings") : nullptr;
     if (!warnings || !warnings->isArray()) return {};
     std::vector<std::string> notCopied;
-    std::string stacked, removedWords;
+    std::string removedWords;
     int removed = 0;
     for (const json::Value& w : warnings->asArray()) {
         if (!w.isObject()) continue;
@@ -137,11 +134,8 @@ std::string modulationNote(const model::Session& s, std::string_view command,
         if (!words) continue;
         if (code->asString() == "modulation.not_copied")
             notCopied.push_back(*words);
-        else if (code->asString() == "modulation.removed") {
-            if (++removed == 1) removedWords = *words;
-        } else {
-            stacked = *words;
-        }
+        else if (++removed == 1)  // modulation.removed
+            removedWords = *words;
     }
     std::string note;
     auto add = [&note](const std::string& text) { note += (note.empty() ? "" : " ") + text; };
@@ -154,7 +148,6 @@ std::string modulationNote(const model::Session& s, std::string_view command,
     }
     if (removed == 1) add(removedWords);
     if (removed > 1) add(std::to_string(removed) + " modulation routes went with it.");
-    if (!stacked.empty()) add(stacked);
     return note;
 }
 

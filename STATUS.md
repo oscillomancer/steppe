@@ -1035,18 +1035,18 @@ instructions are in `docs/guides/installing.md`.
   modulation: <source>, one undo step, greyed for a route in a frozen
   print, refusals in the GUI's words); no two rows of a menu of routes
   read the same. A take's FX (ADR-0096 M5) modulate from the FX window as
-  a track's do; the item's or clip's inspector lists the routes of its
-  heard take (the names carry no mark by default:
-  `views::kTakeNameMarksShown`, Nate's call), a clip's modulated take FX
-  parameter has its lane in the MIDI editor with the band and live value,
-  a take's plug-in is named by its item or clip ("Filter on Bass's item at
-  bar 9"), what M5 adds to copies, moves and joins (the route limit, a
-  loop, Heal splits' differing take FX, a route not copied, or removed by a
-  copy or a delete) is said in the GUI's own words where the GUI runs those
-  commands, and a
-  registry walk keeps every declared code worded, and a route into a take
-  that does not play says why ("another take of its item plays", "its item
-  is muted"). The FX window's live value on a modulated slider is
+  a track's do, and a route into a take that does not play says why
+  ("another take of its item plays", "its item is muted"). The item's or
+  clip's inspector lists the routes of its heard take; the names carry no
+  mark by default (`views::kTakeNameMarksShown`, Nate's call). A clip's
+  modulated take FX parameter has its lane in the MIDI editor with the band
+  and live value. A take's plug-in is named by its item or clip ("Filter on
+  Bass's item at bar 9"; a take's name two takes share adds its place,
+  "Stabs, take 2"). What M5 adds to copies, moves and joins (the route
+  limit, a loop, Heal splits' differing take FX, a route not copied, or
+  removed by a copy, a delete or a recording) is said in the GUI's own
+  words where the GUI runs those commands; a registry walk keeps every
+  declared code worded. The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
@@ -1815,6 +1815,11 @@ Engine and hosting:
   (`modulation.target`), and one modulatable by default but read-only in the
   loaded state is accepted and listed as playable while the engine leaves it
   unmodulated.
+- The GUI's words for a route a copy did not keep (`modulation.not_copied`)
+  read its reason from the model (its rack gone, the project at the route
+  limit, else a loop), since the warning carries none; a copy that both
+  lands on 4096 routes and drops one for a loop says the limit. A
+  recording's dropped routes (`record.warning`) are worded the same way.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes

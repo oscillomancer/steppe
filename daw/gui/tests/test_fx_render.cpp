@@ -5857,8 +5857,10 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
 TEST_CASE("modulation words: the warnings say which route and why, from the model") {
     // gui.md §2 (ADR-0096 M5): warnings have no registry; session-model
     // lists modulation.not_copied, modulation.stacked and
-    // modulation.removed. Each has words at its path for every copying
-    // command, and the note says the first in full and counts the rest.
+    // modulation.removed. The first and the last have words at their path
+    // for every copying command (stacked is a route command's, which keep
+    // their own words), and the note says the first in full and counts the
+    // rest.
     Fixture f;
     if (!f.ok) {
         MESSAGE("skipped: no offscreen GL");
@@ -5927,11 +5929,12 @@ TEST_CASE("modulation words: the warnings say which route and why, from the mode
         REQUIRE(gone);
         CHECK(gone->starts_with("A modulation was not copied: its rack is not in the project"));
         plain(*gone);
-        for (const char* other : {"modulation.removed", "modulation.stacked"}) {
-            const auto words = views::modulationWarningWords(s, command, other, "/target");
-            REQUIRE(words);
-            plain(*words);
-        }
+        const auto removed =
+            views::modulationWarningWords(s, command, "modulation.removed", "/modulations/mr_998");
+        REQUIRE(removed);
+        CHECK(*removed == "A modulation route went with it.");
+        plain(*removed);
+        CHECK_FALSE(views::modulationWarningWords(s, command, "modulation.stacked", "/target"));
         CHECK_FALSE(views::modulationWarningWords(s, command, "take.comp_short", "/spans/0"));
     }
     // The note: the first not copied in full, then the count; the removed

@@ -3,9 +3,12 @@
 // The GUI's own words for what ADR-0096 M5 adds to the commands that copy,
 // move or join takes (gui.md §2, "Modulation words"): the refusals
 // modulation.limit, modulation.cycle and item.heal_fx, and the warnings
-// modulation.not_copied, modulation.stacked and modulation.removed. Each is
-// keyed on the command, the code and the path; none carries the engine's
-// message, its hint, a command's name or a raw id.
+// modulation.not_copied and modulation.removed. Each is keyed on the
+// command and the code (a command answers each code at one path, so the
+// path adds nothing; a warning's path names its route); none carries the
+// engine's message, its hint, a command's name or a raw id.
+// modulation.stacked is a route command's warning (modulate,
+// modulation.add), which keep their own words, so it has none here.
 #pragma once
 
 #include <optional>
@@ -27,11 +30,12 @@ std::optional<std::string> modulationRefusalWords(const model::Session& s, std::
 // as it is.
 Error modulationRefusal(const model::Session& s, std::string_view command, Error e);
 
-// One warning's words: `code` at `path` (as the result gives it, under
-// /modulations/<id> or /target) from `command`. nullopt for a code that is
-// not a modulation warning. A removed route is named when `s` still holds
-// it (a delete's caller passes the session from before it), else "A
-// modulation route".
+// One warning's words: `code` at `path` (as the result gives it,
+// /modulations/<id>) from `command`. nullopt for a code that is not
+// modulation.not_copied or modulation.removed. `s` is the session to name
+// the route from: before the command for a delete (its route is gone after
+// it), before or after for a copy (the original is in both). A removed
+// route is named when `s` holds it, else "A modulation route".
 std::optional<std::string> modulationWarningWords(const model::Session& s, std::string_view command,
                                                   std::string_view code, std::string_view path);
 // The status line's note for the modulation warnings in `result` (a
