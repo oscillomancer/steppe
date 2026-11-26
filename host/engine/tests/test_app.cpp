@@ -6493,7 +6493,8 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
     // wrapper's rows; the own rows by the command's checks, below).
     for (const detail::CycleRow& row : detail::kCycleRows) {
         need(std::string(row.command).c_str(), "modulation.cycle");
-        if (!row.own) CHECK_MESSAGE(detail::closesCycle(row.command), row.command);
+        if (row.by != detail::CycleBy::Own)
+            CHECK_MESSAGE(detail::closesCycle(row.command), row.command);
     }
     need("item.heal", "item.heal_fx");
     need("item.consolidate", "item.consolidate_stale");
@@ -6956,7 +6957,7 @@ TEST_CASE(
 
 TEST_CASE(
     "modulation commands: a Notes module or a rack input closing a cycle is refused "
-    "(rounds 198 F1, 199)") {
+    "(rounds 198 F1, 199, 200)") {
     // As round 195 F2's: a gain on tr_1 modulated by a follower of the buss
     // Listened (rk_1), plus a channel Other. Variants 0-3: a Notes module in
     // rk_1 that follows Other while tr_1 sends MIDI to Other hears tr_1:
@@ -6964,10 +6965,16 @@ TEST_CASE(
     // its sends turned on, or its rack moved onto Other). Variant 4: Synth's
     // rack has a sourceless Notes module that tr_1's MIDI send to Synth
     // reaches; Other sends into Listened; Synth's Out picked as Other's
-    // input closes rk_2 -> Other -> Listened -> rk_1 -> tr_1 -> rk_2. Each
-    // is refused with the declared modulation.cycle at its argument, with
-    // its row's hint, and changes nothing.
-    for (int variant = 0; variant < 5; ++variant) {
+    // input closes rk_2 -> Other -> Listened -> rk_1 -> tr_1 -> rk_2.
+    // Round 200: variant 5 pastes a Notes module that follows Other into
+    // rk_1; variants 6 and 7 move rk_1 onto Other, tr_1 sending MIDI to
+    // Other, then load a preset with a sourceless Notes module or patch one
+    // in (refused by the nested module.add at the module's entry); variants
+    // 8 and 9 are variant 4 with the parent send turned off, or turned on
+    // when it already was: the record rack closed the cycle (F3). Each is
+    // refused with the declared modulation.cycle at its argument, with its
+    // row's hint, and changes nothing.
+    for (int variant = 0; variant < 10; ++variant) {
         INFO("variant " << variant);
         Root root;
         auto app = makeApp(root.path);
@@ -7004,8 +7011,17 @@ TEST_CASE(
             return run("module.add", notes)["module"].asString();
         };
         const char* name = "";
-        const char* path = "";
+        std::string path;
+        const char* rowCommand = nullptr;  // the row whose hint it answers, when not name's
+        std::string rowPath;
         json::Value args = json::Value::object();
+        const auto onOther = [&] {
+            json::Value move = json::Value::object();
+            move["rack"] = rack;
+            move["track"] = other;
+            run("rack.set", move);
+            midiSend(other);
+        };
         if (variant == 0) {  // made following Other
             midiSend(other);
             name = "module.add";
@@ -7038,7 +7054,43 @@ TEST_CASE(
             path = "/track";
             args["rack"] = rack;
             args["track"] = other;
-        } else {  // Synth's Out as Other's input (round 199 probe I)
+        } else if (variant == 5) {  // a pasted Notes module that follows Other
+            midiSend(other);
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = fourth;
+            json::Value copy = json::Value::object();
+            copy["modules"] = json::Value::array();
+            copy["modules"].push_back(notesIn(run("rack.add", addRack)["rack"].asString(), other));
+            run("module.copy", copy);
+            name = "rack.paste";
+            path = "/rack";
+            args["rack"] = rack;
+        } else if (variant == 6) {  // a preset's sourceless Notes module
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = fourth;
+            const std::string keys = run("rack.add", addRack)["rack"].asString();
+            notesIn(keys, "");
+            json::Value save = j(R"({"name": "Keys"})");
+            save["rack"] = keys;
+            run("rack.preset.save", save);
+            onOther();
+            name = "rack.preset.load";
+            path = "/rack";
+            args = j(R"({"name": "Keys"})");
+            args["rack"] = rack;
+        } else if (variant == 7) {  // a patched-in sourceless Notes module
+            onOther();
+            name = "rack.patch";
+            path = "/modules/keys/rack";
+            rowCommand = "module.add";
+            rowPath = "/rack";
+            args = j(R"({"modules": {"keys": {"type": "notes"}}})");
+            args["rack"] = rack;
+        } else {  // Synth's Out as Other's input (round 199 probe I; 8, 9 round 200 F3)
             const std::string synth =
                 run("track.add", j(R"({"name": "Synth"})"))["track"].asString();
             json::Value addRack = json::Value::object();
@@ -7056,6 +7108,12 @@ TEST_CASE(
             path = "/record_rack";
             args["track"] = other;
             args["record_rack"] = out;
+            if (variant == 8) args["parent_send"] = false;
+            if (variant == 9) args["parent_send"] = true;  // on already: no new edge
+            // Every kind of edge the check walks is in this project.
+            std::set<model::CycleEdgeKind> kinds;
+            for (const model::CycleEdge& e : model::cycleEdges(app->view())) kinds.insert(e.kind);
+            CHECK(kinds.size() == model::kCycleEdgeKinds.size());
         }
         const cmd::CommandInfo* info = registry.find(name);
         REQUIRE(info);
@@ -7065,48 +7123,47 @@ TEST_CASE(
         const auto r = d.execute({name, args, kTest});
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "modulation.cycle");
-        CHECK(r.error().path == std::string("/args") + path);
-        const detail::CycleRow* row = detail::cycleRow(name, args);
-        REQUIRE(row);
-        CHECK(r.error().hint == row->hint);
+        CHECK(r.error().path == "/args" + path);
+        const std::string_view wantCommand = rowCommand ? rowCommand : name;
+        const std::string_view wantPath = rowCommand ? std::string_view(rowPath) : path;
+        const auto row = std::find_if(detail::kCycleRows.begin(), detail::kCycleRows.end(),
+                                      [&](const detail::CycleRow& x) {
+                                          return x.by == detail::CycleBy::Wrapper &&
+                                                 x.command == wantCommand && x.path == wantPath;
+                                      });
+        CHECK_MESSAGE(row != detail::kCycleRows.end(), "no row " << wantCommand << " " << wantPath);
+        if (row != detail::kCycleRows.end()) CHECK(r.error().hint == row->hint);
         CHECK(model::serializeProject(app->view()) == before);
     }
 }
 
 TEST_CASE(
     "the cycle rows cover every edge the model's cycle check walks, as the spec's table "
-    "lists them (round 199)") {
-    // Each place session.cpp's cycle check adds an edge is marked with its
-    // kind; a site without a marker, or a kind without a row, fails here, so
-    // a new edge kind cannot reach the walker unrefused and undeclared. The
-    // table in session-model.md ("Edits that can close a modulation cycle")
-    // lists exactly the rows: edge, command, argument and where it points.
+    "lists them (rounds 199, 200)") {
+    // The check adds every edge with its kind (model::CycleEdgeKind, so the
+    // compiler holds the sites); a kind without a row fails here, so a new
+    // kind cannot reach the walker unrefused and undeclared. What this
+    // cannot see: a new edge of an existing kind reaching the check through
+    // what feeds it (midiFollowers, a modulation target's node, a new kind
+    // of route end), as round 198 F1's did. The table in session-model.md
+    // ("Edits that can close a modulation cycle") lists exactly the rows:
+    // edge, command, argument and where it points.
     const fs::path engine = fs::path(__FILE__).parent_path().parent_path();
     std::set<std::string> walked;
-    {
-        std::ifstream in(engine / "model" / "src" / "session.cpp");
-        REQUIRE(in);
-        static const std::regex site(R"re(\bedges\[[^\]]+\]\.push_back\()re");
-        static const std::regex marker(R"re(// cycle edge: ([a-z_]+))re");
-        std::string line;
-        int sites = 0;
-        while (std::getline(in, line)) {
-            if (!std::regex_search(line, site)) continue;
-            ++sites;
-            std::smatch m;
-            CHECK_MESSAGE(std::regex_search(line, m, marker), "an unmarked edge: " << line);
-            if (std::regex_search(line, m, marker)) walked.insert(m[1]);
-        }
-        CHECK(sites >= 4);
+    for (const model::CycleEdgeKind kind : model::kCycleEdgeKinds) {
+        CHECK_FALSE(model::cycleEdgeWord(kind).empty());
+        walked.insert(std::string(model::cycleEdgeWord(kind)));
     }
+    CHECK(walked.size() == model::kCycleEdgeKinds.size());
     std::set<std::string> rowKinds;
     std::set<std::tuple<std::string, std::string, std::string, std::string>> rows;
     for (const detail::CycleRow& r : detail::kCycleRows) {
-        rowKinds.insert(std::string(r.edge));
-        rows.insert({std::string(r.edge), std::string(r.command),
+        const std::string edge(model::cycleEdgeWord(r.edge));
+        CHECK_MESSAGE((r.by == detail::CycleBy::Own || !r.hint.empty()), r.command);
+        rowKinds.insert(edge);
+        rows.insert({edge, std::string(r.command),
                      r.field.empty() ? std::string("(any)") : std::string(r.field),
                      std::string(r.path)});
-        CHECK_MESSAGE((r.own || !r.hint.empty()), r.command);
     }
     CHECK(walked == rowKinds);
     // The spec's table: | `edge` | `command` | `field` or (any) | `/path` | hint |

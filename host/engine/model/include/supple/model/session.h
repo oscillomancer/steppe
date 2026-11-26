@@ -376,6 +376,26 @@ std::vector<StrandedModulation> strandedModulations(const Session& s);
 // did not, so the same ones are found every time (ADR-0096 M5: the routes a
 // copy made, once the copies are placed).
 std::vector<Id> modulationsClosingCycles(const Session& s, const std::vector<Id>& ordered);
+// The kinds of edge the cycle check walks (session-model.md, "Edits that
+// can close a modulation cycle"): a child feeds its parent; a route's source
+// feeds its destination; a MIDI send's source feeds the rack of each Notes
+// module that follows its destination; a modulation route's rack feeds the
+// node that applies its target. The check adds every edge with its kind.
+enum class CycleEdgeKind { ParentSend, Route, NotesFollow, Modulation };
+inline constexpr std::array kCycleEdgeKinds{CycleEdgeKind::ParentSend, CycleEdgeKind::Route,
+                                            CycleEdgeKind::NotesFollow, CycleEdgeKind::Modulation};
+// "parent_send", "route", "notes_follow", "modulation".
+std::string_view cycleEdgeWord(CycleEdgeKind kind);
+struct CycleEdge {
+    CycleEdgeKind kind;
+    Id from, to;
+    bool operator==(const CycleEdge&) const = default;
+};
+// Every edge the cycle check walks.
+std::vector<CycleEdge> cycleEdges(const Session& s);
+// The edges along the cycle the check reports, every edge between each
+// node of it and the next; empty when there is none.
+std::vector<CycleEdge> reportedCycle(const Session& s);
 // Whether the modulation routes into FX `a` and into FX `b` match one for
 // one: the same source module and input, parameter, depth, enabled and lane
 // (ADR-0096 M5: what item.heal and take.comp require of the pieces they join).
