@@ -656,3 +656,127 @@ TEST_CASE("healing joins take FX routes that match, and refuses ones that differ
     REQUIRE(f.app->undo());
     CHECK(f.app->head().modulations.size() == 2);
 }
+
+namespace {
+// rk_1 on tr_1 (its Out uncabled): Transport's beat phase into the Mod Out
+// mo_2, routed into a gain added to tk_1's chain (fx_1 when tr_1 has none).
+void beatModulated(Fixture& f) {
+    f.run("rack.add", R"({"track":"tr_1"})");                      // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out"})");    // mo_2
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");  // mo_3
+    f.run("cable.add", R"({"from":"mo_3.beat_phase","to":"mo_2.in_1"})");
+    const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+    json::Value add = *json::parse(R"({"source":{"module":"mo_2","input":"in_1"},"depth":0.3})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx.find("fx")->asString();
+    add["target"]["param"] = "gain";
+    auto added = f.bus->execute({"modulation.add", std::move(add), origin});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+}
+}  // namespace
+
+TEST_CASE("item.apply-fx prints a modulated take FX exactly as it plays (M5, F10)") {
+    // The take's gain moved by Transport's beat phase: the track over the
+    // item's span sounds the same before the bake and after it, when the
+    // printed take plays without the FX (mode replace removes them, and the
+    // route with them, after printing).
+    Fixture f;
+    beatModulated(f);
+    const model::ItemSpan span =
+        model::itemSpan(f.app->head(), *f.app->head().items.find(*model::Id::parse("it_1")));
+    OfflineSettings settings;
+    settings.applyMasterPlayrate = false;
+    settings.track = *model::Id::parse("tr_1");
+    settings.tap = model::Tap::PreFader;
+    settings.startSeconds = span.startSec;
+    settings.endSeconds = span.endSec;
+    settings.threads = 1;
+    auto before = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(before);
+    // The route moves something: without it the track sounds otherwise.
+    {
+        model::EditTxn t(f.app->head(), f.app->head().version + 1);
+        for (const auto& m : f.app->head().modulations) t.remove<model::Modulation>(m.id);
+        auto plain = t.commit();
+        REQUIRE(plain);
+        auto unmodulated = f.app->renderSession(*plain, settings);
+        REQUIRE(unmodulated);
+        CHECK_FALSE(bool(unmodulated->audio.channels == before->audio.channels));
+    }
+    f.run("item.apply-fx", R"({"item":"it_1","mode":"replace"})");
+    CHECK(f.app->head().modulations.empty());
+    auto after = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(after);
+    CHECK(bool(after->audio.channels == before->audio.channels));
+}
+
+TEST_CASE("item.consolidate prints modulated take FX exactly as they play (M5, F10)") {
+    // Two items whose takes' gains a route moves (the duplicate copies it):
+    // the track sounds the same before and after, the routes going with the
+    // baked FX.
+    Fixture f;
+    beatModulated(f);
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    REQUIRE(f.app->head().modulations.size() == 2);
+    OfflineSettings settings{.endSeconds = 1.25,
+                             .threads = 1,
+                             .track = model::Id{model::Kind::Track, 1},
+                             .tap = model::Tap::PreFader};
+    auto before = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(before);
+    f.finish(f.run("item.consolidate", R"({"items":["it_1","it_2"]})"));
+    REQUIRE(f.app->head().items.size() == 1);
+    CHECK(f.app->head().modulations.empty());
+    auto after = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(after);
+    CHECK(bool(after->audio.channels == before->audio.channels));
+}
+
+TEST_CASE("item.consolidate.commit is stale when a route into a baked FX changed (M5, G6)") {
+    // The render is taken with one depth; the route changes before the
+    // commit, so what was printed is no longer what plays: refused as stale.
+    Fixture f;
+    beatModulated(f);
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    const auto job = f.run("item.consolidate", R"({"items":["it_1","it_2"]})");
+    f.run("modulation.set", R"({"modulation":"mr_1","depth":-0.3})");
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    INFO(json::writeCompact(*status));
+    CHECK((*status)["status"].asString() != "done");
+    CHECK(json::writeCompact(*status).find("item.consolidate_stale") != std::string::npos);
+    CHECK(f.app->head().items.size() == 2);
+    CHECK(f.app->head().modulations.size() == 2);
+}
+
+TEST_CASE("item.mix-to-track prints a modulated take FX as it plays (M5, F10)") {
+    // One modulated item through its strip: with Console 9 off the mix is
+    // that strip's stem, the take's gain moving as it does in playback.
+    Fixture f;
+    beatModulated(f);
+    const auto& head = f.app->head();
+    const auto span = model::itemSpan(head, *head.items.find(*model::Id::parse("it_1")));
+    OfflineSettings settings;
+    settings.applyMasterPlayrate = false;
+    settings.track = *model::Id::parse("tr_1");
+    settings.startSeconds = span.startSec;
+    settings.endSeconds = span.endSec;
+    const auto stem = f.app->renderMix(settings).value().audio;
+    const auto result = f.finish(f.run("item.mix-to-track", R"({"items":["it_1"]})"));
+    const auto mix = audio::readAudio(result.find("file")->asString()).value();
+    REQUIRE(mix.channelCount() == 2);
+    REQUIRE(stem.frames() == mix.frames());
+    for (std::size_t c = 0; c < 2; ++c)
+        for (std::size_t i = 0; i < mix.frames(); ++i)
+            REQUIRE(double(mix.channels[c][i]) ==
+                    doctest::Approx(double(stem.channels[c][i])).epsilon(1e-5));
+    // The source keeps its route: mix-to-track leaves the item as it is.
+    CHECK(f.app->head().modulations.size() == 1);
+}

@@ -5,6 +5,7 @@
 #include <supple/base/sha256.h>
 #include <supple/json/write.h>
 #include <supple/model/freeze.h>
+#include <supple/model/item_edits.h>
 #include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
@@ -809,4 +810,35 @@ TEST_CASE("modulation: sameModulations compares routes one for one (M5)") {
     REQUIRE(deeper);
     CHECK_FALSE(sameModulations(*deeper, left.fx, right.fx));
     CHECK(modulationsInto(*both, right.fx).size() == 1);
+}
+
+TEST_CASE("modulation: a bake's stale check covers the routes into the baked take FX (M5, G6)") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    const TakeFx on = addTakeFx(t, f.b);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    const std::vector<Id> items{on.item};
+    const std::string bare = itemEditFingerprint(*s, items);
+    Id id;
+    auto routed = with(*s, route(f.modOut, on.fx, "cutoff", -0.5), &id);
+    REQUIRE_MESSAGE(routed, (routed ? "" : routed.error().toString()));
+    const std::string withRoute = itemEditFingerprint(*routed, items);
+    CHECK(withRoute != bare);  // a route added
+    const auto edited = [&](auto&& edit) {
+        EditTxn e(*routed, routed->version + 1);
+        e.modify<Modulation>(id, edit);
+        auto r = e.commit();
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return itemEditFingerprint(*r, items);
+    };
+    CHECK(edited([](Modulation& m) { m.depth = 0.25; }) != withRoute);
+    CHECK(edited([](Modulation& m) { m.enabled = false; }) != withRoute);
+    CHECK(edited([](Modulation& m) { m.source.input = "in_2"; }) != withRoute);
+    // The lane is the GUI's: not a change to the print.
+    CHECK(edited([](Modulation& m) { m.lane = !m.lane; }) == withRoute);
+    // A route into the track's own chain is not the bake's.
+    auto elsewhere = with(*s, route(f.modOut, f.fx, "cutoff", 0.5));
+    REQUIRE_MESSAGE(elsewhere, (elsewhere ? "" : elsewhere.error().toString()));
+    CHECK(itemEditFingerprint(*elsewhere, items) == bare);
 }
