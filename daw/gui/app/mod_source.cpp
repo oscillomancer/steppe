@@ -28,6 +28,12 @@ std::vector<model::Id> feeders(const model::Session& s, const model::Modulation&
     return out;
 }
 
+// Each route's label in a menu that lists `routes`: modRouteLabel, and
+// where two read the same (two LFOs in one rack, one of them Random Steps),
+// each of those also names its Mod Out input, " · Mod 2".
+std::vector<std::string> menuLabels(const model::Session& s, const rack::Catalog* catalog,
+                                    const std::vector<model::Id>& routes);
+
 }  // namespace
 
 std::string modSourceName(const model::Session& s, const rack::Catalog* catalog, model::Id route) {
@@ -78,6 +84,24 @@ std::vector<model::Id> modRoutesOfTrack(const model::Session& s, model::Id track
     return out;
 }
 
+namespace {
+
+std::vector<std::string> menuLabels(const model::Session& s, const rack::Catalog* catalog,
+                                    const std::vector<model::Id>& routes) {
+    std::vector<std::string> labels;
+    for (model::Id route : routes) labels.push_back(modRouteLabel(s, catalog, route));
+    std::vector<std::string> out = labels;
+    for (std::size_t i = 0; i < routes.size(); ++i) {
+        if (std::count(labels.begin(), labels.end(), labels[i]) < 2) continue;
+        const std::string& input = s.modulations.find(routes[i])->source.input;  // "in_2"
+        const auto under = input.rfind('_');
+        out[i] += " \u00b7 Mod " + (under == std::string::npos ? input : input.substr(under + 1));
+    }
+    return out;
+}
+
+}  // namespace
+
 void showModSource(AppActions& actions, model::Id route) {
     const actions::Action* action = actions.registry().find("ui.modulation.source");
     if (!action) return;
@@ -92,12 +116,12 @@ std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Sessi
                                          const model::EnvTarget& target) {
     std::vector<ui::MenuItem> items;
     const auto routes = views::routesOn(s, target);
+    const auto labels = menuLabels(s, catalog, routes);
     AppActions* a = &actions;
-    for (model::Id route : routes)
-        items.push_back({routes.size() == 1
-                             ? std::string("Show modulation source")
-                             : "Show modulation source: " + modRouteLabel(s, catalog, route),
-                         "", [a, route] { showModSource(*a, route); }});
+    for (std::size_t i = 0; i < routes.size(); ++i)
+        items.push_back({routes.size() == 1 ? std::string("Show modulation source")
+                                            : "Show modulation source: " + labels[i],
+                         "", [a, route = routes[i]] { showModSource(*a, route); }});
     return items;
 }
 
@@ -106,8 +130,10 @@ std::vector<ui::MenuItem> modRemoveItems(AppActions& actions, const model::Sessi
                                          const model::EnvTarget& target) {
     std::vector<ui::MenuItem> items;
     AppActions* a = &actions;
-    for (model::Id route : views::routesOn(s, target))
-        items.push_back({"Remove modulation: " + modRouteLabel(s, catalog, route), "", [a, route] {
+    const auto routes = views::routesOn(s, target);
+    const auto labels = menuLabels(s, catalog, routes);
+    for (std::size_t i = 0; i < routes.size(); ++i)
+        items.push_back({"Remove modulation: " + labels[i], "", [a, route = routes[i]] {
                              json::Value args = json::Value::object();
                              args["modulation"] = route.str();
                              const auto r = a->dispatcher().execute(
@@ -136,9 +162,11 @@ void openModSource(ui::Root& root, AppActions& actions, const model::Session& s,
     }
     std::vector<ui::MenuItem> items;
     AppActions* a = &actions;
-    for (model::Id route : routes) {
+    const auto labels = menuLabels(s, catalog, routes);
+    for (std::size_t i = 0; i < routes.size(); ++i) {
+        const model::Id route = routes[i];
         const model::Modulation* m = s.modulations.find(route);
-        std::string label = modRouteLabel(s, catalog, route);
+        std::string label = labels[i];
         if (m && !m->enabled) label += " (off)";
         items.push_back({label, "", [a, route] { showModSource(*a, route); }});
     }

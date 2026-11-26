@@ -332,7 +332,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   (Modulators)**, one row per route by source, each one
   `modulation.remove` and one undo step (`gui::modRemoveItems`; a refusal,
   such as a frozen track's, shows in the status line). Both menus take the
-  rows from `gui::modRouteItems`, so they list the same.
+  rows from `gui::modRouteItems`, so they list the same. In any menu of
+  routes (these and a lane's **mod**), two that would read the same, such
+  as two LFOs in one rack (`modulate`'s Random is an LFO), each add their
+  Mod Out input: "LFO (Modulators) · Mod 2".
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
