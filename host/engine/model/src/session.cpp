@@ -465,7 +465,7 @@ struct Checker {
         std::set<std::pair<Id, Id>> midiEdges;
         for (const auto& e : s.tracks)
             if (e.value->parent && e.value->parentSend.enabled)
-                edges[e.id].push_back(*e.value->parent);
+                edges[e.id].push_back(*e.value->parent);  // cycle edge: parent_send
         for (const auto& e : s.routes) {
             const Route& r = *e.value;
             auto endOk = [&](const RouteEnd& x, const char* field, bool from) {
@@ -559,7 +559,7 @@ struct Checker {
             std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
             if (r.to.module) target = rackOf(*r.to.module);
             if (source && target) {
-                edges[*source].push_back(*target);
+                edges[*source].push_back(*target);  // cycle edge: route
                 if (r.midi) midiEdges.emplace(*source, *target);
             }
             // The source track's MIDI is available before its audio input is
@@ -568,7 +568,7 @@ struct Checker {
             if (source && r.midi && r.to.track)
                 for (Id module : midiFollowers(s, *r.to.track, source)) {
                     const Id rack = s.modules.find(module)->rack;
-                    edges[*source].push_back(rack);
+                    edges[*source].push_back(rack);  // cycle edge: notes_follow
                     midiEdges.emplace(*source, rack);
                 }
         }
@@ -579,8 +579,8 @@ struct Checker {
             if (skipRoutes && skipRoutes->count(e.id)) continue;
             const RackModule* m = s.modules.find(e.value->source.module);
             const auto target = targetNode(e.value->target);
-            if (!m || !target) continue;  // reported by modulations()
-            edges[m->rack].push_back(*target);
+            if (!m || !target) continue;        // reported by modulations()
+            edges[m->rack].push_back(*target);  // cycle edge: modulation
             modEdges.emplace(std::pair{m->rack, *target}, e.id);
         }
         // Cycle detection (iterative DFS with colours).

@@ -3,7 +3,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -101,56 +103,143 @@ inline std::string copiedPath(std::string_view command) {
     if (command == "take.add") return "/from";
     return "";
 }
-// The commands that move a route's target to another track (a take, ADR-0096
-// M5; a track-chain FX, review round 193 R2), whose cycle refusal is at the
-// track it moves to.
-inline bool movesTargets(std::string_view command) {
-    return command == "item.move" || command == "clip.move" || command == "take.extract" ||
-           command == "item.explode-takes" || command == "fx.move";
+// Every edit that can close a modulation cycle (review rounds 195 F2, 198
+// F1, 199): one row per command and argument, under the kind of edge the
+// model's cycle check walks that it makes or redirects (checkInvariants;
+// each walker site in session.cpp is marked "cycle edge: <kind>", and a test
+// holds the markers, these rows and session-model.md's table to each other).
+// A row with a field applies when the edit gives that argument; one without
+// applies to the command whatever it gives. Rows marked own are the
+// modulation commands, whose checks (checkCycle) refuse and declare it
+// themselves; the edit wrapper refuses and declares the others.
+// Not rows: a new track (track.add, track.template.load) has no edge into
+// it; a copy (track.duplicate, the take copies) mirrors its source's edges,
+// so only its copied modulation routes can close a cycle, and the copy
+// settle drops those (modulation.not_copied, reason "cycle"); a remove that
+// takes edges away cannot close one, but track.remove also leaves the Notes
+// modules that played the track following their rack's channel; undo
+// restores a state that held.
+struct CycleRow {
+    std::string_view edge;     // parent_send, route, notes_follow or modulation
+    std::string_view command;  // the command that makes or redirects it
+    std::string_view field;    // the argument; "" for the command whatever it gives
+    std::string_view path;     // where the refusal points
+    std::string_view message;  // the registry's words for the cause
+    std::string_view hint;
+    bool own = false;  // refused and declared by the command itself
+};
+inline constexpr std::array<CycleRow, 26> kCycleRows{{
+    // A parent send: the child feeds its parent.
+    {"parent_send", "track.move", "parent", "/parent",
+     "the track's parent send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or choose another parent"},
+    {"parent_send", "track.set", "parent_send", "/parent_send",
+     "the parent send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or leave the parent send off"},
+    // A route: its source feeds its destination (a track, a key's FX, a
+    // rack's In; a rack's Out its channel).
+    {"route", "route.add", "fx", "/fx", "the key route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or key another plug-in"},
+    {"route", "route.add", "to", "/to", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or send to another track"},
+    {"route", "route.set", "to", "/to", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's destination"},
+    {"route", "route.set", "fx", "/fx", "the key route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's plug-in"},
+    {"route", "route.set", "from", "/from", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's source"},
+    {"route", "route.set", "", "/route", "the route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or leave the route as it was"},
+    {"route", "track.set", "record_rack", "/record_rack",
+     "the rack's Out as the channel's input would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or pick another rack's Out"},
+    // A MIDI send heard by a Notes module that follows the send's
+    // destination (with its source's sends on): the send's source feeds
+    // the module's rack.
+    {"notes_follow", "route.add", "to", "/to",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or send to another track"},
+    {"notes_follow", "route.set", "to", "/to",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or keep the route's destination"},
+    {"notes_follow", "route.set", "from", "/from",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or keep the route's source"},
+    {"notes_follow", "module.add", "source", "/source",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or choose another source"},
+    {"notes_follow", "module.add", "", "/rack",
+     "the Notes module, following its rack's channel, would hear a MIDI send from what its rack "
+     "modulates",
+     "remove the modulation route first (modulation.remove), or give the Notes module a source"},
+    {"notes_follow", "module.set", "source", "/source",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or choose another source"},
+    {"notes_follow", "module.set", "source_sends", "/source_sends",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or leave its source's sends off"},
+    {"notes_follow", "rack.set", "track", "/track",
+     "on that channel the rack's Notes module would hear what the rack modulates",
+     "remove the modulation route first (modulation.remove), or keep the rack on its channel"},
+    {"notes_follow", "track.remove", "", "/track",
+     "the Notes modules that played the track would follow their rack's channel and hear what "
+     "the rack modulates",
+     "remove the modulation route first (modulation.remove), or give those Notes modules another "
+     "source (module.set) first"},
+    // A modulation route: its source's rack feeds the node of its target.
+    {"modulation", "modulation.add", "", "/target", "", "", true},
+    {"modulation", "modulation.set", "", "/target", "", "", true},
+    {"modulation", "modulate", "", "/target", "", "", true},
+    {"modulation", "item.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {"modulation", "clip.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {"modulation", "take.extract", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {"modulation", "fx.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {"modulation", "item.explode-takes", "", "/item",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or use mode serial"},
+}};
+// The row an edit's refusal takes: the first of its command's rows whose
+// argument it gives, else the command's row without one.
+inline const CycleRow* cycleRow(std::string_view command, const json::Value& fields) {
+    const CycleRow* fallback = nullptr;
+    for (const CycleRow& r : kCycleRows) {
+        if (r.own || r.command != command) continue;
+        if (r.field.empty()) {
+            if (!fallback) fallback = &r;
+        } else if (fields.find(std::string(r.field))) {
+            return &r;
+        }
+    }
+    return fallback;
 }
-// Every edit that can close a modulation cycle, by the model's edges
-// (checkInvariants): a route (route.add, route.set), a parent send
-// (track.move, track.set's parent_send) and a modulated target's track (the
-// moves above). Each is refused at the argument that closes it, with the
-// code declared (review round 195 F2). A module's source makes no audio
-// edge: a Notes module hears notes upstream of the FX they reach.
+// What the registry declares for a command that has rows: its rows' causes
+// and hints, each at its argument when it has more than one.
 struct CycleRefusal {
     std::string message, hint;
 };
 inline std::optional<CycleRefusal> closesCycle(std::string_view command) {
-    if (command == "item.explode-takes")
-        return CycleRefusal{"the move puts a modulated take or FX where its rack hears it",
-                            "remove the route, or use mode serial"};
-    if (movesTargets(command))
-        return CycleRefusal{"the move puts a modulated take or FX where its rack hears it",
-                            "remove the route, or choose another track"};
-    if (command == "route.add" || command == "route.set")
-        return CycleRefusal{"the send feeds a rack what it modulates",
-                            "remove the modulation route first (modulation.remove), or send to "
-                            "another track"};
-    if (command == "track.move")
-        return CycleRefusal{"the track's parent send would feed a rack what it modulates",
-                            "remove the modulation route first (modulation.remove), or choose "
-                            "another parent"};
-    if (command == "track.set")
-        return CycleRefusal{"the parent send would feed a rack what it modulates",
-                            "remove the modulation route first (modulation.remove), or leave the "
-                            "parent send off"};
-    return std::nullopt;
-}
-// The argument a cycle refusal names: the one that makes the new edge.
-inline std::string cyclePath(std::string_view command, const json::Value& fields) {
-    if (command == "item.explode-takes") return "/item";
-    if (movesTargets(command)) return "/track";
-    if (command == "route.add") return fields.find("fx") ? "/fx" : "/to";
-    if (command == "route.set") {
-        for (const char* key : {"to", "fx", "from"})
-            if (fields.find(key)) return std::string("/") + key;
-        return "/route";
-    }
-    if (command == "track.move") return "/parent";
-    if (command == "track.set") return "/parent_send";
-    return "";
+    std::vector<const CycleRow*> rows;
+    for (const CycleRow& r : kCycleRows)
+        if (!r.own && r.command == command &&
+            std::none_of(rows.begin(), rows.end(),
+                         [&](const CycleRow* x) { return x->path == r.path && x->hint == r.hint; }))
+            rows.push_back(&r);
+    if (rows.empty()) return std::nullopt;
+    if (rows.size() == 1)
+        return CycleRefusal{std::string(rows[0]->message), std::string(rows[0]->hint)};
+    CycleRefusal out{"the edit would feed a rack what it modulates", ""};
+    for (const CycleRow* r : rows)
+        out.hint += (out.hint.empty() ? "" : "; ") + std::string("at ") + std::string(r->path) +
+                    ": " + std::string(r->hint);
+    return out;
 }
 }  // namespace detail
 
@@ -250,13 +339,13 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                 // An edit that closes a cycle is refused at its argument,
                 // never mended by dropping a route: it must not change what
                 // sounds.
-                if (const auto cycle = detail::closesCycle(name);
-                    cycle && !before.modulations.empty()) {
+                if (const detail::CycleRow* row = detail::cycleRow(name, fields);
+                    row && !before.modulations.empty()) {
                     Status ok = model::checkInvariants(app.txn().preview());
                     if (!ok && ok.error().code == "modulation.cycle") {
                         Error e = ok.error();
-                        e.path = detail::cyclePath(name, fields);
-                        e.hint = cycle->hint;
+                        e.path = std::string(row->path);
+                        e.hint = std::string(row->hint);
                         return e;
                     }
                 }

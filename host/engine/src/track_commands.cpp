@@ -871,14 +871,23 @@ void registerTrackCommands(cmd::Registry& registry) {
                 if (before != after) app.recordAutomation(*id, "pan_boost", after ? 1 : 0);
             }
             if (a.mute) app.recordAutomation(*id, "mute", *a.mute ? 1.0 : 0.0);
-            // A modulation cycle is the edit wrapper's, declared with its own
-            // hint (review round 195 F2).
+            // A modulation cycle alone is the edit wrapper's, declared with
+            // its own hint (review round 195 F2). One that closes a plain
+            // cycle as well answers the plain one, whatever the route order
+            // (review round 198 N2): removing the modulation would not end it.
             if (a.parentSend && *a.parentSend && !s.tracks.find(*id)->parentSend.enabled)
-                if (auto valid = model::checkInvariants(app.view());
-                    !valid && valid.error().code != "modulation.cycle")
-                    return Error(
-                        "route.cycle", "the parent send would feed back: " + valid.error().message,
-                        "/parent_send", "remove the send from the parent to this track first");
+                if (auto valid = model::checkInvariants(app.view()); !valid) {
+                    if (valid.error().code == "modulation.cycle") {
+                        model::Session plain = app.view();
+                        plain.modulations = {};
+                        valid = model::checkInvariants(plain);
+                    }
+                    if (!valid)
+                        return Error("route.cycle",
+                                     "the parent send would feed back: " + valid.error().message,
+                                     "/parent_send",
+                                     "remove the send from the parent to this track first");
+                }
             if (a.type && *a.type != s.tracks.find(*id)->type) {
                 SUPPLE_TRY(model::validateStripRules(app.view()));
                 auto valid = model::checkInvariants(app.view());

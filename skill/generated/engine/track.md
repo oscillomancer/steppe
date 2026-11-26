@@ -869,6 +869,10 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ```
 
+### Errors
+
+- `modulation.cycle`: the Notes modules that played the track would follow their rack's channel and hear what the rack modulates Hint: remove the modulation route first (modulation.remove), or give those Notes modules another source (module.set) first
+
 ### Examples
 
 **Remove** (`song`)
@@ -954,7 +958,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `track.record_input`: choose one input: audio, MIDI or rack Hint: provide one non-null input field; it replaces the previous input
-- `modulation.cycle`: the parent send would feed a rack what it modulates Hint: remove the modulation route first (modulation.remove), or leave the parent send off
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /parent_send: remove the modulation route first (modulation.remove), or leave the parent send off; at /record_rack: remove the modulation route first (modulation.remove), or pick another rack's Out
 
 ### Examples
 
