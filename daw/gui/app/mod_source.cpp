@@ -3,6 +3,7 @@
 #include "mod_source.h"
 
 #include <algorithm>
+#include <functional>
 
 #include "app_actions.h"
 #include "rack_scene.h"
@@ -29,8 +30,9 @@ std::vector<model::Id> feeders(const model::Session& s, const model::Modulation&
 }
 
 // Each route's label in a menu that lists `routes`: modRouteLabel, and
-// where two read the same (two LFOs in one rack, one of them Random Steps),
-// each of those also names its Mod Out input, " · Mod 2".
+// where two read the same, what tells them apart, so no two rows are alike:
+// the Mod Out input (" · Mod 2", two LFOs in one rack, one of them Random
+// Steps), then the rack's place among racks of that name (" · rack 2").
 std::vector<std::string> menuLabels(const model::Session& s, const rack::Catalog* catalog,
                                     const std::vector<model::Id>& routes);
 
@@ -88,15 +90,35 @@ namespace {
 
 std::vector<std::string> menuLabels(const model::Session& s, const rack::Catalog* catalog,
                                     const std::vector<model::Id>& routes) {
-    std::vector<std::string> labels;
-    for (model::Id route : routes) labels.push_back(modRouteLabel(s, catalog, route));
-    std::vector<std::string> out = labels;
-    for (std::size_t i = 0; i < routes.size(); ++i) {
-        if (std::count(labels.begin(), labels.end(), labels[i]) < 2) continue;
+    std::vector<std::string> out;
+    for (model::Id route : routes) out.push_back(modRouteLabel(s, catalog, route));
+    // Adds `suffix(i)` to each label that another one still reads as.
+    auto separate = [&](const std::function<std::string(std::size_t)>& suffix) {
+        const std::vector<std::string> before = out;
+        for (std::size_t i = 0; i < out.size(); ++i)
+            if (std::count(before.begin(), before.end(), before[i]) > 1) out[i] += suffix(i);
+    };
+    // Two sources that read the same in one rack: their Mod Out inputs.
+    separate([&](std::size_t i) {
         const std::string& input = s.modulations.find(routes[i])->source.input;  // "in_2"
         const auto under = input.rfind('_');
-        out[i] += " \u00b7 Mod " + (under == std::string::npos ? input : input.substr(under + 1));
-    }
+        return " \u00b7 Mod " + (under == std::string::npos ? input : input.substr(under + 1));
+    });
+    // In two racks that read the same (a name given twice, or two unnamed
+    // racks on one track): each rack's place among the racks so named.
+    separate([&](std::size_t i) {
+        const auto view = modSourceView(s, routes[i]);
+        if (!view) return std::string();
+        const std::string label = model::rackLabel(s, view->rack);
+        std::size_t place = 0;
+        for (const auto& r : s.racks) {
+            if (model::rackLabel(s, r.id) == label) ++place;
+            if (r.id == view->rack) break;
+        }
+        return " \u00b7 rack " + std::to_string(place);
+    });
+    // Whatever is left (no rack to tell apart): the row's place.
+    separate([](std::size_t i) { return " \u00b7 " + std::to_string(i + 1); });
     return out;
 }
 
