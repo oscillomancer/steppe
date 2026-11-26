@@ -391,7 +391,11 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   matrix's send removals, Track: delete selected and the track menu's
   Delete, the launcher's clip deletes (its menu and the Delete key), Item: delete the
   heard take, render with FX deleting FX, and the rack window's module and
-  rack removals, each gesture noted once (`views::collectWarnings`). The
+  rack removals, each gesture noted once (`views::collectWarnings`); and the
+  routes a recording's copy drops (an overdub at record stop is never
+  refused at the limit: its `record.warning` events, worded from their
+  code and path in `Shell::engineEvents`, once per batch, never their
+  text). The
   route commands (`modulate`, `modulation.*`) keep their own words. A test walks the registry: every code among
   `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command
   the GUI runs declares has words, and every command declaring one is

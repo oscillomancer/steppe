@@ -6450,3 +6450,49 @@ TEST_CASE("a scene inserted from the launcher says in the status line what its c
                                       "from D minor at bar 1"));
     a.snapshot("launcher-follow-status.png");
 }
+
+TEST_CASE("status: a recording's dropped modulation routes are said in the GUI's words") {
+    // gui.md §2, "Modulation words" (round 194 G2): a MIDI overdub's copy at
+    // record stop is never refused at the route limit; the routes it drops
+    // come as record.warning events, whose code and path the status line
+    // words (views::modulationNote), never their text. Shaped as the engine
+    // sends it (app.cpp, settleCopiedRoutes with trimToLimit).
+    App a;
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    auto warning = [](const std::string& route) {
+        json::Value w = json::Value::object();
+        w["code"] = "modulation.not_copied";
+        w["message"] = route +
+                       " (mo_2.out to cutoff) was not copied to fx_3: the project holds at most "
+                       "4096 routes; remove routes, then add it again with modulation.add";
+        w["path"] = "/modulations/" + route;
+        w["hint"] = "";
+        w["track"] = "tr_1";
+        w["file"] = "";
+        return w;
+    };
+    shell.engineEvents({{"record.warning", warning("mr_1")}});
+    const std::string one = shell.statusNote();
+    INFO(one);
+    CHECK(one.starts_with("A modulation was not copied: "));
+    for (const char* engine : {"modulation.add", "mo_2", "mr_1", "fx_3", "4096 routes;"})
+        CHECK(one.find(engine) == std::string::npos);
+    // Several in one batch: the first in full, then the count, once.
+    shell.engineEvents({{"record.warning", warning("mr_1")},
+                        {"record.warning", warning("mr_2")},
+                        {"record.warning", warning("mr_3")}});
+    INFO(shell.statusNote());
+    CHECK(shell.statusNote().starts_with("A modulation was not copied: "));
+    CHECK(shell.statusNote().find("And 2 more modulations were not copied.") != std::string::npos);
+    CHECK(shell.statusNote().find("modulation.add") == std::string::npos);
+    // Another warning keeps its words beside it.
+    json::Value other = json::Value::object();
+    other["code"] = "record.overlap";
+    other["message"] = "the take overlaps a locked item";
+    shell.engineEvents({{"record.warning", other}, {"record.warning", warning("mr_1")}});
+    CHECK(shell.statusNote().starts_with("the take overlaps a locked item; A modulation"));
+}

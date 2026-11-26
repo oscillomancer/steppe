@@ -31,6 +31,7 @@
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 #include "transport_bar.h"
 
@@ -47,6 +48,7 @@ void Shell::recordingError(const json::Value& payload) {
 
 void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>& events) {
     std::string warnings;
+    json::Value routes = json::Value::object();  // the modulation warnings, said once
     bool failed = false;
     for (const auto& [topic, payload] : events) {
         if (topic == "record.error") {
@@ -54,12 +56,26 @@ void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>&
             failed = true;
         }
         if (topic != "record.warning") continue;
+        // A recording's copy drops its routes past the limit rather than
+        // being refused (ADR-0096 M5): said in the GUI's words from the
+        // warning's code and path, never its text (views::modulationNote).
+        if (const json::Value* code = payload.isObject() ? payload.find("code") : nullptr;
+            code && code->isString() && code->asString().starts_with("modulation.")) {
+            json::Value one = json::Value::object();
+            one["warnings"] = json::Value::array();
+            one["warnings"].push_back(payload);
+            views::collectWarnings(routes, one);
+            continue;
+        }
         const json::Value* message = payload.isObject() ? payload.find("message") : nullptr;
         if (!message || !message->isString() || message->asString().empty()) continue;
         if (warnings.find(message->asString()) != std::string::npos) continue;  // once each
         if (!warnings.empty()) warnings += "; ";
         warnings += message->asString();
     }
+    if (const std::string said = views::modulationNote(app_.head(), "record", routes);
+        !said.empty())
+        warnings += (warnings.empty() ? "" : "; ") + said;
     // An error in the same batch comes first: the warnings follow it, never replace it.
     if (!warnings.empty()) setStatus(failed ? editStatus_ + "; " + warnings : warnings);
 }
