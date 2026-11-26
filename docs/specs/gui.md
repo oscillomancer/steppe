@@ -406,7 +406,8 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   consolidation's job; and where it deletes what a route reaches: the FX
   window's and the mixer's Remove (a plug-in), the mixer's and the routing
   matrix's send removals, Track: delete selected and the track menu's
-  Delete, the launcher's clip deletes (its menu and the Delete key), Item: delete the
+  Delete, the launcher's clip deletes (its menu and the Delete key) and scene
+  Delete, Item: delete the
   heard take, render with FX deleting FX, and the rack window's module and
   rack removals, each gesture noted once (`views::collectWarnings`); and the
   routes a recording's copy drops (an overdub at record stop is never

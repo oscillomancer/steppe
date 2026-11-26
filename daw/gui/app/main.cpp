@@ -902,10 +902,12 @@ int frontendMain(int argc, char** argv) {
                                 if (const json::Value* v = results[at].find(ref.substr(dot + 1)))
                                     value = *v;
                         }
+                    // The step's notes name its routes from the session before
+                    // it (a route a delete took is gone after it).
+                    const model::Session prior = (*app)->view();
                     auto r = dispatcher.execute({step.command, step.args, ui});
                     if (!r) return views::modulationRefusal(before, step.command, r.error());
-                    if (const std::string said =
-                            views::modulationNote((*app)->view(), step.command, *r);
+                    if (const std::string said = views::modulationNote(prior, step.command, *r);
                         !said.empty())
                         note += (note.empty() ? "" : " ") + said;
                     results.push_back(std::move(*r));

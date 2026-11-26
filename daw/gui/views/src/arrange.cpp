@@ -778,7 +778,7 @@ class Ruler : public ui::Node {
                         if (r)
                             if (const auto& notice = view_.launcherCallbacks().onNotice)
                                 if (const std::string mod =
-                                        modulationNote(view_.session(), "scene.capture", *r);
+                                        modulationNote(before, "scene.capture", *r);
                                     !mod.empty())
                                     notice(mod);
                     });
@@ -1850,7 +1850,9 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
         if (lays)
             if (const auto followed = followNotice(session(), command, asked, *r))
                 notice = *followed;
-        if (const std::string mod = modulationNote(session(), command, *r); !mod.empty())
+        // Named from the session before it: a route a delete (Delete scene)
+        // took with it is gone after it.
+        if (const std::string mod = modulationNote(before, command, *r); !mod.empty())
             notice += (notice.empty() ? "" : " ") + mod;
         if (!notice.empty()) launcherCallbacks_.onNotice(notice);
     }

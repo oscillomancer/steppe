@@ -3438,4 +3438,19 @@ TEST_CASE(
     CHECK(f.errors.back().message.starts_with("Moving the clip there would loop its modulation"));
     CHECK(f.errors.back().hint.empty());
     CHECK(f.app->head().version == version);
+    // Delete the clip's scene (the scene menu's Delete): the route goes with
+    // the clip, named from the session before the delete (round 196; the
+    // layout's session is the one before until the next frame, so this pins
+    // the naming, not which session runLauncher reads).
+    const model::Session prior = f.app->head();
+    REQUIRE(prior.modulations.size() == 1);
+    const std::string named = views::objectName(prior, prior.modulations.begin()->id);
+    f.notices.clear();
+    json::Value gone = json::Value::object();
+    gone["scene"] = prior.clips.find(clipId)->scene.str();
+    REQUIRE(f.view->runLauncher("scene.remove", std::move(gone)));
+    REQUIRE_FALSE(f.notices.empty());
+    INFO(f.notices.back());
+    CHECK(f.notices.back().find(named.substr(1) + " went with it.") != std::string::npos);
+    CHECK(f.notices.back().find("A modulation route") == std::string::npos);
 }
