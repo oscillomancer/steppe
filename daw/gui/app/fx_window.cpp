@@ -891,7 +891,11 @@ Status FxWindow::dispatch(const char* command, json::Value args) {
     const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}, gesture_};
     auto result = dispatcher_.execute({command, std::move(args), origin});
     if (!result) {
-        setStatus(std::string(command) + ": " + result.error().message);
+        // A refusal changes nothing, so the head is the session it ran on.
+        if (auto words = views::modulationRefusalWords(app_.head(), command, result.error()))
+            setStatus(*words);  // fx.move's loop (gui.md §2, "Modulation words")
+        else
+            setStatus(std::string(command) + ": " + result.error().message);
         return std::move(result).error();
     }
     return {};

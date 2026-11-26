@@ -357,8 +357,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   the racks so named, "· Mod 1 · rack 2".
   **Modulation words** (ADR-0096 M5, `views::modulation_words.h`). What M5
   adds to the commands that copy, move or join takes reaches the user in
-  the GUI's own words, keyed on the command, the code and the path, never
-  the engine's message, its hint, a command's name or an id
+  the GUI's own words, keyed on the command and the code, and a warning
+  also on its `reason` (command-bus.md; its path only names the route),
+  never the engine's message, its hint, a command's name or an id
   (`views::modulationRefusal`, `views::modulationNote`). The refusals:
   `modulation.limit` from a copy ("Pasting would make more than 4096
   modulation routes, the most a project holds. Remove some first (Remove
@@ -367,19 +368,26 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   ("Moving the item there would loop its modulation: that track feeds the
   rack that modulates the take's plug-ins. Choose another track, or remove
   the modulation first (…)"; for **Explode takes** onto new tracks it
-  offers exploding in sequence), and `item.heal_fx` from **Heal splits**
+  offers exploding in sequence; a track's plug-in moved, `fx.move`, "Moving
+  the plug-in there would loop its modulation: that track feeds the rack
+  that modulates the plug-in. …", where the FX window and the mixer run
+  it, though their moves stay on one track, which cannot loop), and `item.heal_fx` from **Heal splits**
   ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
   them match (…), or consolidate them instead."). The warnings, which have
   no registry (session-model lists them), go to the status line as a note
   after the command went ahead: `modulation.not_copied` names the route
-  and says why, read from the model since the warning carries no reason
-  ("The modulation of the cutoff of Filter on Bass's item at bar 9 was not
-  copied: the copy's track feeds the rack that makes it, so it would loop.
-  …"; its rack not in the project; the project full), the first in full
+  and says why from its reason (`cycle`: "The modulation of the cutoff of
+  Filter on Bass's item at bar 9 was not copied: the copy's track feeds the
+  rack that makes it, so it would loop. …"; `source`: its rack is not where
+  the copy is; `limit`: the project holds the most routes it can; none:
+  "… was not copied. Modulate the copy again if it needs it."), the first in full
   and then "And 2 more modulations were not copied."; `modulation.removed`
   names the route from the session before the command ("The modulation of
   Hickory's gain went with it."; "A modulation route went with it." where
-  that session no longer holds it), or counts them ("*N* modulation routes
+  that session no longer holds it; reason `source_unfit` "… was removed:
+  its rack's output can no longer modulate.", `target_unfit` "… was
+  removed: what it modulated can no longer be modulated (a send turned
+  MIDI, for instance)."), or counts them ("*N* modulation routes
   went with it."). `modulation.stacked` is a route command's warning
   (`modulate`, `modulation.add`), whose words are their own, so it has none
   here. They are
@@ -395,7 +403,7 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   rack removals, each gesture noted once (`views::collectWarnings`); and the
   routes a recording's copy drops (an overdub at record stop is never
   refused at the limit: its `record.warning` events, worded from their
-  code and path in `Shell::engineEvents`, once per batch, never their
+  code, path and reason in `Shell::engineEvents`, once per batch, never their
   text). The
   route commands (`modulate`, `modulation.*`) keep their own words. A test walks the registry: every code among
   `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command

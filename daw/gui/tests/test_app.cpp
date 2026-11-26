@@ -6454,9 +6454,10 @@ TEST_CASE("a scene inserted from the launcher says in the status line what its c
 TEST_CASE("status: a recording's dropped modulation routes are said in the GUI's words") {
     // gui.md §2, "Modulation words" (round 194 G2): a MIDI overdub's copy at
     // record stop is never refused at the route limit; the routes it drops
-    // come as record.warning events, whose code and path the status line
-    // words (views::modulationNote), never their text. Shaped as the engine
-    // sends it (app.cpp, settleCopiedRoutes with trimToLimit).
+    // come as record.warning events, whose code, path
+    // and reason the status line words (views::modulationNote), never their
+    // text. Shaped as the engine sends it (app.cpp, settleCopiedRoutes with
+    // trimToLimit; the reason since 9047d42a).
     App a;
     REQUIRE(a.ok);
     peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
@@ -6473,12 +6474,13 @@ TEST_CASE("status: a recording's dropped modulation routes are said in the GUI's
         w["hint"] = "";
         w["track"] = "tr_1";
         w["file"] = "";
+        w["reason"] = "limit";
         return w;
     };
     shell.engineEvents({{"record.warning", warning("mr_1")}});
     const std::string one = shell.statusNote();
     INFO(one);
-    CHECK(one.starts_with("A modulation was not copied: "));
+    CHECK(one.starts_with("A modulation was not copied: the project holds the most routes it can"));
     for (const char* engine : {"modulation.add", "mo_2", "mr_1", "fx_3", "4096 routes;"})
         CHECK(one.find(engine) == std::string::npos);
     // Several in one batch: the first in full, then the count, once.

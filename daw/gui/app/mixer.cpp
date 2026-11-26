@@ -2149,7 +2149,8 @@ void Mixer::endDrag(bool commit) {
         args["index"] = static_cast<std::int64_t>(done.index);
     }
     if (auto r = dispatcher_.execute({command, std::move(args), kOrigin}); !r && actions_.onError)
-        actions_.onError(std::string("mixer: ") + r.error().message);
+        actions_.onError(std::string("mixer: ") +
+                         views::modulationRefusal(app_.head(), command, r.error()).message);
 }
 
 std::optional<views::ControlModulation> Mixer::modulationOf(const model::Session& s,

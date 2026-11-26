@@ -64,6 +64,11 @@ std::optional<std::string> modulationRefusalWords(const model::Session&, std::st
                " modulation routes, the most a project holds. Remove some first (" +
                std::string(kRemove) + "); a copied chain brings its routes with it.";
     if (e.code == "modulation.cycle") {
+        if (command == "fx.move")
+            return "Moving the plug-in there would loop its modulation: that track feeds the "
+                   "rack that modulates the plug-in. Choose another track, or remove the "
+                   "modulation first (" +
+                   std::string(kRemove) + ").";
         if (command == "item.explode-takes")
             return "Exploding the takes would put one on a track that feeds the rack "
                    "modulating its plug-ins, so the modulation would loop. Explode them in "
@@ -90,31 +95,39 @@ Error modulationRefusal(const model::Session& s, std::string_view command, Error
 }
 
 std::optional<std::string> modulationWarningWords(const model::Session& s, std::string_view,
-                                                  std::string_view code, std::string_view path) {
+                                                  std::string_view code, std::string_view path,
+                                                  std::string_view reason) {
+    if (code != "modulation.removed" && code != "modulation.not_copied") return std::nullopt;
+    // The route at /modulations/<id>, named from `s` when it holds it.
     constexpr std::string_view prefix = "/modulations/";
     std::optional<model::Id> id;
     if (path.starts_with(prefix)) id = model::Id::parse(path.substr(prefix.size()));
-    if (code == "modulation.removed")
-        return id && s.modulations.find(*id) ? capitalized(objectName(s, *id)) + " went with it."
-                                             : std::string("A modulation route went with it.");
-    if (code != "modulation.not_copied") return std::nullopt;
-    // The original route, at /modulations/<id>; the warning gives no reason
-    // apart from its message, so the model says which: its source is not
-    // in the project, the project is full (a recording's copy, which is
-    // never refused), or the copy would loop.
-    const model::Modulation* original = id ? s.modulations.find(*id) : nullptr;
-    const std::string name = original ? objectName(s, *id) : "A modulation";
-    if (!original || !s.modules.find(original->source.module))
-        return capitalized(name) +
-               " was not copied: its rack is not in the project now. Modulate the copy "
-               "again once it has one.";
-    if (s.modulations.size() >= model::kMaxModulations)
-        return capitalized(name) + " was not copied: the project holds the most routes it can (" +
+    const bool named = id && s.modulations.find(*id);
+    if (code == "modulation.removed") {
+        const std::string name = named ? capitalized(objectName(s, *id)) : "A modulation route";
+        // The cause is the warning's reason (command-bus.md).
+        if (reason == "source_unfit")
+            return name + " was removed: its rack's output can no longer modulate.";
+        if (reason == "target_unfit")
+            return name +
+                   " was removed: what it modulated can no longer be modulated (a send "
+                   "turned MIDI, for instance).";
+        return name + " went with it.";  // source_removed, target_removed
+    }
+    const std::string name = named ? capitalized(objectName(s, *id)) : "A modulation";
+    if (reason == "source")
+        return name +
+               " was not copied: its rack is not where the copy is. Modulate the copy again once "
+               "it has one.";
+    if (reason == "cycle")
+        return name +
+               " was not copied: the copy's track feeds the rack that makes it, so it would "
+               "loop. Modulate the copy from a rack that track does not feed.";
+    if (reason == "limit")
+        return name + " was not copied: the project holds the most routes it can (" +
                std::to_string(model::kMaxModulations) + "). Remove some (" + std::string(kRemove) +
                "), then modulate the copy again.";
-    return capitalized(name) +
-           " was not copied: the copy's track feeds the rack that makes it, so it would loop. "
-           "Modulate the copy from a rack that track does not feed.";
+    return name + " was not copied. Modulate the copy again if it needs it.";
 }
 
 std::string modulationNote(const model::Session& s, std::string_view command,
@@ -128,9 +141,11 @@ std::string modulationNote(const model::Session& s, std::string_view command,
         if (!w.isObject()) continue;
         const json::Value* code = w.find("code");
         const json::Value* path = w.find("path");
+        const json::Value* reason = w.find("reason");
         if (!code || !code->isString()) continue;
         const std::string at = path && path->isString() ? path->asString() : std::string();
-        const auto words = modulationWarningWords(s, command, code->asString(), at);
+        const std::string why = reason && reason->isString() ? reason->asString() : std::string();
+        const auto words = modulationWarningWords(s, command, code->asString(), at, why);
         if (!words) continue;
         if (code->asString() == "modulation.not_copied")
             notCopied.push_back(*words);

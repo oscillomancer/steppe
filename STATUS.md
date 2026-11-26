@@ -1824,11 +1824,6 @@ Engine and hosting:
   (`modulation.target`), and one modulatable by default but read-only in the
   loaded state is accepted and listed as playable while the engine leaves it
   unmodulated.
-- The GUI's words for a route a copy did not keep (`modulation.not_copied`)
-  read its reason from the model (its rack gone, the project at the route
-  limit, else a loop), since the warning carries none; a copy that both
-  lands on 4096 routes and drops one for a loop says the limit. A
-  recording's dropped routes (`record.warning`) are worded the same way.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes

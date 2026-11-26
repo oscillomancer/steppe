@@ -4,9 +4,10 @@
 // move or join takes (gui.md §2, "Modulation words"): the refusals
 // modulation.limit, modulation.cycle and item.heal_fx, and the warnings
 // modulation.not_copied and modulation.removed. Each is keyed on the
-// command and the code (a command answers each code at one path, so the
-// path adds nothing; a warning's path names its route); none carries the
-// engine's message, its hint, a command's name or a raw id.
+// command and the code, and a warning also on its reason, the cause the
+// bus names (command-bus.md); a command answers each code at one path, so
+// the path adds nothing but a warning's route. None carries the engine's
+// message, its hint, a command's name or a raw id.
 // modulation.stacked is a route command's warning (modulate,
 // modulation.add), which keep their own words, so it has none here.
 #pragma once
@@ -31,13 +32,17 @@ std::optional<std::string> modulationRefusalWords(const model::Session& s, std::
 Error modulationRefusal(const model::Session& s, std::string_view command, Error e);
 
 // One warning's words: `code` at `path` (as the result gives it,
-// /modulations/<id>) from `command`. nullopt for a code that is not
-// modulation.not_copied or modulation.removed. `s` is the session to name
-// the route from: before the command for a delete (its route is gone after
-// it), before or after for a copy (the original is in both). A removed
-// route is named when `s` holds it, else "A modulation route".
+// /modulations/<id>) from `command`, its cause from `reason` (not_copied:
+// source, cycle or limit; removed: source_removed, target_removed,
+// source_unfit or target_unfit; none or another: the plain sentence).
+// nullopt for a code that is not modulation.not_copied or
+// modulation.removed. `s` is the session to name the route from: before
+// the command for a delete (its route is gone after it), before or after
+// for a copy (the original is in both). A route `s` does not hold is "A
+// modulation (route)".
 std::optional<std::string> modulationWarningWords(const model::Session& s, std::string_view command,
-                                                  std::string_view code, std::string_view path);
+                                                  std::string_view code, std::string_view path,
+                                                  std::string_view reason = {});
 // The status line's note for the modulation warnings in `result` (a
 // command's answer, `warnings`), "" when it has none: the first in full,
 // then how many more ("and 2 more modulations were not copied").
