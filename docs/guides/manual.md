@@ -1295,6 +1295,14 @@ modulation source** takes you there too; clicking the violet bar only
 changes the depth. The same menu's **Remove modulation** removes one
 route, named by its source, and leaves the rack as it is.
 
+A plug-in in a take's own chain (**Take FX…** on an item or a clip) can be
+modulated the same way, from its parameter menu in the FX window. The
+item's or clip's name then carries the "~", and selecting it shows its
+**Modulation** row in the inspector. The modulation follows the take: it
+plays while that take is the one heard, and the menu says "Modulation
+idle: another take of its item plays" (or "its item is muted") when it
+does not.
+
 ## Timing audio with hits and stretch markers
 
 Items have two menus. Right-click an item for the everyday edits: cut, copy,

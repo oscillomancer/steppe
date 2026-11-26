@@ -25,6 +25,7 @@
 #include "supple/ui/theme.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/item_body.h"
 #include "supple/views/lanes.h"
 
@@ -806,13 +807,33 @@ void LauncherPane::paint(ui::Canvas& c) {
             stats.keys.push_back(strip > 0 ? keyMark : std::string());
             // An unnamed clip draws no name: its row and column say its
             // track and scene (refusals still call it objectName's words).
+            // A modulated FX of its active take (ADR-0096 M5): the mark
+            // after the name (alone where the clip has none), which elides
+            // before it; dimmed while every route is off or the track is frozen.
+            const NameMark modMark = takeNameMark(s, clip->activeTake);
+            const model::Track* clipTrack = s.tracks.find(clip->track);
+            const std::string markInk =
+                modMark.mark.empty()
+                    ? std::string()
+                    : (modMark.on && !(clipTrack && clipTrack->freeze) ? "signal-cv" : "ink-faint");
+            const float modW =
+                modMark.mark.empty() ? 0.0f : c.textWidth(modMark.mark, ui::Font::UiBold, caption);
             const std::string label = clip->name;
             const std::string fit =
-                c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
+                c.elide(label, ui::Font::Ui, caption,
+                        std::max(0.0f, name.w - 18 - (modW > 0 ? modW + 4 : 0)));
             if (!fit.empty())
                 c.text({name.x + 15, name.y, name.w - 16, name.h}, fit, ui::Font::Ui, caption,
                        t.color("ink").withAlpha(dim), ui::kLeft | ui::kMiddle);
+            if (modW > 0 && name.w - 18 >= modW) {
+                const float drawn =
+                    fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, caption) + 4;
+                c.text({name.x + 15 + drawn, name.y, modW + 1, name.h}, modMark.mark,
+                       ui::Font::UiBold, caption, t.color(markInk).withAlpha(dim),
+                       ui::kLeft | ui::kMiddle);
+            }
             stats.names.push_back(fit);
+            stats.marks.push_back(markInk);
             // What plays: the outline (and a progress line while it plays) in
             // `playing`; a queued launch dashed until its boundary.
             if (playing || held) {

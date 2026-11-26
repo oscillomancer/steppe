@@ -156,6 +156,20 @@ bool chainModulated(const model::Session& session, model::Id track) {
     return false;
 }
 
+NameMark takeNameMark(const model::Session& session, std::optional<model::Id> take) {
+    const model::Take* t = take ? session.takes.find(*take) : nullptr;
+    if (!t) return {};
+    NameMark out;
+    out.on = false;
+    for (model::Id fx : t->chain) {
+        if (!fxModulated(session, fx)) continue;
+        out.mark = std::string(kModMark);
+        out.on = out.on || fxModulationOn(session, fx);
+    }
+    if (out.mark.empty()) out.on = true;
+    return out;
+}
+
 bool routeOn(const model::Session& session, const model::EnvTarget& target) {
     for (const auto& m : session.modulations)
         if (m.value->target == target && m.value->enabled) return true;

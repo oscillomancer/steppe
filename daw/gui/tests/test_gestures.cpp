@@ -3625,3 +3625,110 @@ TEST_CASE("audio slice menu workflow detects missing hits then commits its pure 
     CHECK(f.app->head().items.size() == count + 3);
     CHECK(f.steps() == steps + 2);
 }
+
+TEST_CASE("modulation: an item's take FX route has its lane, and the item's name its mark") {
+    // ADR-0096 M5; gui.md §4.3: a route into an item's take FX asks for a
+    // lane under the item's track (dimmed outside the item, as the take
+    // FX's envelope lane is), and the item's name carries the mark while an
+    // FX of its heard take is modulated (views::takeNameMark).
+    Fixture f;
+    if (!f.ok) return;
+    auto listed = f.dispatcher->execute({"plugin.list", json::Value::object(), kUi});
+    REQUIRE(listed);
+    const model::Id item = f.itemOnRow(0);
+    const model::Id track = f.item(item).track;
+    const model::Id take = *f.item(item).activeTake;
+    auto run = [&](const char* command, const std::string& args) {
+        auto r = f.dispatcher->execute({command, json::parse(args).value(), kUi});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    std::string fx, key;
+    for (const json::Value& p : (*listed)["plugins"].asArray()) {
+        if (p.find("instrument") && p.find("instrument")->asBool()) continue;
+        auto added =
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"take":")" + take.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kUi});
+        if (!added) continue;
+        const std::string id = (*added)["fx"].asString();
+        const json::Value d = run("fx.describe", R"({"fx":")" + id + R"(","full":true})");
+        if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+            for (const auto& m : ps->asObject())
+                if (const json::Value* mod = m.value.find("modulatable");
+                    key.empty() && mod && mod->asBool())
+                    key = m.key;
+        if (!key.empty()) {
+            fx = id;
+            break;
+        }
+        run("fx.remove", R"({"fx":")" + id + R"("})");
+    }
+    if (key.empty()) {
+        MESSAGE("skipped: no stock effect with a modulatable parameter (partial build)");
+        return;
+    }
+    auto scales = std::make_shared<gui::PluginScales>(*f.dispatcher);
+    f.view->trackLayout().pluginScales = [scales](const model::Envelope& e) {
+        return (*scales)(e);
+    };
+    auto marks = [&] {
+        f.root->damageAll();
+        f.root->frame(false);
+        std::vector<std::string> lit;
+        for (const std::string& m : f.view->lanes().stats().marks)
+            if (!m.empty()) lit.push_back(m);
+        return lit;
+    };
+    f.sync();
+    CHECK(marks().empty());
+    const std::string route = run("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + key +
+                                                  R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.sync();
+    CHECK(marks() == std::vector<std::string>{"signal-cv"});
+    run("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    f.sync();
+    CHECK(marks() == std::vector<std::string>{"ink-faint"});
+    run("modulation.set", R"({"modulation":")" + route + R"(","enabled":true,"lane":true})");
+    f.sync();
+    // Its lane: under the item's track, and dimmed outside the item.
+    const model::EnvTarget target{*model::Id::parse(fx), key};
+    auto lane = f.view->trackLayout().indexOfTarget(target);
+    REQUIRE(lane);
+    CHECK(*lane > *f.view->trackLayout().indexOf(track));
+    CHECK(f.view->trackLayout().rows()[*lane].track == track);
+    marks();
+    const ui::Rect laneRow = f.view->rowRect(*lane);
+    const ui::Rect body = f.rectOf(item);
+    REQUIRE_FALSE(f.view->lanes().dimmedLaneSpans().empty());
+    for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans()) {
+        CHECK(static_cast<double>(d.y) == doctest::Approx(static_cast<double>(laneRow.y)));
+        CHECK((d.right() <= body.x + 0.5f || d.x >= body.right() - 0.5f));
+    }
+    // A copy of the take keeps its routes (the copy rule); with the copy's
+    // routes removed and the copy heard, the name has no mark, and with the
+    // first take heard again it has.
+    const std::string second =
+        run("take.add", R"({"item":")" + item.str() + R"(","from":")" + take.str() + R"("})")["id"]
+            .asString();
+    run("take.activate", R"({"item":")" + item.str() + R"(","take":")" + second + R"("})");
+    const model::Session copied = f.app->head();
+    const model::Take* copy = copied.takes.find(*model::Id::parse(second));
+    REQUIRE(copy);
+    std::vector<model::Id> copies;
+    for (model::Id cfx : copy->chain)
+        for (model::Id r : model::modulationsInto(copied, cfx)) copies.push_back(r);
+    REQUIRE(copies.size() == 1);
+    run("modulation.remove", R"({"modulation":")" + copies.front().str() + R"("})");
+    f.sync();
+    CHECK(marks().empty());
+    run("take.activate", R"({"item":")" + item.str() + R"(","take":")" + take.str() + R"("})");
+    f.sync();
+    CHECK(marks() == std::vector<std::string>{"signal-cv"});
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        REQUIRE(gui::writePng(std::filesystem::path(out) / "take-fx-modulated-item.png",
+                              f.root->readBack()));
+}
