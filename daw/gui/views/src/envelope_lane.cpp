@@ -510,13 +510,9 @@ LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
             return title;
         }
         std::string what;
-        if (sibling && own) {
-            // The take as the item's take list names it.
-            const model::Take* tk = session.takes.find(own->take);
-            const auto at = std::find(item->takes.begin(), item->takes.end(), own->take);
-            what = tk && !tk->name.empty() ? tk->name
-                                           : "Take " + std::to_string(at - item->takes.begin() + 1);
-        }
+        // The take as the item's take list names it (takeLabel: a name two
+        // takes share, as a copy's, adds its place).
+        if (sibling && own) what = takeLabel(session, own->take);
         if (twin) {
             const model::Take* tk =
                 item->activeTake ? session.takes.find(*item->activeTake) : nullptr;

@@ -6057,3 +6057,66 @@ TEST_CASE("modulation words: a delete that takes routes with it names them in a 
                                          "/modulations/" + route.str()) ==
           "A modulation route went with it.");
 }
+
+TEST_CASE("names: a copy of a named take reads apart from the original") {
+    // gui.md §4.1 (round 194 G1): take.add {from} keeps the take's name, so
+    // a name two takes of one item share adds each one's place, wherever a
+    // take is named: its plug-in's name, the take FX lane's note, the label.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const model::Id item = *model::Id::parse((*added)["item"].asString());
+    const model::Id take = *f.app->head().items.find(item)->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value points = json::Value::array(), point = json::Value::object();
+    point["beat"] = 0.0;
+    point["value"] = 0.5;
+    points.push_back(point);
+    REQUIRE(f.run("env.add", f.args({{"fx", fx.str()}, {"param", key}, {"points", points}})));
+    REQUIRE(f.run("take.set", f.args({{"take", take.str()}, {"name", "Stabs"}})));
+    // Alone, the name is the name.
+    CHECK(views::takeLabel(f.app->head(), take) == "Stabs");
+    REQUIRE(f.run("take.add", f.args({{"item", item.str()}, {"from", take.str()}})));
+    const model::Session s = f.app->head();
+    const model::Item& it = *s.items.find(item);
+    REQUIRE(it.takes.size() == 2);
+    const model::Id copy = it.takes[1];
+    CHECK(s.takes.find(copy)->name == "Stabs");
+    CHECK(views::takeLabel(s, take) == "Stabs, take 1");
+    CHECK(views::takeLabel(s, copy) == "Stabs, take 2");
+    CHECK(views::objectName(s, copy) == "Stabs, take 2");
+    const model::Id copyFx = s.takes.find(copy)->chain.front();
+    CHECK(views::objectName(s, fx) != views::objectName(s, copyFx));
+    CHECK(views::objectName(s, fx).starts_with("Hickory on Stabs, take 1 of "));
+    CHECK(views::objectName(s, copyFx).starts_with("Hickory on Stabs, take 2 of "));
+    std::vector<std::string> notes;
+    for (const auto& e : s.envelopes)
+        if (e.value->target.param == key && e.value->target.object.kind == model::Kind::Fx)
+            notes.push_back(views::laneTitle(*e.value, s).note);
+    std::sort(notes.begin(), notes.end());
+    CHECK(notes == std::vector<std::string>{"(take: Stabs, take 1)", "(take: Stabs, take 2)"});
+}

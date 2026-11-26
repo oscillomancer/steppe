@@ -510,7 +510,7 @@ everywhere:
 | Scene | "Scene *N*", by its place in the launcher pane |
 | Clip | "*track*'s clip in *scene*" |
 | Item | "*track*'s item at bar *N*", with ", beat *B*" when another item of the track starts in that bar (named by its take or file, §4.3) |
-| Take | as its item or clip |
+| Take | as its item or clip; a name another take of its item or clip shares (a copy keeps it) adds its place, "Stabs, take 2", there and in `views::takeLabel` |
 | Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
 | Automation item | "*envelope* item at bar *N*" |
 | Section or range | "the section (range) at bar *N*" |
@@ -1079,7 +1079,9 @@ effect with another of its name in its chain gets its place there ("Teasel
 14)", the take's name and the item's first bar) when another item on the
 track has the same effect's same parameter, and its own take ("(take: Take
 2)", by name or place in the item's take list) when another take of the item
-has it, as a copy of the take does (`take.add {from}` copies its envelopes). A clip's take FX have none here: their envelopes are in clip
+has it, as a copy of the take does (`take.add {from}` copies its envelopes;
+by `views::takeLabel`, so a copy of a named take reads "(take: Stabs, take
+2)"). A clip's take FX have none here: their envelopes are in clip
 time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.

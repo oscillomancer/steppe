@@ -21,7 +21,8 @@ namespace supple::views {
 // - a clip: its name, else "<track>'s clip in <scene>";
 // - an item: its label (Lanes::itemLabel), else "<track>'s item at bar N"
 //   (", beat B" after it when another item of the track starts in that bar);
-// - a take: its name, else as its item or clip;
+// - a take: its name ("Stabs, take 2" when another take of its item or
+//   clip has that name), else as its item or clip;
 // - an envelope: "<track or take>'s <param> automation", else "the <param>
 //   automation";
 // - an automation item: its name, else "<envelope> item at bar N";
@@ -41,8 +42,10 @@ namespace supple::views {
 // One that is gone is "a removed …".
 std::string objectName(const model::Session& session, model::Id id);
 // A take as its item's take list says it (the inspector, the take FX
-// title): its name, else "Take N" by its place when its item or clip has
-// more than one take, else objectName's words.
+// title, a take FX lane's note): its name ("Stabs, take 2" when another
+// take of its item or clip has that name, as a copy does), else "Take N"
+// by its place when its item or clip has more than one take, else
+// objectName's words.
 std::string takeLabel(const model::Session& session, model::Id take);
 // `text` with each whole id in it (tr_3, it_4, sc_2, …) said by objectName.
 // The other words are kept.

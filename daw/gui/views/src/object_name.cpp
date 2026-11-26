@@ -117,8 +117,25 @@ std::string objectName(const model::Session& s, model::Id id) {
         case model::Kind::Take: {
             const model::Take* tk = s.takes.find(id);
             if (!tk) return "a removed take";
-            if (!tk->name.empty()) return tk->name;
             const auto owner = model::takeOwner(s, id);
+            if (!tk->name.empty()) {
+                // A name another take of its item or clip shares (a copy,
+                // take.add {from}, keeps it) adds its place: "Stabs, take 2".
+                const std::vector<model::Id>* takes =
+                    owner ? model::ownerTakes(s, *owner) : nullptr;
+                if (!takes) return tk->name;
+                std::size_t place = 0;
+                bool shared = false;
+                for (std::size_t i = 0; i < takes->size(); ++i) {
+                    if ((*takes)[i] == id) {
+                        place = i + 1;
+                        continue;
+                    }
+                    const model::Take* other = s.takes.find((*takes)[i]);
+                    shared = shared || (other && other->name == tk->name);
+                }
+                return shared && place ? tk->name + ", take " + std::to_string(place) : tk->name;
+            }
             return owner ? objectName(s, *owner) : std::string("a take");
         }
         case model::Kind::Envelope: {
