@@ -220,3 +220,55 @@ TEST_CASE("live launches of clips with take chains play as the offline replay" *
                 CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
             }
 }
+
+TEST_CASE("a seek before a heard loop clip's anchor plays it by its phase, in both executors (F6)" *
+          doctest::description("rt")) {
+    // cl_1, a 36000-frame ramp looping, launched on bar 2 (96000) and heard;
+    // then a seek to 0.5 s (song 24000), before its anchor. A loop clip
+    // plays by its phase wherever a seek takes the song (engine.md §3.1):
+    // from the seek, phase (24000 - 96000) mod 36000 = 0, so the device
+    // hears the ramp from its start, sample for sample. The in-callback
+    // executor's seek (detail::locate) once left the clip anchored: silent.
+    for (const bool anticipative : {false, true}) {
+        INFO("anticipative " << anticipative);
+        Project p;
+        auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+        args["audio_file"] = p.ramp("loop.wav", 36000).string();
+        p.runArgs("clip.add", args);
+        const model::Session s = p.app->head();
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 160000});
+        Engine engine(pool, media, anticipative ? EngineOptions{.workers = 0} : kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 32}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        std::int64_t done = 0;
+        const auto run = [&](std::int64_t to) {
+            if (anticipative)
+                runAheadOnState(engine, backend, to - done, 32);
+            else
+                backend.run(to - done);
+            done = to;
+        };
+        run(20);
+        engine.service();
+        const Engine::LaunchRequest launch = request("tr_1", "cl_1");
+        REQUIRE(engine.launch(std::span(&launch, 1), model::LaunchQuantize::Bar));
+        run(3010);  // device 96320: the switch at 96000 heard
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        engine.seek(0.5);
+        run(4800);  // to device 153600
+        engine.service();
+        const auto& out = backend.capture().channels[0];
+        const std::size_t at = 3010 * 32 + engine.outputLatency();
+        REQUIRE(out.size() >= at + 50000);
+        std::int64_t wrong = -1;
+        for (std::int64_t k = 0; k < 50000 && wrong < 0; ++k)
+            if (out[at + std::size_t(k)] != rampAt(k % 36000)) wrong = k;
+        INFO("first wrong frame after the seek: "
+             << wrong << " (heard " << (wrong < 0 ? 0.f : out[at + std::size_t(wrong)]) << ")");
+        CHECK(wrong < 0);
+    }
+}
