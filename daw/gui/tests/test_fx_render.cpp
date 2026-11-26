@@ -44,6 +44,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/object_name.h"
 
 using namespace supple;
@@ -2659,6 +2660,31 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     REQUIRE_MESSAGE(env, "modulate added the envelope that carries the route");
     f.fx->tick();
     f.frame();
+    // Its row carries the mixer slot's modulation mark after the name, in
+    // signal-cv; dimmed while every route is off (gui.md §4.5).
+    // The rows are on the chain tab: the name's accessible text there.
+    std::string plain;  // the name as drawn
+    const auto mark = [&]() -> std::string {
+        f.fx->showChainTab();
+        f.frame();
+        std::string out;
+        if (const auto* name = dynamic_cast<ui::Label*>(f.uiRoot().find("fx.name." + fx.str()))) {
+            plain = name->text();
+            out = name->valueText();
+        }
+        f.fx->showParamsTab();
+        f.frame();
+        return out;
+    };
+    REQUIRE_FALSE(mark().empty());
+    CHECK(mark() == plain + " (modulated)");
+    const std::string route = s.modulations.begin()->id.str();
+    REQUIRE(f.run("modulation.set", f.args({{"modulation", route}, {"enabled", false}})));
+    f.fx->tick();
+    CHECK(mark() == plain + " (modulation off)");
+    REQUIRE(f.run("modulation.set", f.args({{"modulation", route}, {"enabled", true}})));
+    f.fx->tick();
+    f.frame();
     // It plays: no idle row. The route's source is a row away (gui.md §2).
     menu = openMenu();
     REQUIRE(menu);
@@ -2698,6 +2724,7 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     CHECK(f.app->head().envelopes.find(*env));
     f.fx->tick();
     f.frame();
+    CHECK(mark() == plain);  // nothing modulated: no mark
     menu = openMenu();
     REQUIRE(menu);
     for (const std::string& l : labels(menu)) {

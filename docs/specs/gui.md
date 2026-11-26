@@ -306,7 +306,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `signal-cv` says that a plug-in parameter is modulated, by any route,
   enabled or not (`views::fxModulated`): at the right of the plug-in's slot
   in a mixer strip (the name centred in the room left of it; the slot's
-  accessible text ends "(modulated)"), and after "fx" in the track panel and
+  accessible text ends "(modulated)"), right after the plug-in's name in
+  the FX window's chain list (inside the name's column, so the columns stay
+  put; its accessible text ends as the slot's), and after "fx" in the track panel and
   the mixer strip alike when a plug-in in the track's chain or input chain
   is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
   static: what moves is the controls' bars and the lane's curve. A strip's
