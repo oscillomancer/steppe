@@ -693,15 +693,20 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             const std::int64_t early =
                 earlyFrame(at, feed ? 0 : detail::launchEarly(n, kind, player));
             const std::int64_t chain = earlyFrame(at, feed ? 0 : n.launchLead);
+            // A modulated clip chain's entry (ADR-0096 M5, G1).
+            const std::int64_t entry =
+                !feed && n.modClipChain && kind == detail::LaunchState::Kind::Clip
+                    ? earlyFrame(at, detail::launchEntryLead(n))
+                    : at;
             any = true;
             first = std::min(first, early);
             if (early < stream) passed = true;  // (consulted only while undecided)
-            if (early == stream || chain == stream || at == stream) {
+            if (early == stream || chain == stream || entry == stream || at == stream) {
                 due = true;
                 lacking = lacking || (!feed && kind == detail::LaunchState::Kind::Clip &&
                                       detail::playerOf(n, clip) < 0);
             }
-            for (const std::int64_t f : {early, chain, at})
+            for (const std::int64_t f : {early, chain, entry, at})
                 if (f > stream) after = std::min(after, f);
         });
         if (!any) {  // nothing of it runs here
@@ -748,9 +753,14 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 const bool chain = n.launchLead > 0 && earlyFrame(at, n.launchLead) == stream;
                 const bool warm = detail::launchWarms(n, kind, a.player) &&
                                   earlyFrame(at, n.launchWarm) == stream;
-                if (!chain && !warm) return;
+                // The incoming clip chain's entry, one grid interval before
+                // its input switches (ADR-0096 M5, G1).
+                const bool enter = n.modClipChain && kind == detail::LaunchState::Kind::Clip &&
+                                   earlyFrame(at, detail::launchEntryLead(n)) == stream;
+                if (!chain && !warm && !enter) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
+                if (enter) detail::preenter(n, a);
                 if (chain) detail::prelaunch(n, a);
                 if (warm) detail::prewarm(n, a, target);  // the bare target (Node::launchWarmAt)
             });

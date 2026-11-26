@@ -13,11 +13,13 @@
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 
+#include "../../../tests/file_platform.h"
 #include "bridge_patience.h"
 #include "plan.h"
 #include "plan_dump.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
+#include "supple/audio/audio_file.h"
 #include "supple/console9/console9.h"
 #include "supple/model/freeze.h"
 #include "supple/model/schemas.h"
@@ -671,7 +673,7 @@ TEST_CASE("modulation: through the bridge, real-time output equals the in-proces
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("anticipative " << options.anticipative);
             // A deadline no healthy plug-in misses under load (bridge_patience.h).
-            const Live live = playLive(s, test::patient(options), 128, frames);
+            const Live live = playLive(s, engine::test::patient(options), 128, frames);
             CHECK(maxDiff(live.left, live.latency, reference.left, 48000 * seconds) == 0.0);
         }
     }
@@ -1415,7 +1417,7 @@ TEST_CASE(
             for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
                 INFO("isolation " << static_cast<int>(isolation) << ", block " << block
                                   << ", anticipative " << options.anticipative);
-                const Live live = playLive(s, test::patient(options), block, frames);
+                const Live live = playLive(s, engine::test::patient(options), block, frames);
                 CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
             }
         }
@@ -1645,4 +1647,275 @@ TEST_CASE("write holds: the main thread's hold keeps a latch and its release let
     backend.run(2);
     CHECK(control.deliveries(plugin) > deliveries);
     engine.stop();
+}
+
+// --- Take FX targets (ADR-0096 step M5) ------------------------------------
+
+namespace {
+
+// A constant 0.5 on both channels, 2 s at 48 kHz.
+struct ConstantFile {
+    std::filesystem::path directory = supple::test::uniqueTempDir("supple-modtake-");
+    std::filesystem::path path = directory / "half.wav";
+    ConstantFile() {
+        std::filesystem::create_directories(directory);
+        audio::AudioData data;
+        data.sampleRate = 48000;
+        data.channels.assign(2, std::vector<float>(96000, 0.5f));
+        REQUIRE(audio::writeWav(path, data));
+    }
+    ~ConstantFile() { std::filesystem::remove_all(directory); }
+};
+
+// Channel B holds an item of the constant file from beat 0.51 (sample 12240
+// at 120 bpm, off the 32-frame grid) whose take plays through the gain
+// fixture at -6 dB, after a latent gain when `latent` (so the target is
+// stage 1 of a chain that runs ahead). A rack on A runs Transport's `source`
+// into a Mod Out, routed into the take's gain at `depth`.
+struct TakeRoute {
+    model::Session s;
+    Id a, b, rack, modOut, gain, take, item, route;
+    TakeRoute(const ConstantFile& file, const char* source, std::optional<double> depth,
+              bool latent = false) {
+        model::Project project;
+        project.console9 = false;
+        model::EditTxn t(model::Session::create(project), 1);
+        a = addChannel(t);
+        b = addChannel(t);
+        rack = t.create(model::Rack{a, ""});
+        const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+        modOut = addModule(t, rack, model::kModOutModule);
+        cable(t, transport, source, modOut, "in_1");
+        model::Take tk;
+        tk.source = t.create(model::MediaSource{file.path.string(), "", "wav", 48000, 2, 96000});
+        if (latent) {
+            model::FxInstance ahead;
+            ahead.plugin.id = kGain;
+            ahead.patch =
+                json::parse(
+                    R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                    .value();
+            tk.chain.push_back(t.create(ahead));
+        }
+        model::FxInstance fx;
+        fx.plugin.id = kGain;
+        fx.patch =
+            json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value();
+        gain = t.create(fx);
+        tk.chain.push_back(gain);
+        take = t.create(tk);
+        model::Item it;
+        it.track = b;
+        it.position = 0.51;
+        it.length = 2.0;
+        it.takes = {take};
+        it.activeTake = take;
+        item = t.create(it);
+        if (depth) route = modulate(t, modOut, gain, "gain", *depth);
+        s = commit(t);
+    }
+};
+
+constexpr std::size_t kOnset = 12240;
+
+}  // namespace
+
+TEST_CASE("modulation: a route into a take FX moves it from the item's first frame (M5)" *
+          doctest::description("rt")) {
+    ConstantFile file;
+    const auto plain = render(TakeRoute(file, "playing", std::nullopt).s, 0.5);
+    const auto moved = render(TakeRoute(file, "playing", -0.25).s, 0.5);
+    CHECK(plain.left[kOnset - 1] == 0.0f);
+    CHECK(double(plain.left[kOnset]) == doctest::Approx(0.5 * gainAt(0)).epsilon(1e-4));
+    // From the onset itself, at every block size: the chain is entered a grid
+    // interval early, so the grid point before the onset sends the sum (F1).
+    for (const std::uint32_t block : {37u, 128u, 512u}) {
+        INFO("block " << block);
+        const auto r = render(TakeRoute(file, "playing", -0.25).s, 0.5, block);
+        CHECK(double(r.left[kOnset]) == doctest::Approx(0.5 * gainAt(-0.25)).epsilon(1e-4));
+        CHECK(double(r.left[kOnset + 5000]) == doctest::Approx(0.5 * gainAt(-0.25)).epsilon(1e-4));
+        CHECK(r.left == moved.left);
+    }
+}
+
+TEST_CASE("modulation: a take chain that runs ahead lines its route up at a later stage (M5)" *
+          doctest::description("rt")) {
+    // The target is stage 1, behind a latent gain: the chain's input runs its
+    // latency ahead and the latent stage takes all of it, so stage 1 hears
+    // timeline sample t at t and the route's `before` is 0, not the chain's
+    // lead. A plan that ignored the stage's place would send the value
+    // that much early, and the output would differ from the plain chain's.
+    ConstantFile file;
+    const TakeRoute ahead(file, "beat_phase", 0.2, true), level(file, "beat_phase", 0.2, false);
+    for (const std::uint32_t block : {37u, 128u, 512u}) {
+        INFO("block " << block);
+        const auto latent = render(ahead.s, 1.0, block);
+        const auto plain = render(level.s, 1.0, block);
+        // The latent stage passes the signal unchanged, delayed and compensated.
+        CHECK(maxDiff(latent.left, 0, plain.left, 48000) == doctest::Approx(0.0).epsilon(1e-6));
+    }
+    // The plan: an edge into the take chain's stage 1, its before negative.
+    InstancePool pool = makePool();
+    MediaCache media;
+    auto plan = d::compile(ahead.s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(d::prepare(*plan, ahead.s));
+    REQUIRE(plan->modEdges.size() == 1);
+    const d::ModEdge& me = plan->modEdges[0];
+    CHECK(me.takeChain >= 0);
+    CHECK(me.takeStage == 1);
+    CHECK_FALSE(me.unplayed);
+    CHECK_FALSE(me.inert);
+    const d::Node& n = plan->nodes[me.to];
+    const d::TakeChain& tc = n.takeChains[static_cast<std::size_t>(me.takeChain)];
+    CHECK(tc.latency > 0);
+    CHECK(tc.chain[1].before == tc.latency);
+    const std::int64_t before = tc.chain[1].before - tc.latency;
+    CHECK(before == 0);
+    CHECK(me.delay.length ==
+          n.timelineShift + before - plan->nodes[me.from].timelineShift - me.tap);
+}
+
+TEST_CASE(
+    "modulation: into a take FX, real time equals the offline render in both executors "
+    "(M5)" *
+    doctest::description("rt")) {
+    ConstantFile file;
+    for (const bool latent : {false, true}) {
+        const TakeRoute route(file, "beat_phase", 0.2, latent);
+        const std::int64_t seconds = 1, frames = 48000 * seconds + 4096;
+        for (const std::uint32_t block : {128u, 512u}) {
+            const auto offline = render(route.s, double(seconds), block);
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("latent " << latent << ", block " << block << ", anticipative "
+                               << options.anticipative);
+                const Live live = playLive(route.s, options, block, frames);
+                CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("modulation: a route into an inactive take is an edge that sends nothing (M5)") {
+    ConstantFile file;
+    TakeRoute route(file, "playing", -0.25);
+    model::EditTxn t(route.s, 2);
+    model::Take other;
+    other.source = route.s.takes.find(route.take)->source;
+    const Id second = t.create(other);
+    t.modify<model::Item>(route.item, [&](model::Item& it) {
+        it.takes.push_back(second);
+        it.activeTake = second;
+    });
+    const model::Session s = commit(t);
+    InstancePool pool = makePool();
+    MediaCache media;
+    auto plan = d::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(d::prepare(*plan, s));
+    REQUIRE(plan->modEdges.size() == 1);
+    const d::ModEdge& me = plan->modEdges[0];
+    CHECK(me.unplayed);
+    CHECK(me.takeChain == -1);
+    CHECK(me.values.empty());
+    CHECK(me.delay.length == 0);
+    // Still an edge: the rack runs first.
+    CHECK(me.from < me.to);
+    // The take that plays has no FX: the file at unity, untouched.
+    CHECK(double(render(s, 0.5).left[kOnset + 100]) == doctest::Approx(0.5).epsilon(1e-6));
+    // The plan and modulation.list's `take` read one rule, model::takeFxPlays:
+    // the active take of an unmuted item plays; another take, or a muted
+    // item's, does not.
+    const auto unplayed = [&](const model::Session& at) {
+        auto compiled = d::compile(at, pool, 0, 128);
+        REQUIRE(compiled);
+        compiled->media = &media;
+        REQUIRE(d::prepare(*compiled, at));
+        REQUIRE(compiled->modEdges.size() == 1);
+        return compiled->modEdges[0].unplayed;
+    };
+    const auto plays = [&](const model::Session& at) {
+        const auto owner = model::takeFxOwner(at, route.gain);
+        REQUIRE(owner);
+        return model::takeFxPlays(at, *owner);
+    };
+    model::EditTxn mute(route.s, 2);
+    mute.modify<model::Item>(route.item, [](model::Item& it) { it.mute = true; });
+    const model::Session muted = commit(mute);
+    const model::Session* const sessions[] = {&route.s, &s, &muted};
+    for (const model::Session* at : sessions) {
+        INFO("session " << (at == &route.s ? "active" : at == &s ? "inactive" : "muted"));
+        CHECK(unplayed(*at) == !plays(*at));
+    }
+    CHECK(plays(route.s));
+    CHECK_FALSE(plays(s));
+    CHECK_FALSE(plays(muted));
+}
+
+TEST_CASE("modulation: telemetry reports a route into a take FX while its take plays (M5)" *
+          doctest::description("rt")) {
+    // A take chain's stage is bound like a chain stage, so its route has a
+    // telemetry slot (ADR-0096, M2): Transport's `playing` x -0.25 once the
+    // item plays. A route into a take that does not play has none.
+    ConstantFile file;
+    const TakeRoute route(file, "playing", -0.25);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(route.s));
+    CHECK(engine.modulationOffsets().size() == 1);
+    engine.play();
+    backend.run(600);  // 1.2 s, past the item's onset at 0.51 s
+    const auto offsets = engine.modulationOffsets();
+    REQUIRE(offsets.size() == 1);
+    CHECK(offsets.at(route.route) == doctest::Approx(-0.25));
+    // Another take active: the route is unplayed, and no slot reports it.
+    model::EditTxn t(route.s, 2);
+    model::Take other;
+    other.source = route.s.takes.find(route.take)->source;
+    const Id second = t.create(other);
+    t.modify<model::Item>(route.item, [&](model::Item& it) {
+        it.takes.push_back(second);
+        it.activeTake = second;
+    });
+    REQUIRE(engine.load(commit(t)));
+    CHECK(engine.modulationOffsets().empty());
+    engine.stop();
+}
+
+TEST_CASE("modulation: a mixer target behind a chain under 32 samples stays on time (M5 coverage)" *
+          doctest::description("rt")) {
+    // B's chain has no latency, so a route into its volume has a negative
+    // `before` (latChain - 32, shipped since M1): the value for timeline
+    // frame g, a grid point, still meets the fader at g, at every block size
+    // and live in both executors. The signal is Transport's beat phase, so
+    // a value 32 frames off would read another phase.
+    const Emit emit("beat_phase", std::nullopt);
+    const model::Session s =
+        mixed(emit, [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "volume", -9.0); });
+    const auto plain = render(emit.s, 1.0);
+    const auto offline = render(s, 1.0, 512);
+    for (const std::size_t g : {std::size_t(3200), std::size_t(12000), std::size_t(20000)}) {
+        INFO("grid point " << g);
+        const double phase = double(g % 24000) / 24000.0;
+        CHECK(ratio(offline.left, plain.left, g) ==
+              doctest::Approx(console9::faderGain(-9.0 * phase) / console9::faderGain(0))
+                  .epsilon(2e-5));
+    }
+    for (const std::uint32_t block : {37u, 128u}) {
+        INFO("block " << block);
+        CHECK(render(s, 1.0, block).left == offline.left);
+    }
+    const std::int64_t frames = 48000 + 4096;
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            const auto reference = render(s, 1.0, block);
+            const Live live = playLive(s, options, block, frames);
+            CHECK(maxDiff(live.left, live.latency, reference.left, 48000) == 0.0);
+        }
 }

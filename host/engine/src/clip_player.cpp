@@ -409,6 +409,11 @@ void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     if (n.launchNextValid && next.kind == a.kind && next.player == a.player &&
         next.anchorSample == a.anchorSample)
         n.launchNextValid = false;
+    // So is its entry (M5, G1), on a node whose chains have no lead.
+    const LaunchAction& entry = n.launchEntry;
+    if (n.launchEntryValid && entry.kind == a.kind && entry.player == a.player &&
+        entry.anchorSample == a.anchorSample)
+        n.launchEntryValid = false;
     L.kind = a.kind;
     L.player = a.kind == LaunchState::Kind::Clip ? a.player : -1;
     L.anchorSample = a.anchorSample;
@@ -464,6 +469,14 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     if (n.launchNextValid && n.launchNext.kind == LaunchState::Kind::Clip) {
         n.launchNext.player = remap(n.launchNext.player);
         n.launchNextValid = n.launchNext.player >= 0;
+    }
+    // A clip chain's entry (preenter, M5 G1), by clip id too, while the new
+    // plan's node still has a modulated clip chain.
+    n.launchEntry = old.launchEntry;
+    n.launchEntryValid = old.launchEntryValid && n.modClipChain && !n.players.empty();
+    if (n.launchEntryValid && n.launchEntry.kind == LaunchState::Kind::Clip) {
+        n.launchEntry.player = remap(n.launchEntry.player);
+        n.launchEntryValid = n.launchEntry.player >= 0;
     }
     // And one warming up (prewarm, S3 step D).
     n.launchWarmNext = old.launchWarmNext;
@@ -1357,6 +1370,16 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     n.launchNext = a;
     n.launchNextValid = true;
+    // Its input takes it from here: the entry's work is done (M5, G1).
+    const LaunchAction& entry = n.launchEntry;
+    if (n.launchEntryValid && entry.kind == a.kind && entry.player == a.player &&
+        entry.anchorSample == a.anchorSample)
+        n.launchEntryValid = false;
+}
+
+void preenter(Node& n, const LaunchAction& a) SUPPLE_RT {
+    n.launchEntry = a;
+    n.launchEntryValid = true;
 }
 
 void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT {

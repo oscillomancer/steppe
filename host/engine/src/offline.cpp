@@ -1185,6 +1185,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             Id clip;
             bool early = false;  // its clip chains' input side (Node::launchLead)
             bool warm = false;   // its converter's warm-up (Node::launchWarm, S3 step D)
+            bool enter = false;  // a modulated clip chain's entry (ADR-0096 M5, G1)
         };
         std::vector<Switch> switches;
         // The log's anchors are timeline samples (the live plan counts from
@@ -1240,6 +1241,19 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                         {},
                                         false,
                                         true});
+                // As live: the incoming chain's entry, then its input switch
+                // (ADR-0096 M5, G1). The live delivery clamps each early
+                // frame at 0; the replay's switches before 0 apply at 0 too.
+                if (node.modClipChain && a.kind == detail::LaunchState::Kind::Clip)
+                    switches.push_back(
+                        {e.runningFrame + node.timelineShift - detail::launchEntryLead(node),
+                         k,
+                         a,
+                         -1,
+                         {},
+                         false,
+                         false,
+                         true});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1259,6 +1273,8 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                         detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
                                                 sw.action.kind, sw.clip, sw.action.anchorSample,
                                                 sw.action.anchorBeat);
+                    else if (sw.enter)
+                        detail::preenter(node, sw.action);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else if (sw.warm)  // its running frame, a launchWarm later, unshifted
