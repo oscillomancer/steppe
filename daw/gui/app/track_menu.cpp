@@ -18,7 +18,7 @@
 namespace supple::gui {
 
 Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
-                    const std::vector<std::string>& tracks) {
+                    const std::vector<std::string>& tracks, json::Value* warnings) {
     // Deepest first: a folder can go once its children have.
     std::vector<std::pair<int, model::Id>> order;
     for (const std::string& text : tracks) {
@@ -40,6 +40,7 @@ Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
             args["track"] = id.str();
             auto one = dispatcher.execute({"track.remove", std::move(args), origin});
             if (!one) return one;
+            if (warnings) views::collectWarnings(*warnings, *one);
         }
         return json::Value::object();
     });
@@ -167,8 +168,16 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
     m.label = doomed.size() > 1 ? "Delete " + std::to_string(doomed.size()) + " tracks" : "Delete";
     m.enabled = !doomed.empty();  // the main master stays
     m.run = [this, doomed] {
-        if (auto r = removeTracks(dispatcher, app.head(), doomed); !r && onError)
-            onError(r.error().message);
+        // A route that went with them is named from the session before.
+        const model::Session before = app.head();
+        json::Value warnings = json::Value::object();
+        if (auto r = removeTracks(dispatcher, before, doomed, &warnings); !r) {
+            if (onError) onError(r.error().message);
+            return;
+        }
+        if (const std::string note = views::modulationNote(before, "track.remove", warnings);
+            !note.empty() && onNotice)
+            onNotice(note);
     };
     items.push_back(std::move(m));
     root.openPopup(

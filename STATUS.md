@@ -1041,8 +1041,9 @@ instructions are in `docs/guides/installing.md`.
   parameter has its lane in the MIDI editor with the band and live value,
   a take's plug-in is named by its item or clip ("Filter on Bass's item at
   bar 9"), what M5 adds to copies, moves and joins (the route limit, a
-  loop, Heal splits' differing take FX, a route not copied or removed) is
-  said in the GUI's own words where the GUI runs those commands, and a
+  loop, Heal splits' differing take FX, a route not copied, or removed by a
+  copy or a delete) is said in the GUI's own words where the GUI runs those
+  commands, and a
   registry walk keeps every declared code worded, and a route into a take
   that does not play says why ("another take of its item plays", "its item
   is muted"). The FX window's live value on a modulated slider is

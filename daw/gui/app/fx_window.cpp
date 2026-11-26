@@ -20,6 +20,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 #include "supple/views/track_layout.h"
 
@@ -1372,13 +1373,17 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
           }).enabled = !isDisabled;
         auto& remove = l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
             const std::vector<model::Id> each = targets(fx);
+            const model::Session before = app_.head();  // names a route that goes with it
+            json::Value warnings = json::Value::object();
             auto removed = dispatcher_.transact(
                 each.size() > 1 ? "Remove effects" : "Remove effect", kUiOrigin,
                 [&]() -> Result<json::Value> {
                     for (const model::Id& one : each) {
                         json::Value args = json::Value::object();
                         args["fx"] = one.str();
-                        SUPPLE_TRY(dispatcher_.execute({"fx.remove", std::move(args), kUiOrigin}));
+                        auto r = dispatcher_.execute({"fx.remove", std::move(args), kUiOrigin});
+                        if (!r) return r;
+                        views::collectWarnings(warnings, *r);
                     }
                     return json::Value::object();
                 });
@@ -1391,6 +1396,9 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 if (selected_ == one) selected_ = {};
             }
             refresh();
+            if (const std::string note = views::modulationNote(before, "fx.remove", warnings);
+                !note.empty())
+                setStatus(note);
         });
         remove.quiet = isDisabled;  // Enable is the one boxed button of a disabled row
     }

@@ -25,7 +25,8 @@
 
 namespace supple::gui {
 
-Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips) {
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips,
+                   json::Value* warnings) {
     if (clips.empty()) return {};
     const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     auto r = dispatcher.transact(
@@ -35,6 +36,7 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
                 args["clip"] = id;
                 auto one = dispatcher.execute({"clip.remove", std::move(args), origin});
                 if (!one) return one;
+                if (warnings) views::collectWarnings(*warnings, *one);
             }
             return json::Value::object();
         });
@@ -361,6 +363,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.selectedItems.empty()) return Error("action.selection", "select items first");
         return dispatcher_.transact("Render items", kOrigin, [&]() -> Result<json::Value> {
             const model::Session s = app_.head();
+            json::Value out = json::Value::object();  // the steps' warnings
             std::vector<model::Id> tracks;
             for (const std::string& text : ui_.selectedItems) {
                 const auto id = model::Id::parse(text);
@@ -378,8 +381,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                         auto r =
                             dispatcher_.execute({"fx.remove", obj({{"fx", fx.str()}}), kOrigin});
                         if (!r) return r;
+                        views::collectWarnings(out, *r);
                     }
-            return json::Value::object();
+            return out;
         });
     };
     registry_.add(dropFx);
@@ -391,6 +395,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.selectedItems.empty()) return Error("action.selection", "select items first");
         return dispatcher_.transact("Delete take", kOrigin, [&]() -> Result<json::Value> {
             const model::Session s = app_.head();
+            json::Value out = json::Value::object();  // the steps' warnings
             for (const std::string& text : ui_.selectedItems) {
                 const auto id = model::Id::parse(text);
                 const model::Item* it = id ? s.items.find(*id) : nullptr;
@@ -398,8 +403,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                 auto r = dispatcher_.execute(
                     {"take.remove", obj({{"take", it->activeTake->str()}}), kOrigin});
                 if (!r) return r;
+                views::collectWarnings(out, *r);
             }
-            return json::Value::object();
+            return out;
         });
     };
     registry_.add(dropTake);
@@ -409,8 +415,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     removeTracks.description = "Delete every selected track (not the main master), one undo step.";
     removeTracks.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.selectedTracks.empty()) return Error("action.selection", "select tracks first");
-        SUPPLE_TRY(gui::removeTracks(dispatcher_, app_.head(), ui_.selectedTracks));
-        return json::Value::object();
+        json::Value out = json::Value::object();  // the steps' warnings
+        SUPPLE_TRY(gui::removeTracks(dispatcher_, app_.head(), ui_.selectedTracks, &out));
+        return out;
     };
     registry_.add(removeTracks);
     actions::Action duplicateTracks;
@@ -441,8 +448,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.envelopeFocused) return run("ui.env.points.delete");
         if (ui_.clipsFocused) {  // a launcher cell was clicked last: clips or nothing
             const std::vector<std::string> clips = std::exchange(ui_.selectedClips, {});
-            if (auto r = removeClips(dispatcher_, clips); !r) return std::move(r).error();
-            return json::Value::object();
+            json::Value out = json::Value::object();  // the steps' warnings
+            if (auto r = removeClips(dispatcher_, clips, &out); !r) return std::move(r).error();
+            return out;
         }
         return run(ui_.tracksFocused && !ui_.selectedTracks.empty() ? "track.remove:selected"
                                                                     : "item.remove:selected");
@@ -753,12 +761,11 @@ void AppActions::sayModulation(const actions::Action& action, const model::Sessi
         r = views::modulationRefusal(before, action.command, r.error());
         return;
     }
+    // Worded on the session from before, so a route a delete took with it
+    // is named; a builtin action returns its steps' warnings (collectWarnings).
     std::string note;
-    const model::Session after = app_.head();
     auto add = [&](const json::Value& one) {
-        if (const std::string said = views::modulationNote(after, action.command, one);
-            !said.empty())
-            note += (note.empty() ? "" : " ") + said;
+        views::appendModulationNote(note, before, action.command, one);
     };
     if (r->isArray())  // once per selected id
         for (const json::Value& one : r->asArray()) add(one);

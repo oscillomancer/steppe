@@ -27,6 +27,7 @@
 #include "supple/ui/widgets.h"
 #include "supple/views/control_names.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -1945,9 +1946,14 @@ void Mixer::duplicateFx(model::Id fx) {
 void Mixer::removeFx(model::Id fx) {
     json::Value args = json::Value::object();
     args["fx"] = fx.str();
-    if (auto r = dispatcher_.execute({"fx.remove", std::move(args), kOrigin});
-        !r && actions_.onError)
-        actions_.onError("mixer: " + r.error().message);
+    const model::Session before = app_.head();  // names a route that goes with it
+    auto r = dispatcher_.execute({"fx.remove", std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError("mixer: " + r.error().message);
+    } else if (const std::string note = views::modulationNote(before, "fx.remove", *r);
+               !note.empty() && actions_.onNotice) {
+        actions_.onNotice(note);
+    }
 }
 
 // A send's own menu (a right-click on it under the chain).
@@ -1965,9 +1971,14 @@ void Mixer::openSendMenu(model::Id route, ui::Point at) {
 void Mixer::removeSend(model::Id route) {
     json::Value args = json::Value::object();
     args["route"] = route.str();
-    if (auto r = dispatcher_.execute({"route.remove", std::move(args), kOrigin});
-        !r && actions_.onError)
-        actions_.onError("mixer: " + r.error().message);
+    const model::Session before = app_.head();  // names a route that goes with it
+    auto r = dispatcher_.execute({"route.remove", std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError("mixer: " + r.error().message);
+    } else if (const std::string note = views::modulationNote(before, "route.remove", *r);
+               !note.empty() && actions_.onNotice) {
+        actions_.onNotice(note);
+    }
 }
 
 // A name for this instance over its slot; an empty one goes back to the

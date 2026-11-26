@@ -28,8 +28,10 @@ std::optional<std::string> modulationRefusalWords(const model::Session& s, std::
 Error modulationRefusal(const model::Session& s, std::string_view command, Error e);
 
 // One warning's words: `code` at `path` (as the result gives it, under
-// /modulations/<id> or /target) from `command`, read on the session after
-// it. nullopt for a code that is not a modulation warning.
+// /modulations/<id> or /target) from `command`. nullopt for a code that is
+// not a modulation warning. A removed route is named when `s` still holds
+// it (a delete's caller passes the session from before it), else "A
+// modulation route".
 std::optional<std::string> modulationWarningWords(const model::Session& s, std::string_view command,
                                                   std::string_view code, std::string_view path);
 // The status line's note for the modulation warnings in `result` (a
@@ -37,5 +39,13 @@ std::optional<std::string> modulationWarningWords(const model::Session& s, std::
 // then how many more ("and 2 more modulations were not copied").
 std::string modulationNote(const model::Session& s, std::string_view command,
                            const json::Value& result);
+// modulationNote's words for one of a gesture's commands added to `note`
+// (a space between), for a gesture that runs several.
+void appendModulationNote(std::string& note, const model::Session& s, std::string_view command,
+                          const json::Value& result);
+// Adds `result`'s warnings to `into`'s ({"warnings": [...]}; `into` is made
+// an object when it is not one), so a gesture of several commands is
+// noted once.
+void collectWarnings(json::Value& into, const json::Value& result);
 
 }  // namespace supple::views

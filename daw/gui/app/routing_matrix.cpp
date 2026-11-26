@@ -14,6 +14,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/modulation_words.h"
 
 namespace supple::gui {
 namespace {
@@ -1261,14 +1262,27 @@ Status RoutingMatrix::removeSelected() {
             edits.emplace_back("track.set", std::move(args));
         }
     if (edits.empty()) return {};
+    const model::Session before = app_.head();  // names a route that goes with them
+    json::Value warnings = json::Value::object();
     auto r = dispatcher_.transact(edits.size() == 1 ? "Remove send" : "Remove sends", kOrigin,
                                   [&]() -> Result<json::Value> {
-                                      for (auto& [command, args] : edits)
-                                          if (auto e = exec(command, args); !e) return e;
+                                      for (auto& [command, args] : edits) {
+                                          auto e = exec(command, args);
+                                          if (!e) return e;
+                                          views::collectWarnings(warnings, *e);
+                                      }
                                       return json::Value::object();
                                   });
     if (!r) return std::move(r).error();
-    return reload();
+    SUPPLE_TRY(reload());
+    // The modulation routes into a removed send's level (ADR-0096 M5),
+    // after the reload, which rewrites the status.
+    if (const std::string note = views::modulationNote(before, "route.remove", warnings);
+        !note.empty()) {
+        if (status_) status_->setText(note);
+        if (actions_.onNotice) actions_.onNotice(note);
+    }
+    return {};
 }
 
 Status RoutingMatrix::setSends(

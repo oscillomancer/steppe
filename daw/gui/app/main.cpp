@@ -982,9 +982,18 @@ int frontendMain(int argc, char** argv) {
          [&](const std::vector<model::Id>& clips) {
              std::vector<std::string> ids;
              for (model::Id id : clips) ids.push_back(id.str());
-             if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
-                 appActions.onError("Clip launcher: " +
-                                    views::objectNames((*app)->head(), r.error()).message);
+             // A route that went with them is named from the session before.
+             const model::Session before = (*app)->head();
+             json::Value warnings = json::Value::object();
+             if (auto r = gui::removeClips(dispatcher, ids, &warnings); !r) {
+                 if (appActions.onError)
+                     appActions.onError("Clip launcher: " +
+                                        views::objectNames((*app)->head(), r.error()).message);
+             } else if (const std::string note =
+                            views::modulationNote(before, "clip.remove", warnings);
+                        !note.empty()) {
+                 shell.setStatus(note);
+             }
          },
          [&](bool on) {
              if (auto r = shell.capture().set(on); !r && appActions.onError)

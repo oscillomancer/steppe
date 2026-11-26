@@ -54,7 +54,9 @@ struct UiState {
 };
 
 // Removes clips in one undo step (the launcher's Delete).
-Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips);
+// `warnings` (when given) collects the steps' warnings (views::collectWarnings).
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips,
+                   json::Value* warnings = nullptr);
 
 // Pastes the launcher's clipboard from a cell (gui.md §4.15): each clip lands
 // as far from (track, scene) as it was from the copied clips' top-left cell,

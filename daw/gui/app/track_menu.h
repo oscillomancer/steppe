@@ -19,8 +19,9 @@ namespace supple::gui {
 
 // Removes the tracks (a selection) as one undo step: the main master stays,
 // children go before their folders, and any refusal rolls the whole step back.
+// `warnings` (when given) collects the steps' warnings (views::collectWarnings).
 Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
-                    const std::vector<std::string>& tracks);
+                    const std::vector<std::string>& tracks, json::Value* warnings = nullptr);
 
 // Duplicates the tracks (a selection; masters are left out) as one undo step
 // (track.duplicate); the copies' ids, each right after its original. A

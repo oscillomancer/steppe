@@ -377,15 +377,22 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   copied: the copy's track feeds the rack that makes it, so it would loop.
   …"; its rack not in the project; the project full), the first in full
   and then "And 2 more modulations were not copied."; `modulation.removed`
-  "A modulation route went with it." (or "*N* modulation routes went with
-  it."); `modulation.stacked` "The new modulation adds to one already
+  names the route from the session before the command ("The modulation of
+  Hickory's gain went with it."; "A modulation route went with it." where
+  that session no longer holds it), or counts them ("*N* modulation routes
+  went with it."); `modulation.stacked` "The new modulation adds to one already
   there from the same kind of source: their movements add up." They are
   said where the GUI runs those commands: the timeline's gestures (one
   runner for every item edit), the launcher (`ArrangeView::runLauncher`)
   and Capture as scene, the bound actions (Item: split, explode takes),
   track duplication, the clip paste, the capture's commit and the
-  consolidation's job. The route commands (`modulate`, `modulation.*`)
-  keep their own words. A test walks the registry: every code among
+  consolidation's job; and where it deletes what a route reaches: the FX
+  window's and the mixer's Remove (a plug-in), the mixer's and the routing
+  matrix's send removals, Track: delete selected and the track menu's
+  Delete, the launcher's clip deletes (its menu and the Delete key), Item: delete the
+  heard take, render with FX deleting FX, and the rack window's module and
+  rack removals, each gesture noted once (`views::collectWarnings`). The
+  route commands (`modulate`, `modulation.*`) keep their own words. A test walks the registry: every code among
   `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command
   the GUI runs declares has words, and every command declaring one is
   either such a command or listed as one the GUI does not run.

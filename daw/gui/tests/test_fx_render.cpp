@@ -5960,3 +5960,100 @@ TEST_CASE("modulation words: the warnings say which route and why, from the mode
     CHECK(note.find("engine text") == std::string::npos);
     plain(note);
 }
+
+TEST_CASE("modulation words: a delete that takes routes with it names them in a note") {
+    // gui.md §2, "Modulation words" (ADR-0096): a delete whose object a
+    // route reaches removes the route with it (modulation.removed); the
+    // note names the route from the session before the delete, at each
+    // delete path: here the FX window's Remove and Item: remove selected.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto modulatable = [&](model::Id fx) {
+        auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+        REQUIRE(described);
+        std::string key;
+        if ((*described)["params"].isObject())
+            for (const auto& m : (*described)["params"].asObject())
+                if (const json::Value* mod = m.value.find("modulatable");
+                    key.empty() && mod && mod->asBool())
+                    key = m.key;
+        return key;
+    };
+    auto modulate = [&](model::Id fx, const std::string& key) {
+        json::Value target = json::Value::object();
+        target["fx"] = fx.str();
+        target["param"] = key;
+        auto routed = f.run("modulate", f.args({{"target", target}, {"source", "lfo"}}));
+        REQUIRE(routed);
+        return *model::Id::parse((*routed)["modulation"].asString());
+    };
+    // A track's plug-in, removed from the FX window.
+    auto made = f.run("fx.add", f.args({{"track", keys.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = modulatable(fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    const model::Id route = modulate(fx, key);
+    const std::string named = views::objectName(f.app->head(), route);
+    REQUIRE(f.fx->open(keys));
+    f.frame();
+    REQUIRE(f.click("fx.remove." + fx.str()));
+    f.frame();
+    CHECK_FALSE(f.app->head().fx.find(fx));
+    CHECK_FALSE(f.app->head().modulations.find(route));
+    std::string first = named;
+    first[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(first[0])));
+    CHECK(f.fxStatus() == first + " went with it.");
+    CHECK(f.fxStatus().find("mr_") == std::string::npos);
+    CHECK(f.fxStatus().find("fx_") == std::string::npos);
+    // An item whose take's plug-in two routes reach, removed by the action.
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto onTake =
+        f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(onTake);
+    const model::Id takeFx = *model::Id::parse((*onTake)["fx"].asString());
+    (void)modulate(takeFx, key);
+    (void)modulate(takeFx, key);  // stacked: a second route
+    std::vector<std::string> notes;
+    f.actions->onNotice = [&](const std::string& note) { notes.push_back(note); };
+    f.ui.selectedItems = {item};
+    REQUIRE(f.actions->run("item.remove:selected"));
+    CHECK(f.app->head().modulations.size() == 0);
+    REQUIRE_FALSE(notes.empty());
+    CHECK(notes.back() == "2 modulation routes went with it.");
+    // A track whose plug-in a route reaches, removed by Track: delete
+    // selected (a builtin action: its steps' warnings, collected).
+    const model::Id pad = f.addTrack("Pad");
+    auto onPad = f.run("fx.add", f.args({{"track", pad.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(onPad);
+    const model::Id padFx = *model::Id::parse((*onPad)["fx"].asString());
+    const model::Id padRoute = modulate(padFx, key);
+    std::string padNamed = views::objectName(f.app->head(), padRoute);
+    padNamed[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(padNamed[0])));
+    notes.clear();
+    f.ui.selectedTracks = {pad.str()};
+    REQUIRE(f.actions->run("track.remove:selected"));
+    CHECK_FALSE(f.app->head().tracks.find(pad));
+    REQUIRE_FALSE(notes.empty());
+    CHECK(notes.back() == padNamed + " went with it.");
+    // The words: a route the session still holds is named, else said plainly.
+    const model::Session now = f.app->head();
+    CHECK(*views::modulationWarningWords(now, "fx.remove", "modulation.removed",
+                                         "/modulations/" + route.str()) ==
+          "A modulation route went with it.");
+}
