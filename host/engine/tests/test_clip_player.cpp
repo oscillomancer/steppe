@@ -257,6 +257,125 @@ TEST_CASE("a MIDI clip plays its notes by beat from its anchor; a switch ends he
     for (std::int64_t t = 7 * kBeat; t < 10 * kBeat; ++t) REQUIRE(out[std::size_t(t)] == 0.0f);
 }
 
+// Review round 195 F1: a quantized launch's anchor is its boundary rounded
+// to the nearest sample. Where that rounds up (113 BPM: bar 2 at 101946.9,
+// anchor 101947) the clip's note at tick 0 lies just before the block's
+// first frame in beats, and the event search once started there (with a
+// 1e-6 beat slack, far under half a sample): the note was dropped and the
+// clip came in a bar late. Each note sounds once, at its rounded sample,
+// on the track and in a take chain, at any tempo and playrate, in both
+// executors and in the replay of their log at any block size.
+TEST_CASE("a launched MIDI clip's first note sounds at its anchor at any tempo and playrate" *
+          doctest::description("rt")) {
+    // The sine starts each note at phase 0 (a zero frame, then sound): an
+    // onset is the zero frame before sound that follows silence.
+    const auto onsets = [](const std::vector<float>& out, std::size_t from, std::size_t to) {
+        std::vector<std::int64_t> found;
+        std::size_t quiet = 0;
+        for (std::size_t f = from; f < to && f < out.size(); ++f) {
+            if (out[f] == 0.0f) {
+                ++quiet;
+                continue;
+            }
+            if (quiet >= 64) found.push_back(std::int64_t(f - from) - 1);
+            quiet = 0;
+        }
+        return found;
+    };
+    struct Variant {
+        double bpm, rate;
+        bool take;  // the sine in the clip's take chain (else on the track)
+    };
+    std::vector<Variant> variants;
+    for (const double bpm : {113.0, 112.0, 120.0, 121.0, 97.3, 143.7})
+        for (const double rate : {1.0, 0.75, 1.3}) variants.push_back({bpm, rate, false});
+    for (const double bpm : {113.0, 121.0})
+        for (const double rate : {1.0, 0.75}) variants.push_back({bpm, rate, true});
+    constexpr double kSeconds = 8.0;
+    constexpr std::size_t kCompared = std::size_t(kSeconds * 48000) - 4096;
+    constexpr std::size_t kSpan = 2000;  // of each note, under any variant's quarter
+    for (const Variant& v : variants) {
+        INFO(v.bpm << " BPM, playrate " << v.rate
+                   << std::string(v.take ? ", take chain" : ", track"));
+        Project p;
+        p.runArgs("tempo.set",
+                  j(R"({"points": [{"beat": 0, "bpm": )" + std::to_string(v.bpm) + "}]}"));
+        // One bar: a quarter at tick 0, then rests.
+        p.run("clip.add",
+              R"({"track": "tr_1", "scene": "sc_1", "notation": "voice a; 1: C3:q r:q r:h"})");
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+        if (v.take)
+            fx["take"] = takeOf(p, "cl_1");
+        else
+            fx["track"] = "tr_1";
+        p.runArgs("fx.add", fx);
+        if (v.rate != 1.0) {
+            auto rate = j(R"({"preserve_pitch": false})");
+            rate["rate"] = v.rate;
+            p.runArgs("transport.playrate.set", rate);
+        }
+        const model::Session s = p.app->head();
+        // Where bar m's note is heard: its rounded song sample, at the first
+        // device frame whose song position reaches it.
+        const double bar = 4 * 60.0 / v.bpm * 48000;
+        std::vector<double> expected;
+        for (int m = 1; (double(m) * bar) / v.rate + kSpan < double(kCompared); ++m)
+            expected.push_back(std::nearbyint(double(m) * bar) / v.rate);
+        REQUIRE(expected.size() >= 2);
+        const auto heardOnce = [&](const std::vector<float>& out, std::size_t from,
+                                   const std::string& what) {
+            INFO(what);
+            REQUIRE(out.size() >= from + kCompared);
+            const auto got = onsets(out, from, from + kCompared);
+            std::string list;
+            for (const std::int64_t f : got) list += " " + std::to_string(f);
+            INFO("onsets:" << list);
+            REQUIRE(got.size() == expected.size());  // none dropped, none added
+            for (std::size_t i = 0; i < got.size(); ++i) {
+                if (v.rate == 1.0)
+                    CHECK(double(got[i]) == expected[i]);
+                else
+                    CHECK(std::fabs(double(got[i]) - expected[i]) <= 1.0);
+                // Each note once, from phase 0: every span equals the first
+                // (past a clip chain's switch fade-in, which the first takes).
+                // A clip chain under a playrate is resampled from the song's
+                // positions, each note at its own fraction of a frame: its
+                // count, place and the replay's equality say it there.
+                if (v.take && v.rate != 1.0) continue;
+                for (std::size_t k = kFade; k < kSpan; ++k)
+                    REQUIRE(out[from + std::size_t(got[i]) + k] ==
+                            out[from + std::size_t(got[0]) + k]);
+            }
+        };
+        std::vector<LaunchLogEntry> logged;
+        std::vector<float> reference;  // the in-callback log's replay
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative);
+            const Live live =
+                playLive(s, p.app->projectDir(), options, 128,
+                         std::int64_t(kSeconds * 48000) + 8192, {{20, {request("tr_1", "cl_1")}}});
+            REQUIRE(live.log.size() == 1);
+            CHECK(live.log[0].anchorSample == std::int64_t(std::nearbyint(bar)));
+            heardOnce(live.left, live.latency, "live");
+            if (!logged.empty()) {  // the anticipative run: the same log, the same sound
+                CHECK(describe(live.log) == describe(logged));
+                CHECK(maxDiff(live.left, live.latency, reference, kCompared) == 0.0);
+                continue;
+            }
+            logged = live.log;
+            for (const std::uint32_t block : {128u, 512u}) {
+                INFO("replay block " << block);
+                // The render's end is the song's: under a playrate it covers
+                // the compared device frames at kSeconds times the rate.
+                const auto offline = replay(p, kSeconds * std::max(1.0, v.rate), live.log, block);
+                heardOnce(offline, 0, "replay");
+                CHECK(maxDiff(live.left, live.latency, offline, kCompared) == 0.0);
+                if (reference.empty()) reference = offline;
+            }
+        }
+    }
+}
+
 TEST_CASE("the replay does not depend on the block size") {
     Project p;
     p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");

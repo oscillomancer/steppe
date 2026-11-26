@@ -1171,7 +1171,13 @@ void clipMidi(const Plan& p, const ClipPlayer& pl, const LaunchState& L, std::in
     const time::TimeMap& tm = *p.timeMap;
     const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
     const std::int64_t song1 = song0 + frames;
-    const double b0 = tm.beatAt(double(song0 + origin) / p.rate);
+    // The sample decides: an event plays in the block holding its rounded
+    // sample, so the beat search starts a whole sample before song0 (an
+    // event up to half a sample earlier rounds into it: a quantized
+    // launch's anchor, rounded up past its boundary, has its first note
+    // there) and ends at song1 (one rounding to song1 is the next block's).
+    // The margin also covers the beats' floating-point error at the edges.
+    const double b0 = tm.beatAt(double(song0 - 1 + origin) / p.rate);
     const double b1 = tm.beatAt(double(song1 + origin) / p.rate);
     const double period = pl.periodBeats;
     auto kLo = static_cast<std::int64_t>(std::floor((b0 - L.anchorBeat) / period)) - 1;
@@ -1181,13 +1187,11 @@ void clipMidi(const Plan& p, const ClipPlayer& pl, const LaunchState& L, std::in
     const bool before = L.unanchored && !pl.once;
     if (!before) kLo = std::max<std::int64_t>(kLo, 0);
     if (pl.once) kHi = std::min<std::int64_t>(kHi, 0);
-    constexpr double kSlack = 1e-6;  // beats: the sample decides
     for (std::int64_t k = kLo; k <= kHi; ++k) {
         const double base = L.anchorBeat + double(k) * period;
-        const double lo = b0 - base - kSlack;
-        auto it = std::lower_bound(pl.events.begin(), pl.events.end(), lo,
+        auto it = std::lower_bound(pl.events.begin(), pl.events.end(), b0 - base,
                                    [](const ClipEvent& e, double b) { return e.beat < b; });
-        for (; it != pl.events.end() && it->beat <= b1 - base + kSlack; ++it) {
+        for (; it != pl.events.end() && it->beat <= b1 - base; ++it) {
             const std::int64_t at = time::samplesAt(tm.secondsAt(base + it->beat), p.rate) - origin;
             if (at < song0 || at >= song1 || (!before && at < L.anchorSample)) continue;
             host::Event e = it->event;
@@ -1250,7 +1254,6 @@ void rateClipMidi(const Plan& p, const PlayrateTimeline& tl, const ClipPlayer* p
     const bool notes = pl && pl->midi && !pl->muted && !pl->events.empty() && pl->periodBeats > 0;
     const time::TimeMap& tm = *p.timeMap;
     const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
-    constexpr double kSlack = 1e-6;  // beats: the sample decides
     for (std::int64_t c = c0; c <= c1; ++c) {
         std::uint32_t start = 0;
         if (c != c0) {
@@ -1286,8 +1289,11 @@ void rateClipMidi(const Plan& p, const PlayrateTimeline& tl, const ClipPlayer* p
         const bool inclusive = from != ClipWindow::After && c == c0;
         // Before the anchor: unanchored, or a later pass than the output's.
         const bool anywhere = (L.unanchored || c > pass) && !pl->once;
-        const double b0 = tm.beatAt((a + double(origin)) / p.rate);
-        const double b1 = tm.beatAt((b + double(origin)) / p.rate);
+        // The sample decides, (a, b] on the rounded sample: the beat search
+        // reaches a whole sample past both ends (an event up to half a
+        // sample outside rounds in), as clipMidi's.
+        const double b0 = tm.beatAt((a - 1 + double(origin)) / p.rate);
+        const double b1 = tm.beatAt((b + 1 + double(origin)) / p.rate);
         const double period = pl->periodBeats;
         auto kLo = static_cast<std::int64_t>(std::floor((b0 - L.anchorBeat) / period)) - 1;
         auto kHi = static_cast<std::int64_t>(std::floor((b1 - L.anchorBeat) / period)) + 1;
@@ -1295,9 +1301,9 @@ void rateClipMidi(const Plan& p, const PlayrateTimeline& tl, const ClipPlayer* p
         if (pl->once) kHi = std::min<std::int64_t>(kHi, 0);
         for (std::int64_t k = kLo; k <= kHi; ++k) {
             const double base = L.anchorBeat + double(k) * period;
-            auto it = std::lower_bound(pl->events.begin(), pl->events.end(), b0 - base - kSlack,
+            auto it = std::lower_bound(pl->events.begin(), pl->events.end(), b0 - base,
                                        [](const ClipEvent& e, double x) { return e.beat < x; });
-            for (; it != pl->events.end() && it->beat <= b1 - base + kSlack; ++it) {
+            for (; it != pl->events.end() && it->beat <= b1 - base; ++it) {
                 const std::int64_t at =
                     time::samplesAt(tm.secondsAt(base + it->beat), p.rate) - origin;
                 const double x = double(at);

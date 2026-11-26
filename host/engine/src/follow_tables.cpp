@@ -73,7 +73,7 @@ std::optional<ClipFollowTables> tablesFor(const model::Clip& clip, ProjectFollow
 }  // namespace
 
 std::uint16_t FollowRegions::at(double beat) const SUPPLE_RT {
-    constexpr double kSlack = 1e-6;  // beats, as the players' event search
+    constexpr double kSlack = 1e-6;  // beats: a region starting within rounding of `beat` has begun
     const auto it = std::upper_bound(beats.begin(), beats.end(), beat + kSlack);
     return place[static_cast<std::size_t>(it - beats.begin())];
 }
