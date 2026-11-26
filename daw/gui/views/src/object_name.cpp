@@ -46,12 +46,16 @@ double beatOf(const model::Session& s, double pos, model::Timebase timebase) {
     return timebase == model::Timebase::Time ? s.timeMap->beatAt(pos) : pos;
 }
 
-// A parameter's owner and name, as "Bass's volume" or "the cutoff".
+// A parameter's owner and name, as "Bass's volume" or "the cutoff"; a take
+// plug-in's, whose name ends in its item or clip, "the cutoff of Filter on
+// Bass's item at bar 9".
 std::string targetWords(const model::Session& s, const model::EnvTarget& target) {
     const model::Kind kind = target.object.kind;
     const bool named = kind == model::Kind::Track || kind == model::Kind::Take ||
                        kind == model::Kind::Fx || kind == model::Kind::Group;
     const std::string param = target.param.empty() ? std::string("parameter") : target.param;
+    if (kind == model::Kind::Fx && model::takeFxOwner(s, target.object))
+        return "the " + param + " of " + objectName(s, target.object);
     return named ? objectName(s, target.object) + "'s " + param : "the " + param;
 }
 
@@ -161,9 +165,20 @@ std::string objectName(const model::Session& s, model::Id id) {
         case model::Kind::Fx: {
             const model::FxInstance* fx = s.fx.find(id);
             if (!fx) return "a removed plug-in";
-            if (!fx->label.empty()) return fx->label;
-            if (!fx->plugin.name.empty()) return fx->plugin.name;
-            return fx->plugin.id.empty() ? std::string("a plug-in") : fx->plugin.id;
+            const std::string name = !fx->label.empty()         ? fx->label
+                                     : !fx->plugin.name.empty() ? fx->plugin.name
+                                     : fx->plugin.id.empty()    ? std::string("a plug-in")
+                                                                : fx->plugin.id;
+            // A take's plug-in (ADR-0096 M5) by its owner, so a copy's
+            // reads apart from the original's: "Filter on Bass's item at
+            // bar 9", "Filter on Take 2 of Riff" where it has several takes.
+            const auto owner = model::takeFxOwner(s, id);
+            if (!owner) return name;
+            const std::vector<model::Id>* takes = model::ownerTakes(s, owner->owner);
+            const std::string whose = objectName(s, owner->owner);
+            return takes && takes->size() > 1
+                       ? name + " on " + takeLabel(s, owner->take) + " of " + whose
+                       : name + " on " + whose;
         }
         case model::Kind::Route: {
             const model::Route* r = s.routes.find(id);

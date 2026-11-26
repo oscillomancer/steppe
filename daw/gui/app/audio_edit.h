@@ -4,6 +4,7 @@
 #include <cstdio>
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
+#include "supple/views/modulation_words.h"
 
 namespace supple::gui {
 // UI continuations/status for detection/quantize and background item jobs
@@ -60,14 +61,14 @@ class AudioEdit {
     }
     void consolidate(const std::vector<model::Id>& selected) {
         start("item.consolidate", selected,
-              {"", "Consolidating items…", "Items consolidated", "Consolidation cancelled"});
+              {"", "Consolidating items…", "Items consolidated", "Consolidation cancelled", ""});
     }
     // Item: Mix to new track (item.mix-to-track): the result lands muted.
     void mixToTrack(const std::vector<model::Id>& selected) {
         if (selected.empty()) return report("Mix to new track: select items first");
         start("item.mix-to-track", selected,
               {"", "Mixing items to a new track…", "Items mixed to a new muted track",
-               "Mix cancelled"});
+               "Mix cancelled", ""});
     }
     void poll() {
         if (background_) {
@@ -76,10 +77,15 @@ class AudioEdit {
                 report(job.error().toString());
                 background_.reset();
             } else if (job->find("status")->asString() != "running") {
-                if (job->find("status")->asString() == "done")
-                    report(background_->done);
-                else if (const auto* error = job->find("error"))
-                    report(json::writeCanonical(*error));
+                if (job->find("status")->asString() == "done") {
+                    // A route the consolidation could not copy (ADR-0096 M5).
+                    const json::Value* result = job->find("result");
+                    const std::string note =
+                        result ? views::modulationNote(app_.head(), background_->command, *result)
+                               : std::string();
+                    report(note.empty() ? background_->done : background_->done + ". " + note);
+                } else if (const auto* error = job->find("error"))
+                    report(jobRefusal(background_->command, *error));
                 else
                     report(background_->cancelled);
                 background_.reset();
@@ -140,7 +146,20 @@ class AudioEdit {
     // A background item job (consolidate, mix to new track) and its messages.
     struct Background {
         std::string job, running, done, cancelled;
+        std::string command;  // what started it
     };
+    // A job's refusal (its error's JSON): ADR-0096 M5's in the GUI's words
+    // (views::modulationRefusalWords), else as it is.
+    std::string jobRefusal(const std::string& command, const json::Value& error) const {
+        auto text = [&error](const char* key) {
+            const json::Value* v = error.isObject() ? error.find(key) : nullptr;
+            return v && v->isString() ? v->asString() : std::string();
+        };
+        if (auto words = views::modulationRefusalWords(
+                app_.head(), command, Error(text("code"), text("message"), text("path"))))
+            return *words;
+        return json::writeCanonical(error);
+    }
     void start(const char* command, const std::vector<model::Id>& selected, Background messages) {
         if (pending_ || background_) {
             report("An audio edit is already running");
@@ -151,10 +170,12 @@ class AudioEdit {
         for (auto id : selected) args["items"].push_back(id.str());
         auto job = dispatcher_.execute({command, args, origin_});
         if (!job) {
-            report(job.error().toString());
+            const auto words = views::modulationRefusalWords(app_.head(), command, job.error());
+            report(words ? *words : job.error().toString());
             return;
         }
         messages.job = job->find("job")->asString();
+        messages.command = command;
         report(messages.running);
         background_ = std::move(messages);
     }

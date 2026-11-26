@@ -20,6 +20,7 @@
 #include "supple/ui/node.h"
 #include "supple/ui/root.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -56,7 +57,8 @@ const std::vector<std::string>& ClipClipboard::in(std::uint64_t projectGeneratio
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
                                             const std::vector<std::string>& clips,
                                             const std::string& track, const std::string& scene,
-                                            const std::vector<std::string>& channels, bool move) {
+                                            const std::vector<std::string>& channels, bool move,
+                                            std::string* note) {
     if (clips.empty())
         return Error("clip.paste", "no clips are copied", "", "select clips and copy them first");
     std::vector<std::string> scenes;
@@ -129,9 +131,13 @@ Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const m
                 args["clip"] = c.clip;
                 args["track"] = channels[c.row];
                 args["scene"] = scenes[c.column];
-                auto one = dispatcher.execute(
-                    {move ? "clip.move" : "clip.duplicate", std::move(args), origin});
-                if (!one) return one;
+                const char* command = move ? "clip.move" : "clip.duplicate";
+                auto one = dispatcher.execute({command, std::move(args), origin});
+                if (!one) return views::modulationRefusal(s, command, one.error());
+                if (note)
+                    if (const std::string said = views::modulationNote(s, command, *one);
+                        !said.empty())
+                        *note += (note->empty() ? "" : " ") + said;
                 if (move) continue;
                 if (const json::Value* id = one->find("id"); id && id->isString())
                     made.push_back(id->asString());
@@ -415,9 +421,11 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         "one undo step; the copies become the selection.";
     duplicateTracks.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.selectedTracks.empty()) return Error("action.selection", "select tracks first");
-        auto copies = gui::duplicateTracks(dispatcher_, app_.head(), ui_.selectedTracks);
+        std::string note;
+        auto copies = gui::duplicateTracks(dispatcher_, app_.head(), ui_.selectedTracks, &note);
         if (!copies) return std::move(copies).error();
         if (!copies->empty()) ui_.selectedTracks = std::move(*copies);
+        if (!note.empty() && onNotice) onNotice(note);
         return json::Value::object();
     };
     registry_.add(duplicateTracks);
@@ -737,8 +745,32 @@ actions::Context AppActions::context(std::vector<std::string> sections) const {
     return c;
 }
 
+// What ADR-0096 M5 adds to a bound copy or move (Item: split, explode takes,
+// …) in the GUI's words: a refusal's, or the warnings' note.
+void AppActions::sayModulation(const actions::Action& action, const model::Session& before,
+                               Result<json::Value>& r) {
+    if (!r) {
+        r = views::modulationRefusal(before, action.command, r.error());
+        return;
+    }
+    std::string note;
+    const model::Session after = app_.head();
+    auto add = [&](const json::Value& one) {
+        if (const std::string said = views::modulationNote(after, action.command, one);
+            !said.empty())
+            note += (note.empty() ? "" : " ") + said;
+    };
+    if (r->isArray())  // once per selected id
+        for (const json::Value& one : r->asArray()) add(one);
+    else
+        add(*r);
+    if (!note.empty() && onNotice) onNotice(note);
+}
+
 Result<json::Value> AppActions::run(const actions::Action& action, const json::Value& prompted) {
+    const model::Session before = app_.head();
     auto r = runner_.run(action, context(), prompted);
+    sayModulation(action, before, r);
     if (!r && onError) onError(action.name + ": " + r.error().message);
     return r;
 }
@@ -750,7 +782,9 @@ Result<json::Value> AppActions::run(std::string_view id) {
 }
 
 void AppActions::invoke(const actions::Action& action) {
+    const model::Session before = app_.head();
     auto r = runner_.run(action, context());
+    sayModulation(action, before, r);
     if (!r && r.error().code == "action.prompt" && onPrompt) {
         onPrompt(action);
         return;

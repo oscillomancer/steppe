@@ -29,7 +29,9 @@ namespace supple::views {
 // - a marker: its name, else "the marker at bar N";
 // - a tempo or meter change, a key or chord point: "the tempo change at bar
 //   N", "the meter change at bar N", "the key (chord) at bar N";
-// - a plug-in: its label, else the plug-in's name;
+// - a plug-in: its label, else the plug-in's name; a take's, then "on" its
+//   item or clip ("Filter on Bass's item at bar 9", "Filter on Take 2 of
+//   Riff" where it has several takes);
 // - a send: "the send from <track> to <track>";
 // - a group: its name, else "Group N" by its place among the groups;
 // - a rack: model::rackLabel; a module: its label, else its plug-in's name

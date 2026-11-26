@@ -45,6 +45,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 using namespace supple;
@@ -5753,4 +5754,209 @@ TEST_CASE("a take's FX: Modulate leaves out its own track, and an unheard take's
     REQUIRE(f.run("take.activate", f.args({{"item", item}, {"take", take.str()}})));
     REQUIRE(f.run("item.set", f.args({{"item", item}, {"mute", true}})));
     CHECK(idleRow() == "Modulation idle: its item is muted");
+}
+
+TEST_CASE("modulation words: each M5 code a command the GUI runs declares has the GUI's words") {
+    // gui.md §2, "Modulation words" (ADR-0096 M5): the registry gives each
+    // command's declared codes; every one among modulation.limit,
+    // modulation.cycle and item.heal_fx on a command the GUI runs has words
+    // keyed on the command, the code and the path, with no engine message,
+    // hint, code, command name, path or id. A command that declares one and
+    // is in neither list fails here until it is placed in one.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    // The commands the GUI runs that copy, move or join takes, each with the
+    // argument a copy's limit refusal is at (session-model, "the argument
+    // that names what a command copies").
+    const std::map<std::string, std::string> runs{{"item.paste", "/items"},
+                                                  {"item.duplicate", "/item"},
+                                                  {"item.split", "/item"},
+                                                  {"item.consolidate", "/items"},
+                                                  {"item.add", "/clip"},
+                                                  {"clip.add", "/item"},
+                                                  {"clip.duplicate", "/clip"},
+                                                  {"clip.move", ""},
+                                                  {"scene.capture", "/region"},
+                                                  {"scene.insert", "/scene"},
+                                                  {"arrangement.build", "/sequence"},
+                                                  {"track.duplicate", "/tracks"},
+                                                  {"launch.commit", "/performance"},
+                                                  {"item.move", ""},
+                                                  {"take.extract", ""},
+                                                  {"item.explode-takes", ""},
+                                                  {"item.heal", ""}};
+    // Those that declare one and the GUI does not run with routes to copy:
+    // take.add {from} only in the --generate demo, the consolidation's commit
+    // inside its job (its refusal is the job's, said as item.consolidate's),
+    // and the route commands, which keep their own words.
+    const std::set<std::string> notRun{"take.add", "item.consolidate.commit", "modulate",
+                                       "modulation.add", "modulation.set"};
+    const std::set<std::string> m5{"modulation.limit", "modulation.cycle", "item.heal_fx"};
+    const char* text = "engine text tr_3 it_4";
+    const char* hint = "a hint for command callers";
+    const model::Session s = f.app->head();
+    std::set<std::string> worded;
+    for (const cmd::CommandInfo* command : f.registry.all()) {
+        bool declares = false;
+        for (const cmd::ErrorSpec& e : command->errors) declares |= m5.contains(e.code);
+        if (!declares) continue;
+        INFO(command->name);
+        const bool runByGui = runs.contains(command->name);
+        CHECK((runByGui || notRun.contains(command->name)));
+        if (!runByGui) continue;
+        for (const cmd::ErrorSpec& e : command->errors) {
+            if (!m5.contains(e.code)) continue;
+            const std::string path = e.code == "modulation.limit" ? runs.at(command->name)
+                                     : e.code == "item.heal_fx"   ? "/items"
+                                     : command->name == "item.explode-takes" ? "/item"
+                                                                             : "/track";
+            INFO(e.code << " at " << path);
+            const auto words = views::modulationRefusalWords(
+                s, command->name, Error(e.code, text, "/args" + path, hint));
+            REQUIRE(words);
+            CHECK_FALSE(words->empty());
+            CHECK(words->find("engine text") == std::string::npos);
+            CHECK(words->find(hint) == std::string::npos);
+            CHECK(words->find("modulation.") == std::string::npos);  // no code or command
+            CHECK(words->find(command->name) == std::string::npos);
+            CHECK(words->find("/args") == std::string::npos);
+            CHECK(words->find("tr_") == std::string::npos);
+            CHECK(words->find("it_") == std::string::npos);
+            // The remedy names what the GUI offers.
+            CHECK(words->find("Remove modulation") != std::string::npos);
+            // modulationRefusal puts the words in and takes the hint out.
+            const Error said = views::modulationRefusal(s, command->name,
+                                                        Error(e.code, text, "/args" + path, hint));
+            CHECK(said.message == *words);
+            CHECK(said.hint.empty());
+            worded.insert(command->name + " " + e.code);
+        }
+    }
+    // Every copy declares the limit, every move the cycle, the join its own.
+    for (const char* copy :
+         {"item.paste", "item.duplicate", "item.split", "item.consolidate", "item.add", "clip.add",
+          "clip.duplicate", "scene.capture", "scene.insert", "arrangement.build", "track.duplicate",
+          "launch.commit"})
+        CHECK_MESSAGE(worded.contains(std::string(copy) + " modulation.limit"), copy);
+    for (const char* move : {"item.move", "clip.move", "take.extract", "item.explode-takes"})
+        CHECK_MESSAGE(worded.contains(std::string(move) + " modulation.cycle"), move);
+    CHECK(worded.contains("item.heal item.heal_fx"));
+    // Any other code keeps its caller's words; so do the route commands.
+    CHECK_FALSE(
+        views::modulationRefusalWords(s, "item.paste", Error("item.locked", text, "/args")));
+    CHECK_FALSE(views::modulationRefusalWords(s, "modulate",
+                                              Error("modulation.cycle", text, "/args/target")));
+    CHECK(
+        views::modulationRefusal(s, "item.paste", Error("item.locked", text, "/args", hint)).hint ==
+        hint);
+}
+
+TEST_CASE("modulation words: the warnings say which route and why, from the model") {
+    // gui.md §2 (ADR-0096 M5): warnings have no registry; session-model
+    // lists modulation.not_copied, modulation.stacked and
+    // modulation.removed. Each has words at its path for every copying
+    // command, and the note says the first in full and counts the rest.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    auto routed = f.run("modulate", f.args({{"target", target}, {"source", "lfo"}}));
+    REQUIRE(routed);
+    const std::string route = (*routed)["modulation"].asString();
+    const model::Session s = f.app->head();
+    // The take's plug-in is named by its item, and so is the route.
+    CHECK(views::objectName(s, fx) ==
+          "Hickory on " + views::objectName(s, *model::Id::parse(item)));
+    const auto plain = [](const std::string& words) {
+        CHECK(words.find("tr_") == std::string::npos);
+        CHECK(words.find("it_") == std::string::npos);
+        CHECK(words.find("fx_") == std::string::npos);
+        CHECK(words.find("mr_") == std::string::npos);
+        CHECK(words.find("md_") == std::string::npos);
+        CHECK(words.find("modulation.") == std::string::npos);
+        CHECK(words.find("/modulations") == std::string::npos);
+    };
+    for (const char* command :
+         {"item.paste", "item.duplicate", "item.split", "item.consolidate", "item.add", "clip.add",
+          "clip.duplicate", "scene.capture", "scene.insert", "arrangement.build", "track.duplicate",
+          "launch.commit"}) {
+        INFO(command);
+        // The route still here with its rack: the copy would have looped.
+        const auto looped = views::modulationWarningWords(s, command, "modulation.not_copied",
+                                                          "/modulations/" + route);
+        REQUIRE(looped);
+        CHECK(looped->starts_with("The modulation of the "));
+        CHECK(looped->find("Hickory on ") != std::string::npos);
+        CHECK(looped->find("would loop") != std::string::npos);
+        plain(*looped);
+        // A route of a retained version, gone here: its rack is not here.
+        const auto gone = views::modulationWarningWords(s, command, "modulation.not_copied",
+                                                        "/modulations/mr_999");
+        REQUIRE(gone);
+        CHECK(gone->starts_with("A modulation was not copied: its rack is not in the project"));
+        plain(*gone);
+        for (const char* other : {"modulation.removed", "modulation.stacked"}) {
+            const auto words = views::modulationWarningWords(s, command, other, "/target");
+            REQUIRE(words);
+            plain(*words);
+        }
+        CHECK_FALSE(views::modulationWarningWords(s, command, "take.comp_short", "/spans/0"));
+    }
+    // The note: the first not copied in full, then the count; the removed
+    // counted; another command's warnings left to it.
+    json::Value result = json::Value::object(), warnings = json::Value::array();
+    auto warn = [&](const char* code, const std::string& path) {
+        json::Value w = json::Value::object();
+        w["code"] = code;
+        w["message"] = "engine text";
+        w["path"] = path;
+        warnings.push_back(std::move(w));
+    };
+    CHECK(views::modulationNote(s, "item.paste", result).empty());
+    warn("take.comp_short", "/spans/0");
+    result["warnings"] = warnings;
+    CHECK(views::modulationNote(s, "item.paste", result).empty());
+    for (int i = 0; i < 3; ++i) warn("modulation.not_copied", "/modulations/" + route);
+    warn("modulation.removed", "/modulations/mr_998");
+    warn("modulation.removed", "/modulations/mr_997");
+    result["warnings"] = warnings;
+    const std::string note = views::modulationNote(s, "item.paste", result);
+    CHECK(note.starts_with(*views::modulationWarningWords(s, "item.paste", "modulation.not_copied",
+                                                          "/modulations/" + route)));
+    CHECK(note.find("And 2 more modulations were not copied.") != std::string::npos);
+    CHECK(note.find("2 modulation routes went with it.") != std::string::npos);
+    CHECK(note.find("engine text") == std::string::npos);
+    plain(note);
 }

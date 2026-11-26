@@ -355,6 +355,40 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   (Modulators) · Mod 2", and two racks that read the same (a name given
   twice, two unnamed racks on one track) then add each rack's place among
   the racks so named, "· Mod 1 · rack 2".
+  **Modulation words** (ADR-0096 M5, `views::modulation_words.h`). What M5
+  adds to the commands that copy, move or join takes reaches the user in
+  the GUI's own words, keyed on the command, the code and the path, never
+  the engine's message, its hint, a command's name or an id
+  (`views::modulationRefusal`, `views::modulationNote`). The refusals:
+  `modulation.limit` from a copy ("Pasting would make more than 4096
+  modulation routes, the most a project holds. Remove some first (Remove
+  modulation in the plug-in parameter's menu); a copied chain brings its
+  routes with it.", the verb by command), `modulation.cycle` from a move
+  ("Moving the item there would loop its modulation: that track feeds the
+  rack that modulates the take's plug-ins. Choose another track, or remove
+  the modulation first (…)"; for **Explode takes** onto new tracks it
+  offers exploding in sequence), and `item.heal_fx` from **Heal splits**
+  ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
+  them match (…), or consolidate them instead."). The warnings, which have
+  no registry (session-model lists them), go to the status line as a note
+  after the command went ahead: `modulation.not_copied` names the route
+  and says why, read from the model since the warning carries no reason
+  ("The modulation of the cutoff of Filter on Bass's item at bar 9 was not
+  copied: the copy's track feeds the rack that makes it, so it would loop.
+  …"; its rack not in the project; the project full), the first in full
+  and then "And 2 more modulations were not copied."; `modulation.removed`
+  "A modulation route went with it." (or "*N* modulation routes went with
+  it."); `modulation.stacked` "The new modulation adds to one already
+  there from the same kind of source: their movements add up." They are
+  said where the GUI runs those commands: the timeline's gestures (one
+  runner for every item edit), the launcher (`ArrangeView::runLauncher`)
+  and Capture as scene, the bound actions (Item: split, explode takes),
+  track duplication, the clip paste, the capture's commit and the
+  consolidation's job. The route commands (`modulate`, `modulation.*`)
+  keep their own words. A test walks the registry: every code among
+  `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command
+  the GUI runs declares has words, and every command declaring one is
+  either such a command or listed as one the GUI does not run.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
@@ -475,7 +509,7 @@ everywhere:
 | Section or range | "the section (range) at bar *N*" |
 | Marker | "the marker at bar *N*" |
 | Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
-| Plug-in | its plug-in's name |
+| Plug-in | its plug-in's name; a take's (named or not) then "on" its item or clip, "Filter on Bass's item at bar 9", or "Filter on Take 2 of Riff" when it has several takes (ADR-0096 M5), so a copy's reads apart from the original's |
 | Send | "the send from *track* to *track*" |
 | Group | "Group *N*", by its place among the groups: also on the mixer's group tab (the number alone, "2", when the tab is too narrow for "Group 2"; a named group's tab elides), the VCA strip, a group envelope's lane title and MIDI learn ("Group 2 VCA"); the rename field starts empty |
 | Rack, module | its rack's label; its plug-in's or type's name |

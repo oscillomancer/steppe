@@ -951,6 +951,9 @@ Mixer::Mixer(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                      args["track"] = track.str();
                      if (auto r = actions_.run(*a, args); !r && actions_.onError)
                          actions_.onError(r.error().message);
+                 },
+                 [this](const std::string& note) {
+                     if (actions_.onNotice) actions_.onNotice(note);
                  }} {
     actions_.addUi("ui.mixer", "View: mixer", [this] { toggle(); });
 }

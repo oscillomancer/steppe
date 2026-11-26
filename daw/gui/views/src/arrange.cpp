@@ -5,6 +5,7 @@
 #include "supple/views/chord_field.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/session_changes.h"
 
 #include <SDL3/SDL.h>
@@ -767,10 +768,19 @@ class Ruler : public ui::Node {
                         json::Value args = json::Value::object();
                         args["region"] = id.str();
                         if (!callbacks.run) return;
-                        // Its refusal names what is in the way, as the pane's do.
-                        if (auto r = callbacks.run("scene.capture", std::move(args));
-                            !r && callbacks.onError)
-                            callbacks.onError(objectNames(view_.session(), r.error()));
+                        // Its refusal names what is in the way, as the pane's do;
+                        // a route the capture cannot copy is a note (ADR-0096 M5).
+                        const model::Session before = view_.session();
+                        auto r = callbacks.run("scene.capture", std::move(args));
+                        if (!r && callbacks.onError)
+                            callbacks.onError(objectNames(
+                                before, modulationRefusal(before, "scene.capture", r.error())));
+                        if (r)
+                            if (const auto& notice = view_.launcherCallbacks().onNotice)
+                                if (const std::string mod =
+                                        modulationNote(view_.session(), "scene.capture", *r);
+                                    !mod.empty())
+                                    notice(mod);
                     });
                 break;
             }
@@ -1828,13 +1838,22 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
     const bool lays =
         command == "item.add" || command == "scene.insert" || command == "arrangement.build";
     const json::Value asked = lays ? args : json::Value();
+    const model::Session before = session();
     auto r = launcherCallbacks_.run(command, std::move(args));
-    // Refusals reach the user with names, not ids (objectNames).
+    // Refusals reach the user with names, not ids (objectNames), and what
+    // ADR-0096 M5 adds to a copy or a move in the GUI's words.
     if (!r && launcherCallbacks_.onError)
-        launcherCallbacks_.onError(objectNames(session(), r.error()));
-    if (r && lays && launcherCallbacks_.onNotice)
-        if (const auto notice = followNotice(session(), command, asked, *r))
-            launcherCallbacks_.onNotice(*notice);
+        launcherCallbacks_.onError(
+            objectNames(before, modulationRefusal(before, command, r.error())));
+    if (r && launcherCallbacks_.onNotice) {
+        std::string notice;
+        if (lays)
+            if (const auto followed = followNotice(session(), command, asked, *r))
+                notice = *followed;
+        if (const std::string mod = modulationNote(session(), command, *r); !mod.empty())
+            notice += (notice.empty() ? "" : " ") + mod;
+        if (!notice.empty()) launcherCallbacks_.onNotice(notice);
+    }
     return r;
 }
 void ArrangeView::setCaptureArmed(bool armed) {

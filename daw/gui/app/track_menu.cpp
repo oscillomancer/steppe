@@ -12,6 +12,7 @@
 #include "supple/model/objects.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 namespace supple::gui {
@@ -48,7 +49,8 @@ Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
 
 Result<std::vector<std::string>> duplicateTracks(cmd::Dispatcher& dispatcher,
                                                  const model::Session& session,
-                                                 const std::vector<std::string>& tracks) {
+                                                 const std::vector<std::string>& tracks,
+                                                 std::string* note) {
     json::Value ids = json::Value::array();
     for (const std::string& text : tracks) {
         const auto id = model::Id::parse(text);
@@ -61,7 +63,8 @@ Result<std::vector<std::string>> duplicateTracks(cmd::Dispatcher& dispatcher,
     args["tracks"] = std::move(ids);
     auto r = dispatcher.execute(
         {"track.duplicate", std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
-    if (!r) return std::move(r).error();
+    if (!r) return views::modulationRefusal(session, "track.duplicate", r.error());
+    if (note) *note = views::modulationNote(session, "track.duplicate", *r);
     for (const json::Value& id : (*r)["tracks"].asArray()) copies.push_back(id.asString());
     return copies;
 }
@@ -149,12 +152,14 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
         copied.size() > 1 ? "Duplicate " + std::to_string(copied.size()) + " tracks" : "Duplicate";
     m.enabled = !copied.empty();  // masters are not duplicated
     m.run = [this, copied] {
-        auto r = duplicateTracks(dispatcher, app.head(), copied);
+        std::string note;
+        auto r = duplicateTracks(dispatcher, app.head(), copied, &note);
         if (!r) {
             if (onError) onError(r.error().message);
-        } else if (select) {
-            select(std::move(*r));
+            return;
         }
+        if (select) select(std::move(*r));
+        if (!note.empty() && onNotice) onNotice(note);
     };
     items.push_back(std::move(m));
     std::erase(doomed, model::kMaster.str());

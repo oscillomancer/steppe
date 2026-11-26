@@ -11,6 +11,7 @@
 
 #include "supple/model/schemas.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 namespace supple::gui {
@@ -69,6 +70,9 @@ std::string CaptureControl::refusalWords(const Error& e) {
         return e.path.size() >= tail.size() &&
                e.path.compare(e.path.size() - tail.size(), tail.size(), tail) == 0;
     };
+    // The copy's routes past the project's limit (ADR-0096 M5); the status
+    // line says it in full (views::modulationRefusal).
+    if (e.code == "modulation.limit") return "it would make too many modulation routes";
     if (e.code == "item.locked") {
         // The launch whose stretch met it (/performance/launches/N) names the
         // track; the one locked item there under the take names the place.
@@ -209,7 +213,9 @@ Error CaptureControl::keep(Error refusal) {
     armed_ = capturing_ = false;
     refusal_ = refusalWords(refusal);
     refused_ = true;
-    refusal = views::objectNames(app_.head(), std::move(refusal));
+    refusal = views::objectNames(
+        app_.head(), views::modulationRefusal(app_.head(), "launch.commit", std::move(refusal)));
+    if (refusal.message.ends_with('.')) refusal.message.pop_back();  // the GUI's sentence
     refusal.message += "; the performance is kept: fix that, then click Capture to commit it";
     return refusal;
 }
@@ -332,6 +338,9 @@ Status CaptureControl::commit() {
     if (const auto notice =
             views::followNotice(app_.head(), "launch.commit", json::Value::object(), *r))
         said += (said.empty() ? "" : " ") + *notice;
+    if (const std::string mod = views::modulationNote(app_.head(), "launch.commit", *r);
+        !mod.empty())
+        said += (said.empty() ? "" : " ") + mod;
     if (onNotice && !said.empty()) onNotice(said);
     // Stopped (a commit at stop, or the toggle turned off while stopped):
     // every track returns to the arrangement where playing starts, so play

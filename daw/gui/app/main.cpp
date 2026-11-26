@@ -80,6 +80,7 @@
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "sync_dialog.h"
 #include "take_follow.h"
 #include "timecode_dialog.h"
@@ -852,11 +853,15 @@ int frontendMain(int argc, char** argv) {
         else
             std::fprintf(stderr, "mouse: %s (using the defaults)\n",
                          mouse.error().toString().c_str());
-        g.run = [&dispatcher, &app, ui](
+        g.run = [&dispatcher, &app, &shell, ui](
                     const std::string& label,
                     const std::vector<views::EditStep>& steps) -> Result<json::Value> {
-            return dispatcher.transact(label, ui, [&]() -> Result<json::Value> {
-                const auto before = (*app)->view();
+            // What ADR-0096 M5 adds to a copy, a move or a join, in the GUI's
+            // words: a refusal's (views::modulationRefusal), and the steps'
+            // warnings as the status line's note (views::modulationNote).
+            std::string note;
+            const auto before = (*app)->view();
+            auto ran = dispatcher.transact(label, ui, [&]() -> Result<json::Value> {
                 std::map<std::string, std::set<model::Id>> explicitItems;
                 for (const auto& step : steps)
                     if (const auto* item = step.args.find("item"); item && item->isString())
@@ -898,12 +903,18 @@ int frontendMain(int argc, char** argv) {
                                     value = *v;
                         }
                     auto r = dispatcher.execute({step.command, step.args, ui});
-                    if (!r) return r;
+                    if (!r) return views::modulationRefusal(before, step.command, r.error());
+                    if (const std::string said =
+                            views::modulationNote((*app)->view(), step.command, *r);
+                        !said.empty())
+                        note += (note.empty() ? "" : " ") + said;
                     results.push_back(std::move(*r));
                 }
                 return results.empty() ? json::Value::object()
                                        : results.back();  // the last step's result
             });
+            if (ran && !note.empty()) shell.setStatus(note);
+            return ran;
         };
         g.onSelection = [&](const std::vector<model::Id>& items) {
             uiState.selectedItems.clear();
@@ -1069,12 +1080,14 @@ int frontendMain(int argc, char** argv) {
                 channels.push_back(row.track.str());
         gui::ClipClipboard& board = uiState.clipClipboard;
         const std::vector<std::string> clips = board.in((*app)->projectGeneration());
+        std::string note;
         auto made = gui::pasteClips(dispatcher, (*app)->head(), clips, cell->track.str(),
-                                    cell->scene.str(), channels, board.cut);
+                                    cell->scene.str(), channels, board.cut, &note);
         if (!made) {
             if (appActions.onError) appActions.onError("Clip launcher: " + made.error().message);
             return;
         }
+        if (!note.empty()) shell.setStatus(note);
         if (board.cut) board = {};  // the clips have moved
         std::vector<model::Id> ids;
         for (const std::string& id : *made)

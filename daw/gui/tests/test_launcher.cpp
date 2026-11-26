@@ -3364,3 +3364,78 @@ TEST_CASE("launcher: a clip whose active take's FX is modulated carries the mark
     marks();
     f.snapshot("launcher-modulated-clip.png");
 }
+
+TEST_CASE(
+    "launcher: a copy or a move that would loop a clip's modulation says so in the GUI's words") {
+    // gui.md §2, "Modulation words" (ADR-0096 M5): onto the track a
+    // follower modulating the clip's take FX hears, a copy goes ahead
+    // without the route (modulation.not_copied, a note) and a move is
+    // refused (modulation.cycle), each in the GUI's words through
+    // runLauncher.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.view->launcherShown());
+    const model::Id clipId = *model::Id::parse("cl_3");
+    const model::Clip& clip = *f.app->head().clips.find(clipId);
+    const std::string take = clip.activeTake->str();
+    // Drums, and a scene where its cell is empty.
+    const model::Session at = f.app->head();
+    std::string drums, scene;
+    for (const auto& t : at.tracks)
+        if (t.value->name == "Drums") drums = t.id.str();
+    REQUIRE_FALSE(drums.empty());
+    for (const auto& sc : at.scenes) {
+        bool taken = false;
+        for (const auto& c : at.clips)
+            taken |= c.value->track.str() == drums && c.value->scene == sc.id;
+        if (!taken) scene = sc.id.str();
+    }
+    REQUIRE_FALSE(scene.empty());
+    const std::string fx =
+        f.exec("fx.add", R"({"take":")" + take + R"(","plugin":"Hickory"})")["fx"].asString();
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    std::string param;
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    // A follower listening to Drums: its rack hears Drums.
+    (void)f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + param +
+                                 R"("},"source":"follower","from":")" + drums + R"("})");
+    const std::string home = drums;
+    f.notices.clear();
+    f.errors.clear();
+    // A copy there: made, without the route, and the note says why.
+    auto copied = f.view->runLauncher(
+        "clip.duplicate",
+        json::parse(R"({"clip":"cl_3","track":")" + home + R"(","scene":")" + scene + R"("})")
+            .value());
+    if (!copied) {
+        MESSAGE("the copy was refused: " << copied.error().toString());
+        FAIL("clip.duplicate onto the rack's track");
+    }
+    REQUIRE_FALSE(f.notices.empty());
+    INFO(f.notices.back());
+    CHECK(f.notices.back().find("was not copied") != std::string::npos);
+    CHECK(f.notices.back().find("would loop") != std::string::npos);
+    CHECK(f.notices.back().find("mr_") == std::string::npos);
+    CHECK(f.notices.back().find("fx_") == std::string::npos);
+    // A move there: refused, in the GUI's words, nothing changed.
+    f.exec("history.undo", "{}");
+    const auto version = f.app->head().version;
+    auto moved = f.view->runLauncher("clip.move", json::parse(R"({"clip":"cl_3","track":")" + home +
+                                                              R"(","scene":")" + scene + R"("})")
+                                                      .value());
+    CHECK_FALSE(moved);
+    REQUIRE_FALSE(f.errors.empty());
+    INFO(f.errors.back().message);
+    CHECK(f.errors.back().code == "modulation.cycle");
+    CHECK(f.errors.back().message.starts_with("Moving the clip there would loop its modulation"));
+    CHECK(f.errors.back().hint.empty());
+    CHECK(f.app->head().version == version);
+}

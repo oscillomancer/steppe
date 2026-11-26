@@ -265,7 +265,8 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
             json::Value args = json::Value::object();
             args["track"] = track.str();
             if (auto r = actions_->run(*a, args); !r && onError) onError(r.error().message);
-        }});
+        },
+        [this](const std::string& note) { setStatus(note); }});
     tcp.mixer = [&actions] { (void)actions.run("ui.mixer"); };
     tcp.menu = [this](const model::Id& track, const ui::Rect& anchor,
                       std::function<void()> rename) {
