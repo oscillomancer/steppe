@@ -144,7 +144,7 @@ std::string bakeFingerprint(const model::Session& s, const std::vector<Id>& item
     if (!plan) return out + ";" + plan.error().code;
     auto view = mixView(s, *plan, std::set<Id>(items.begin(), items.end()));
     if (!view) return out + ";" + view.error().code;
-    return out + ";" + upstreamFingerprint(view->first, view->second);
+    return out + ";" + upstreamFingerprint(view->first, view->second, &s);
 }
 
 struct Artifact {

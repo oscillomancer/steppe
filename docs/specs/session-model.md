@@ -2308,8 +2308,13 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
       Follower's or a sidechain's source track too), with their chains,
       items, takes, sources, modules, cables, modulation routes, the
       envelopes and automation items on those, their tracks' groups, and
-      the project, tempo, meters and harmonic context. IDs are renumbered
-      in order.
+      the project, tempo, meters and harmonic context, and the warp peers
+      of its takes (their takes, items and media), which the render reads
+      from the whole session. IDs keep their spelling, but those the view
+      made itself (the mix's buss and its routes, whose numbers follow
+      counters an unrelated creation moves) are hashed in a range no
+      project reaches, so no ID left as written can share a spelling with
+      one renumbered (review round 193 R1).
     - So an LFO's rate on another channel, or an edit to a followed track,
       makes it stale (`item.consolidate_stale`, `item.mix_stale`). An edit
       to a track outside that closure does not, and a test pins both.

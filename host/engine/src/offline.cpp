@@ -162,7 +162,7 @@ Session upstreamSession(const Session& source, Id target) {
 }
 }  // namespace
 
-std::string upstreamFingerprint(const Session& source, Id target) {
+std::string upstreamFingerprint(const Session& source, Id target, const Session* original) {
     const Session s = upstreamSession(source, target);
     std::set<Id> ids;
     for (const auto& e : s.tracks) {
@@ -199,9 +199,39 @@ std::string upstreamFingerprint(const Session& source, Id target) {
         if (ids.count(e.value->target.object)) ids.insert(e.id);
     for (const auto& e : s.autoItems)
         if (ids.count(e.value->envelope)) ids.insert(e.id);
+    // The warp peers of each kept take, which the render reads from the
+    // whole view (a bundle shares its synthesis): their takes, items and
+    // media, so a peer's edit shows by construction (review round 193 S1).
+    std::set<Id> peers;
+    for (const auto& e : s.takes)
+        if (ids.count(e.id))
+            for (Id peer : e.value->warpPeers)
+                if (!ids.count(peer) && source.takes.contains(peer)) peers.insert(peer);
+    for (const auto& e : source.items)
+        for (Id take : e.value->takes)
+            if (peers.count(take)) peers.insert(e.id);
+    for (const auto& e : source.takes)
+        if (peers.count(e.id) && e.value->source) peers.insert(*e.value->source);
+    // IDs keep their spelling, but those the private view made itself
+    // (mixView's buss and its routes, absent from `original`), whose numbers
+    // follow counters that unrelated creations move: they take a range no
+    // project reaches, so nothing renumbered can share a spelling with an
+    // ID left as written (review round 193 R1).
     std::map<Id, Id> remap;
-    model::Counters counters;
-    for (Id id : ids) remap[id] = Id{id.kind, ++counters[id.kind]};
+    if (original) {
+        model::Counters made;
+        const auto exists = [&](Id id) {
+            return original->tracks.contains(id) || original->routes.contains(id) ||
+                   original->fx.contains(id) || original->envelopes.contains(id) ||
+                   original->items.contains(id) || original->takes.contains(id) ||
+                   original->media.contains(id) || original->midi.contains(id) ||
+                   original->groups.contains(id) || original->autoItems.contains(id) ||
+                   original->racks.contains(id) || original->modules.contains(id) ||
+                   original->cables.contains(id) || original->modulations.contains(id);
+        };
+        for (Id id : ids)
+            if (!exists(id)) remap[id] = Id{id.kind, 0x40000000u + ++made[id.kind]};
+    }
     json::Value value = json::Value::object();
     value["project"] = model::toJson(*s.project);
     const auto every = [&](const char* key, const auto& objects) {
@@ -225,8 +255,16 @@ std::string upstreamFingerprint(const Session& source, Id target) {
                         if (ids.count(child)) kept.push_back(child.str());
                     one["children"] = std::move(kept);
                 }
-                objects.push_back(remap.at(e.id).str());
+                const auto to = remap.find(e.id);
+                objects.push_back((to == remap.end() ? e.id : to->second).str());
                 objects.push_back(model::remapIds(one, model::schemaOf<T>().jsonSchema(), remap));
+            }
+    };
+    const auto appendPeers = [&](const auto& map) {
+        for (const auto& e : map)
+            if (peers.count(e.id)) {
+                objects.push_back(e.id.str());
+                objects.push_back(model::toJson(*e.value));
             }
     };
     append(s.tracks);
@@ -243,6 +281,9 @@ std::string upstreamFingerprint(const Session& source, Id target) {
     append(s.modules);
     append(s.cables);
     append(s.modulations);
+    appendPeers(source.items);
+    appendPeers(source.takes);
+    appendPeers(source.media);
     value["objects"] = std::move(objects);
     return "sha256:" + sha256Hex(json::writeCompact(value));
 }
