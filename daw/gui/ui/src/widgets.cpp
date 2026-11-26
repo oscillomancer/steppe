@@ -26,10 +26,24 @@ void Label::setText(std::string text) {
     if (layout.width.kind == SizeRule::Kind::Content) relayout();
 }
 
+void Label::setMark(std::string mark, std::string token) {
+    if (mark == mark_ && token == markColor_) return;
+    mark_ = std::move(mark);
+    markColor_ = std::move(token);
+    invalidate();
+    if (layout.width.kind == SizeRule::Kind::Content) relayout();
+}
+
+namespace {
+constexpr float kMarkGap = 4;  // between a label's text and its mark
+}
+
 Size Label::measure(const Canvas& canvas, Size) {
     const float size = canvas.theme().type(size_);
     const Insets& p = layout.padding;
-    return {canvas.textWidth(text_, font_, size) + p.left + p.right,
+    const float mark =
+        mark_.empty() ? 0.0f : canvas.textWidth(mark_, Font::UiBold, size) + kMarkGap;
+    return {canvas.textWidth(text_, font_, size) + mark + p.left + p.right,
             size * 1.4f + p.top + p.bottom};
 }
 
@@ -38,8 +52,19 @@ void Label::paint(Canvas& canvas) {
     const Rect b = bounds();
     const Rect inner{b.x + p.left, b.y + p.top, std::max(0.0f, b.w - p.left - p.right),
                      std::max(0.0f, b.h - p.top - p.bottom)};
-    canvas.text(inner, text_, font_, canvas.theme().type(size_), canvas.theme().color(color_),
-                align);
+    const Theme& t = canvas.theme();
+    const float size = t.type(size_);
+    if (mark_.empty()) {
+        canvas.text(inner, text_, font_, size, t.color(color_), align);
+        return;
+    }
+    const float mw = canvas.textWidth(mark_, Font::UiBold, size);
+    Rect room = inner;
+    room.w = std::max(0.0f, inner.w - mw - kMarkGap);
+    canvas.text(room, text_, font_, size, t.color(color_), align);
+    const float tw = std::min(canvas.textWidth(text_, font_, size), room.w);
+    canvas.text({room.x + tw + kMarkGap, inner.y, mw + 1, inner.h}, mark_, Font::UiBold, size,
+                t.color(markColor_.empty() ? color_ : markColor_), kLeft | kMiddle);
 }
 
 Button::Button(std::string id, std::string text, std::function<void()> click)
