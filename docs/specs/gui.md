@@ -3190,6 +3190,7 @@ inspector adds no command:
 | Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (the crossfade handle or the Crossfade field on the group brings it back in step; other comp gestures leave a differing seam as it is) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Modulation (`inspector.item.modulation`), one item only, and only while a route reaches an FX of its heard take (ADR-0096 M5; `gui::modRoutesOfTake`) | As a track's Modulation row: a line per route ("Cutoff · Hickory (take)" and "~ LFO"), "N routes" past four | A click shows the route's source (§2) | — |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
 | Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable), and the changes of key the item plays counted, "E minor, 2 changes": over the context beats its notes read, from its content start for its length × playrate with repeats unrolled, so points a split part or a left trim keeps outside that span are not counted (the roll's take row names them) | Read only | |
 
@@ -3654,7 +3655,9 @@ same heights, scroll and colours.
   clip shows neither row), Plays (Loop / Once), Launch (the
   project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
   ADR-0098: Key and Chords are disabled, their labels saying why, unless the
-  clip is MIDI with a key at its start) and Mute. Several clips show only
+  clip is MIDI with a key at its start) and Mute, then while a route
+  reaches an FX of its active take the Modulation row
+  (`inspector.clip.modulation`, as an item's; ADR-0096 M5). Several clips show only
   their count. A refusal (a negative fade, say) goes to the status line and
   the field shows the clip's value again.
 - **Status line.** It counts scenes beside tracks only when there are some

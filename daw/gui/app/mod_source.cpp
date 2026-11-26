@@ -125,6 +125,15 @@ std::vector<std::string> menuLabels(const model::Session& s, const rack::Catalog
 
 }  // namespace
 
+std::vector<model::Id> modRoutesOfTake(const model::Session& s, model::Id take) {
+    std::vector<model::Id> out;
+    if (const model::Take* t = s.takes.find(take))
+        for (model::Id fx : t->chain)
+            for (model::Id route : model::modulationsInto(s, fx)) out.push_back(route);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 void showModSource(AppActions& actions, model::Id route) {
     const actions::Action* action = actions.registry().find("ui.modulation.source");
     if (!action) return;

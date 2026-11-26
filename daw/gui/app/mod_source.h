@@ -46,6 +46,9 @@ std::optional<ModSourceView> modSourceView(const model::Session& s, model::Id ro
 // parameters (chain and input chain) and its sends', in id order.
 std::vector<model::Id> modRoutesOfTrack(const model::Session& s, model::Id track);
 
+// The routes into the FX of `take`'s chain (ADR-0096 M5), in id order.
+std::vector<model::Id> modRoutesOfTake(const model::Session& s, model::Id take);
+
 // Runs ui.modulation.source for `route`; its error goes to actions.onError.
 void showModSource(AppActions& actions, model::Id route);
 
@@ -53,7 +56,7 @@ void showModSource(AppActions& actions, model::Id route);
 // "Show modulation source" for one route; for several, one row each,
 // "Show modulation source: LFO (Modulators)". In every menu of routes no two
 // rows read the same: the Mod Out input tells two same-named sources apart
-// ("LFO (Modulators) · Mod 2"), then the rack's place two same-named racks.
+// ("LFO (Modulators) · Mod 2"), then the rack's place among same-named racks.
 std::vector<ui::MenuItem> modSourceItems(AppActions& actions, const model::Session& s,
                                          const rack::Catalog* catalog,
                                          const model::EnvTarget& target);
