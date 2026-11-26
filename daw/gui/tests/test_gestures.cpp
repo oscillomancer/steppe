@@ -3697,16 +3697,25 @@ TEST_CASE("modulation: an item's take FX route has its lane, and the item's name
             if (!m.empty()) lit.push_back(m);
         return lit;
     };
+    // The names show the mark only while views::kTakeNameMarksShown is on
+    // (off by default); takeNameMark decides it either way.
+    const std::vector<std::string> lit{"signal-cv"}, dim{"ink-faint"}, none{};
+    auto heard = [&] { return f.app->head().items.find(item)->activeTake; };
     f.sync();
     CHECK(marks().empty());
+    CHECK(views::takeNameMark(f.app->head(), heard()).mark.empty());
     const std::string route = run("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + key +
                                                   R"("},"source":"lfo"})")["modulation"]
                                   .asString();
     f.sync();
-    CHECK(marks() == std::vector<std::string>{"signal-cv"});
+    CHECK(marks() == (views::kTakeNameMarksShown ? lit : none));
+    CHECK(views::takeNameMark(f.app->head(), heard()).mark == views::kModMark);
+    CHECK(views::takeNameMark(f.app->head(), heard()).on);
     run("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
     f.sync();
-    CHECK(marks() == std::vector<std::string>{"ink-faint"});
+    CHECK(marks() == (views::kTakeNameMarksShown ? dim : none));
+    CHECK(views::takeNameMark(f.app->head(), heard()).mark == views::kModMark);
+    CHECK_FALSE(views::takeNameMark(f.app->head(), heard()).on);
     run("modulation.set", R"({"modulation":")" + route + R"(","enabled":true,"lane":true})");
     f.sync();
     // Its lane: under the item's track, and dimmed outside the item.
@@ -3740,9 +3749,11 @@ TEST_CASE("modulation: an item's take FX route has its lane, and the item's name
     run("modulation.remove", R"({"modulation":")" + copies.front().str() + R"("})");
     f.sync();
     CHECK(marks().empty());
+    CHECK(views::takeNameMark(f.app->head(), heard()).mark.empty());
     run("take.activate", R"({"item":")" + item.str() + R"(","take":")" + take.str() + R"("})");
     f.sync();
-    CHECK(marks() == std::vector<std::string>{"signal-cv"});
+    CHECK(marks() == (views::kTakeNameMarksShown ? lit : none));
+    CHECK(views::takeNameMark(f.app->head(), heard()).mark == views::kModMark);
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
         REQUIRE(gui::writePng(std::filesystem::path(out) / "take-fx-modulated-item.png",
                               f.root->readBack()));

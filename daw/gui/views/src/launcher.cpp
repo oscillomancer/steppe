@@ -810,7 +810,8 @@ void LauncherPane::paint(ui::Canvas& c) {
             // A modulated FX of its active take (ADR-0096 M5): the mark
             // after the name (alone where the clip has none), which elides
             // before it; dimmed while every route is off or the track is frozen.
-            const NameMark modMark = takeNameMark(s, clip->activeTake);
+            const NameMark modMark =
+                kTakeNameMarksShown ? takeNameMark(s, clip->activeTake) : NameMark{};
             const model::Track* clipTrack = s.tracks.find(clip->track);
             const std::string markInk =
                 modMark.mark.empty()

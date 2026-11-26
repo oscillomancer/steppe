@@ -96,6 +96,10 @@ struct NameMark {
     bool on = true;
 };
 NameMark takeNameMark(const model::Session& session, std::optional<model::Id> take);
+// Whether item and clip names draw takeNameMark's mark. Off: on a coloured
+// name bar the mark does not read (render 209), so the inspector's
+// Modulation row and the route's lane carry it. One line turns it on.
+inline constexpr bool kTakeNameMarksShown = false;
 
 // Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
 // cable into it from a unipolar, gate or phase output); the app supplies it

@@ -1026,11 +1026,12 @@ take is the active one: the lane is washed with `ground` at 0.55 elsewhere
 dimmed, its title clear (`Lanes::dimmedLaneSpans`,
 `TrackLayout::takeFxOwner`). A modulation route into a take FX (ADR-0096
 M5) asks for its lane with `lane` as any route does, with the band and
-**mod**, washed the same way. While an FX of its heard take is modulated,
-the item's name carries the modulation mark right after it (the name
-elides before it), dimmed while every route onto those FX is off or the
-track is frozen (`views::takeNameMark`, the one function that decides it;
-`Lanes::Stats::marks`). Points there are edited as anywhere; the
+**mod**, washed the same way. The item's name carries no mark for it by
+default: on a coloured name bar the mark does not read, so the lane and the
+inspector's Modulation row carry it. `views::takeNameMark` decides it, and
+with `views::kTakeNameMarksShown` on, the name carries it right after it
+(the name elides before it), dimmed while every route onto those FX is off
+or the track is frozen (`Lanes::Stats::marks`). Points there are edited as anywhere; the
 engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
@@ -3473,11 +3474,10 @@ same heights, scroll and colours.
   "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
   body, under the preview, with "→" before it in full ink when the clip
   follows the key or the chords, in quiet ink when it plays as written; a
-  body lower than two strips shows no key. While an FX of its active take
-  is modulated (ADR-0096 M5) the name carries the modulation mark after it
-  (alone where the clip has no name), dimmed while every route onto those
-  FX is off or the track is frozen, as an item's name does
-  (`views::takeNameMark`, `LauncherPane::Stats::marks`). An audio clip's own fades
+  body lower than two strips shows no key. A modulated FX of its active
+  take (ADR-0096 M5) marks the name only with `views::kTakeNameMarksShown`
+  on, as an item's (off by default): the mark after the name, alone where
+  the clip has none (`LauncherPane::Stats::marks`). An audio clip's own fades
   (`fade_in`, `fade_out`, schema 2.22) shape every pass, so the cell draws
   one pass's over its body as an item's are drawn (`views::drawFadeCurve`,
   shared with `Lanes::drawFades`): the gain curve from the period's start
