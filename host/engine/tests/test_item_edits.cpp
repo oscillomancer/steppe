@@ -848,6 +848,92 @@ TEST_CASE("item.consolidate is stale when a followed track changed during it (ro
     }
 }
 
+TEST_CASE("item.consolidate is stale when a Notes source's item moves during it (round 193 R1)") {
+    // Other is tr_2; Keys (tr_3) holds a MIDI item; the rack (on Modulators,
+    // tr_4, which modulate makes) has a Notes module playing Keys, its sends
+    // off, into the Mod Out input that modulates tk_1's gain. Moving that item onto
+    // Modulators (in the closure) or onto a new track (outside it) leaves
+    // the module playing nothing: both are edits to what the render read.
+    // Renumbering the closure's tracks in order (the master, tr_1 and tr_4
+    // as tr_1, tr_2 and tr_3; Keys, outside it, kept as written) once hashed
+    // the first the same: the item's track went from Keys's raw "tr_3" to
+    // Modulators renumbered "tr_3" (P9).
+    for (const char* to : {"rack", "new"}) {
+        INFO("to " << std::string(to));
+        Fixture f;
+        f.run("track.add", R"({"name":"Other"})");  // tr_2
+        f.run("track.add", R"({"name":"Keys"})");   // tr_3
+        const std::string keys = f.app->head().tracks.find(model::kMaster)->children.back().str();
+        REQUIRE(keys == "tr_3");
+        const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+        json::Value args = *json::parse(R"({"source":"lfo","depth":0.2})");
+        args["target"] = json::Value::object();
+        args["target"]["fx"] = fx.find("fx")->asString();
+        args["target"]["param"] = "gain";
+        auto made = f.bus->execute({"modulate", std::move(args), origin});
+        REQUIRE_MESSAGE(made, (made ? "" : made.error().toString()));
+        const std::string rack = made->find("rack")->asString();
+        const std::string modOut = made->find("mod_out")->asString();
+        const std::string input = made->find("input")->asString();
+        json::Value item = *json::parse(R"({"bar":1,"notation":"voice v; 1: C4:w"})");
+        item["track"] = keys;
+        const auto exec = [&](const char* name, json::Value request) {
+            auto r = f.bus->execute({name, std::move(request), origin});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string midi = exec("item.add", item).find("item")->asString();
+        json::Value notes = *json::parse(R"({"type":"notes"})");
+        notes["rack"] = rack;
+        notes["source"] = keys;
+        const std::string module = exec("module.add", notes).find("module")->asString();
+        // Without its sends the source track is not in the closure, only its
+        // items (with sends, the default, it is, and nothing collided).
+        json::Value sends = *json::parse(R"({"source_sends":false})");
+        sends["module"] = module;
+        exec("module.set", sends);
+        json::Value cable = json::Value::object();
+        cable["from"] = module + ".gate";
+        cable["to"] = modOut + "." + input;
+        exec("cable.add", cable);
+        std::string target;  // the rack's track
+        for (const auto& e : f.app->head().racks)
+            if (e.id.str() == rack) target = e.value->track.str();
+        REQUIRE(target == "tr_4");
+        if (std::string(to) == "new") {
+            f.run("track.add", R"({"name":"Other"})");
+            target = f.app->head().tracks.find(model::kMaster)->children.back().str();
+        }
+        const auto status = consolidated(f, [&] {
+            json::Value move = json::Value::object();
+            move["item"] = midi;
+            move["track"] = target;
+            REQUIRE(f.bus->execute({"item.move", std::move(move), origin}));
+        });
+        INFO(json::writeCompact(status));
+        CHECK(status.find("status")->asString() != "done");
+        CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+    }
+}
+
+TEST_CASE("item.mix-to-track is not stale for an edit its render does not read (round 193)") {
+    // A track added (and another's volume) during the mix: its private view's
+    // buss and routes take numbers from counters that creation moves, so they
+    // are hashed in a range of their own; the result commits.
+    Fixture f;
+    sourced(f, "lfo");
+    const std::string elsewhere = f.app->head().tracks.find(model::kMaster)->children.back().str();
+    const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+    f.run("track.add", R"({"name":"Later"})");
+    json::Value set = json::Value::object();
+    set["track"] = elsewhere;
+    set["volume_db"] = -6.0;
+    REQUIRE(f.bus->execute({"track.set", std::move(set), origin}));
+    const auto status = settled(f, job);
+    INFO(json::writeCompact(status));
+    CHECK(status.find("status")->asString() == "done");
+}
+
 TEST_CASE("item.mix-to-track is stale when the route's source changed during it (round 192 F4)") {
     for (const bool edited : {false, true}) {
         INFO("edited " << edited);

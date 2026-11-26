@@ -101,11 +101,12 @@ inline std::string copiedPath(std::string_view command) {
     if (command == "take.add") return "/from";
     return "";
 }
-// The commands that move a take to another track, whose cycle refusal is at
-// the track that moves it (ADR-0096 M5).
-inline bool movesTakes(std::string_view command) {
+// The commands that move a route's target to another track (a take, ADR-0096
+// M5; a track-chain FX, review round 193 R2), whose cycle refusal is at the
+// track it moves to.
+inline bool movesTargets(std::string_view command) {
     return command == "item.move" || command == "clip.move" || command == "take.extract" ||
-           command == "item.explode-takes";
+           command == "item.explode-takes" || command == "fx.move";
 }
 }  // namespace detail
 
@@ -123,8 +124,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
     if (!detail::copiedPath(command.name).empty())
         declare({"modulation.limit", "the copy's routes would pass the project's route limit",
                  "remove routes first (modulation.list), for instance the copied chain's"});
-    if (detail::movesTakes(command.name))
-        declare({"modulation.cycle", "the move puts a modulated take where its rack hears it",
+    if (detail::movesTargets(command.name))
+        declare({"modulation.cycle", "the move puts a modulated take or FX where its rack hears it",
                  "remove the route, or choose another track"});
     if (command.kind != cmd::Kind::Query) {
         auto original = std::move(command.run);
@@ -184,8 +185,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             std::vector<model::Id> livesOn;
             if (app.inTransaction()) {
                 for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
-                    ctx.warn("modulation.not_copied", d.message,
-                             "/modulations/" + d.original.str());
+                    ctx.warn("modulation.not_copied", d.message, "/modulations/" + d.original.str(),
+                             d.reason);
                 const std::size_t routes = app.txn().preview().modulations.size();
                 if (routes > model::kMaxModulations && routes > before.modulations.size())
                     return Error("modulation.limit",
@@ -205,7 +206,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                 livesOn.insert(livesOn.end(), joined.begin(), joined.end());
                 // A move that closes a cycle is refused, never mended by
                 // dropping a route: a move must not change what sounds.
-                if (detail::movesTakes(name) && !before.modulations.empty()) {
+                if (detail::movesTargets(name) && !before.modulations.empty()) {
                     Status ok = model::checkInvariants(app.txn().preview());
                     if (!ok && ok.error().code == "modulation.cycle") {
                         Error e = ok.error();
@@ -224,12 +225,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             // whose target stopped fitting (a send turned MIDI) goes here.
             if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
                 const auto removed = [&](model::Id route, const model::Modulation& m,
-                                         const std::string& why) {
+                                         const std::string& why, const char* reason) {
                     ctx.warn("modulation.removed",
                              route.str() + " (" + m.source.module.str() + "." + m.source.input +
                                  " to " + m.target.object.str() + " " + m.target.param +
                                  ") was removed: " + why,
-                             "/modulations/" + route.str());
+                             "/modulations/" + route.str(), reason);
                 };
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
@@ -237,14 +238,17 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     if (std::find(livesOn.begin(), livesOn.end(), e.id) != livesOn.end())
                         continue;  // its copy or its twin carries it (M5)
                     const model::Modulation& m = *e.value;
-                    removed(e.id, m,
-                            after.modules.contains(m.source.module)
-                                ? "its target " + m.target.object.str() + " was removed"
-                                : "its source " + m.source.module.str() + " was removed");
+                    if (after.modules.contains(m.source.module))
+                        removed(e.id, m, "its target " + m.target.object.str() + " was removed",
+                                "target_removed");
+                    else
+                        removed(e.id, m, "its source " + m.source.module.str() + " was removed",
+                                "source_removed");
                 }
-                for (const auto& [route, why] : model::strandedModulations(after)) {
-                    removed(route, *after.modulations.find(route), why);
-                    app.txn().remove<model::Modulation>(route);
+                for (const model::StrandedModulation& d : model::strandedModulations(after)) {
+                    removed(d.route, *after.modulations.find(d.route), d.why,
+                            d.atSource ? "source_unfit" : "target_unfit");
+                    app.txn().remove<model::Modulation>(d.route);
                 }
             }
             if (edit) SUPPLE_TRY(model::validateFrozenTransition(before, app.view()));

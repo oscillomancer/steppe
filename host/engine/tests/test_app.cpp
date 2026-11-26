@@ -5199,7 +5199,9 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
     registerEngineCommands(registry);
     cmd::Dispatcher d(registry, *app);
     app->setupFixture(d, "song_with_modulation");
-    const auto removedBy = [&](std::string name, std::string_view args) {
+    // Each names its cause (round 193, the GUI): the FX is the target; the
+    // rack and its Mod Out (the source) go with the module, rack or track.
+    const auto removedBy = [&](std::string name, std::string_view args, const char* reason) {
         CAPTURE(name);
         auto r = d.execute({name, j(args), kTest});
         REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
@@ -5210,15 +5212,28 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
         for (auto w : warnings->asArray())
             named |= w["code"].asString() == "modulation.removed" &&
                      w["message"].asString().find("mr_1") != std::string::npos &&
-                     w["path"].asString() == "/modulations/mr_1";
+                     w["path"].asString() == "/modulations/mr_1" && w.find("reason") &&
+                     w["reason"].asString() == reason;
         CHECK(named);
         REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
         CHECK(app->view().modulations.size() == 1);  // undo brings the route back
     };
-    removedBy("fx.remove", R"({"fx": "fx_1"})");
-    removedBy("module.remove", R"({"module": "mo_2"})");
-    removedBy("rack.remove", R"({"rack": "rk_1"})");
-    removedBy("track.remove", R"({"track": "tr_1"})");
+    removedBy("fx.remove", R"({"fx": "fx_1"})", "target_removed");
+    removedBy("module.remove", R"({"module": "mo_2"})", "source_removed");
+    removedBy("rack.remove", R"({"rack": "rk_1"})", "source_removed");
+    removedBy("track.remove", R"({"track": "tr_1"})", "source_removed");
+    // A source that stays but no longer fits (a module that is not a Mod
+    // Out): strandedModulations says which end, which the warning words
+    // source_unfit. No command makes one; the model is checked directly.
+    model::EditTxn t(app->view(), 1);
+    model::Modulation stray = *app->view().modulations.find(*model::Id::parse("mr_1"));
+    stray.source.module = *model::Id::parse("mo_1");  // the rack's Out
+    t.modify<model::Modulation>(*model::Id::parse("mr_1"),
+                                [&](model::Modulation& m) { m = stray; });
+    const auto stranded = model::strandedModulations(t.preview());
+    REQUIRE(stranded.size() == 1);
+    CHECK(stranded[0].route == *model::Id::parse("mr_1"));
+    CHECK(stranded[0].atSource);
 }
 
 TEST_CASE("fx.describe marks the parameters a modulation route can take") {
@@ -5275,6 +5290,7 @@ TEST_CASE("modulation commands: a modulated send turned MIDI loses its route, wi
     CHECK(w["code"].asString() == "modulation.removed");
     CHECK(w["path"].asString() == "/modulations/mr_1");
     CHECK(w["message"].asString().find(sendId + " volume") != std::string::npos);
+    CHECK(w["reason"].asString() == "target_unfit");  // the send stays, unfit
 }
 
 TEST_CASE("modulation commands: a track's volume, pan and width, and a send's level") {
@@ -6434,21 +6450,29 @@ TEST_CASE(
 TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)") {
     // A client words a refusal from the registry entry of the command it ran:
     // the route commands, the copies and moves addChecked refuses for (by
-    // its own lists, detail::copiedPath and movesTakes), item.heal and the
-    // stale bakes. Every modulation.* code raised in the route commands'
-    // and the wrapper's sources is declared by a command; warnings are not
-    // in the registry (session-model.md lists modulation.not_copied).
+    // its own lists, detail::copiedPath and movesTargets), item.heal and the
+    // stale bakes. In modulation_commands.cpp each code is checked against
+    // the command that raises it, and each modulation code a route command
+    // declares against what it can raise (review round 193 R2). Warnings
+    // are not in the registry (session-model.md lists them).
+    //
+    // What it cannot see: a code a command reaches through the model
+    // (checkInvariants' modulation.cycle) or another file is listed here by
+    // hand, by the wrapper's lists above; a helper's callers (checkRoute and
+    // checkCycle: modulation.add and modulation.set, and modulate through
+    // modulation.add) are listed by hand too.
     cmd::Registry registry;
     registerEngineCommands(registry);
-    const auto declares = [&](const char* name, const std::string& code) {
+    const auto declared = [&](const char* name) {
         const cmd::CommandInfo* info = registry.find(name);
         REQUIRE_MESSAGE(info, name);
-        return std::any_of(info->errors.begin(), info->errors.end(),
-                           [&](const cmd::ErrorSpec& e) { return e.code == code; });
+        std::set<std::string> out;
+        for (const cmd::ErrorSpec& e : info->errors) out.insert(e.code);
+        return out;
     };
     std::vector<std::string> undeclared;
     const auto need = [&](const char* name, const std::string& code) {
-        if (!declares(name, code)) undeclared.push_back(std::string(name) + ": " + code);
+        if (!declared(name).count(code)) undeclared.push_back(std::string(name) + ": " + code);
     };
     for (const char* name :
          {"item.paste", "item.consolidate", "item.consolidate.commit", "item.add", "clip.duplicate",
@@ -6457,53 +6481,68 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
         CHECK_MESSAGE(!detail::copiedPath(name).empty(), name);
         need(name, "modulation.limit");
     }
-    for (const char* name : {"item.move", "clip.move", "take.extract", "item.explode-takes"}) {
-        CHECK_MESSAGE(detail::movesTakes(name), name);
+    for (const char* name :
+         {"item.move", "clip.move", "take.extract", "item.explode-takes", "fx.move"}) {
+        CHECK_MESSAGE(detail::movesTargets(name), name);
         need(name, "modulation.cycle");
     }
-    const std::vector<std::string> route = {"modulation.source",    "modulation.target",
-                                            "modulation.envelope",  "modulation.depth",
-                                            "modulation.duplicate", "modulation.cycle"};
-    for (const std::string& code : route) {
-        need("modulation.add", code);
-        need("modulation.set", code);
-        need("modulate", code);
-    }
-    need("modulation.add", "modulation.limit");
-    need("modulate", "modulation.limit");
     need("item.heal", "item.heal_fx");
     need("item.consolidate", "item.consolidate_stale");
     need("item.consolidate.commit", "item.consolidate_stale");
     need("item.mix-to-track", "item.mix_stale");
     need("item.mix-to-track.commit", "item.mix_stale");
-    // The sources: each modulation.* literal that is neither a command's
-    // name nor a warning's code is declared somewhere.
+    // modulation_commands.cpp by command: a code raised there (refused,
+    // Error, or a code assigned) belongs to the command whose section (from
+    // its `c.name = "..."` to the next) holds it; one before the first
+    // command is a helper's. checkCycle passes on the model's cycle.
     const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "src";
     const std::set<std::string> notErrors = {"modulation.add",       "modulation.set",
                                              "modulation.remove",    "modulation.list",
                                              "modulation.telemetry", "modulation.stacked",
                                              "modulation.removed",   "modulation.not_copied"};
-    for (const char* file : {"modulation_commands.cpp", "command_validation.h"}) {
-        std::ifstream in(src / file);
-        REQUIRE_MESSAGE(in, file);
-        const std::string text{std::istreambuf_iterator<char>(in), {}};
-        static const std::regex code(R"re("(modulation\.[a-z_]+)")re");
-        std::set<std::string> raised;
-        for (std::sregex_iterator i(text.begin(), text.end(), code), e; i != e; ++i)
-            raised.insert((*i)[1]);
-        for (const std::string& c : raised) {
-            if (notErrors.count(c)) continue;
-            bool any = false;
-            for (const cmd::CommandInfo* info : registry.all())
-                any = any || std::any_of(info->errors.begin(), info->errors.end(),
-                                         [&](const cmd::ErrorSpec& s) { return s.code == c; });
-            if (!any) undeclared.push_back(std::string("no command: ") + c + " (" + file + ")");
+    std::map<std::string, std::set<std::string>> raisedBy;  // "": the helpers
+    {
+        std::ifstream in(src / "modulation_commands.cpp");
+        REQUIRE(in);
+        static const std::regex name(R"re(c\.name = "([a-z.\-]+)")re");
+        static const std::regex code(R"re((refused\(|Error\(|code = )"(modulation\.[a-z_]+)")re");
+        std::string section, line;
+        while (std::getline(in, line)) {
+            std::smatch m;
+            if (std::regex_search(line, m, name)) section = m[1];
+            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i)
+                if (!notErrors.count((*i)[2])) raisedBy[section].insert((*i)[2]);
         }
     }
+    REQUIRE(raisedBy.count(""));
+    raisedBy[""].insert("modulation.cycle");  // checkCycle: the model's (checkInvariants)
+    REQUIRE(raisedBy.count("modulation.add"));
+    // What each route command can raise: its own codes, its helpers' (all
+    // of them for add and set), and for modulate modulation.add's but the
+    // envelope, which it adds before it calls it.
+    std::map<std::string, std::set<std::string>> raisable;
+    for (const auto& [command, codes] : raisedBy)
+        if (!command.empty()) raisable[command] = codes;
+    for (const char* command : {"modulation.add", "modulation.set"})
+        raisable[command].insert(raisedBy[""].begin(), raisedBy[""].end());
+    for (const std::string& c : raisable["modulation.add"])
+        if (c != "modulation.envelope") raisable["modulate"].insert(c);
+    for (const auto& [command, codes] : raisable)
+        for (const std::string& c : codes) need(command.c_str(), c);
+    // And no route command declares a modulation code it cannot raise (N1).
+    std::vector<std::string> unraisable;
+    for (const auto& [command, codes] : raisable)
+        for (const std::string& c : declared(command.c_str()))
+            if (c.rfind("modulation.", 0) == 0 && !codes.count(c))
+                unraisable.push_back(command + ": " + c);
     std::string list;
     for (const std::string& u : undeclared) list += u + "\n";
     INFO("undeclared:\n" << list);
     CHECK(undeclared.empty());
+    std::string extra;
+    for (const std::string& u : unraisable) extra += u + "\n";
+    INFO("declared, not raisable:\n" << extra);
+    CHECK(unraisable.empty());
 }
 
 TEST_CASE(
@@ -6671,11 +6710,14 @@ TEST_CASE(
         REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
         return *r;
     };
-    const auto warned = [](const json::Value& r, std::string_view code) {
+    const auto warned = [](const json::Value& r, std::string_view code,
+                           std::string_view reason = {}) {
         const json::Value* warnings = r.find("warnings");
         if (!warnings) return false;
         for (auto w : warnings->asArray())
-            if (w["code"].asString() == code) return true;
+            if (w["code"].asString() == code &&
+                (reason.empty() || (w.find("reason") && w["reason"].asString() == reason)))
+                return true;
         return false;
     };
     // Bass (tr_1) holds an item whose take has a gain in its chain.
@@ -6746,7 +6788,7 @@ TEST_CASE(
     const auto before = app->view().modulations.size();
     const auto pasted = d.execute({"item.paste", paste, kTest});
     REQUIRE_MESSAGE(pasted, (pasted ? "" : pasted.error().toString()));
-    CHECK(warned(*pasted, "modulation.not_copied"));
+    CHECK(warned(*pasted, "modulation.not_copied", "cycle"));
     CHECK(app->view().modulations.size() == before);
     REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
     json::Value move = json::Value::object();
@@ -6758,6 +6800,48 @@ TEST_CASE(
     CHECK(moved.error().path == "/args/track");
     CHECK(moved.error().hint.find("another track") != std::string::npos);
     CHECK(app->view().items.find(*model::Id::parse(item))->track == model::Id::parse("tr_1"));
+}
+
+TEST_CASE("modulation commands: fx.move onto a track the rack hears is refused (round 193 R2)") {
+    // A gain on tr_1 modulated by a follower of Listened: moved onto
+    // Listened, the rack would hear the FX it moves. The refusal is the
+    // declared modulation.cycle at the moved-to track, and nothing moves.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string listened = run("track.add", j(R"({"name": "Listened"})"))["track"].asString();
+    const std::string gain =
+        run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+            .asString();
+    json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+    modulate["from"] = listened;
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const cmd::CommandInfo* info = registry.find("fx.move");
+    REQUIRE(info);
+    CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                      [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+    json::Value move = json::Value::object();
+    move["fx"] = gain;
+    move["track"] = listened;
+    move["index"] = 0;
+    const auto moved = d.execute({"fx.move", move, kTest});
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "modulation.cycle");
+    CHECK(moved.error().path == "/args/track");
+    CHECK(moved.error().hint == "remove the route, or choose another track");
+    const auto& chain = app->view().tracks.find(*model::Id::parse("tr_1"))->chain;
+    CHECK(std::find(chain.begin(), chain.end(), *model::Id::parse(gain)) != chain.end());
 }
 
 TEST_CASE("modulation commands: exploding takes onto tracks may not close a cycle (M5, G2)") {
@@ -6875,4 +6959,16 @@ TEST_CASE(
     CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
     CHECK_FALSE(t.exists<model::Modulation>(made));
     CHECK(t.preview().modulations.size() == model::kMaxModulations);
+    // A copy whose source the destination lacks (a paste from a retained
+    // version naming a Mod Out since removed) goes first, with reason
+    // source (round 193: the warning carries it).
+    model::EditTxn u(app->head(), app->head().version + 1);
+    model::Modulation orphan = *app->head().modulations.find(original);
+    orphan.source.module = *model::Id::parse("mo_1");  // the rack's Out, not a Mod Out
+    const model::Id strayCopy = u.create(orphan);
+    u.copiedRoute(strayCopy, original);
+    const auto unsourced = settleCopiedRoutes(u, false);
+    REQUIRE(unsourced.size() == 1);
+    CHECK(unsourced[0].reason == "source");
+    CHECK_FALSE(u.exists<model::Modulation>(strayCopy));
 }

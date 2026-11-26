@@ -400,6 +400,15 @@ until it is released.
     - **Why.** The grid point at or before the onset then always falls
       inside a block the chain runs. Its sum reaches the onset at any block
       size, in both executors.
+    - **A stage that smooths.** The value at the onset is exact at any
+      block size, but the grid values before it are sent from the entry,
+      which falls on a block boundary. So a stage with memory (parameter
+      smoothing) gives an output after the onset that depends on the block
+      size, and after an off-grid loop wrap on the pass's alignment; live
+      equals offline at the same alignment (review round 193, measured with
+      a gain smoothed over 64 frames). So the tests stay on the memoryless
+      gain: the early entry after a wrap (S2) and a switch's entry (G1) are
+      covered, not proved by a red run (STATUS).
     - **Item chains.** Every branch where `processTake` decides that the
       chain meets its item (unity, the early wrap, the playrate path)
       widens the input end by `kAutomationStep`.
@@ -3726,13 +3735,18 @@ the model joins it and commits metadata only. The GUI shows the error in its
 status line while recording continues for healthy targets.
 
 A committed recording may carry a `warnings` array with structured
-`code`, `message`, `path`, `hint`, `track` and `file` fields.
+`code`, `message`, `path`, `hint`, `track` and `file` fields, and `reason`
+where the code names its causes (a short fixed word, as a command's
+warning has: `modulation.not_copied` from a `midi_overdub` take whose
+copied routes pass the limit carries `limit`, session-model.md). A client
+words a warning from `code`, `path` and `reason`; `message` is the
+engine's own text and may name commands.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
 and the `record.warning` event while retained passes still commit. Every
 warning a commit itself adds (where a take went: `record.stack_skipped`,
 `record.stack_group` and the other `record.*` warnings of take stacking,
 ADR-0103, and those of the `take.comp` it makes) also goes out as a
-`record.warning` event, in the same shape, once the commit has succeeded,
+`record.warning` event, in the same shape (`reason` included), once the commit has succeeded,
 whatever stopped the recording (a command from any client, or the engine
 halting, whose commit has no caller to answer); each warning once per
 commit, a pass's own warnings not again.

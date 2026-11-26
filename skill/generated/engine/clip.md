@@ -4,7 +4,7 @@ Launcher clips in a scene's cells: add, set, move, duplicate.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -255,7 +255,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `clip.occupied`: the cell holds a clip Hint: choose an empty cell
 - `clip.track`: the track is not a channel Hint: choose a channel
-- `modulation.cycle`: the move puts a modulated take where its rack hears it Hint: remove the route, or choose another track
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 

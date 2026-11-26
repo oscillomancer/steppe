@@ -111,6 +111,7 @@ inline schema::Schema<RecordingWarning> recordingWarningSchema() {
         .field("hint", &RecordingWarning::hint, schema::string())
         .field("track", &RecordingWarning::track, schema::string())
         .field("file", &RecordingWarning::file, schema::string())
+        .field("reason", &RecordingWarning::reason, schema::string())
         .build();
 }
 

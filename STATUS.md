@@ -967,18 +967,27 @@ instructions are in `docs/guides/installing.md`.
   route into an item's or a clip's take FX is compensated on its track's
   node, and `modulation.list` names the owner. A take chain is entered one
   32-frame grid interval early, so its first modulated frame does not
-  depend on the block size; on a track whose clip chain is modulated an
+  depend on the block size (a plug-in that smooths its parameters still
+  hears the grid values from the entry, which falls on a block boundary,
+  so its output after the onset can depend on the block size and, after an
+  off-grid loop wrap, on the pass; the tests' memoryless gain cannot prove
+  the early entry after a wrap or a switch's by a red run, only cover it:
+  the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
   pressed within 32 more frames of its boundary takes the next. A route
   into a take that does not play is idle (`modulation.list` says `inert:
   "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same
   undo step, and one the copy cannot keep (its source missing, or a
-  cycle) is dropped and named (`modulation.not_copied`). A copy past 4096
+  cycle) is dropped and named (`modulation.not_copied`, with a `reason`:
+  source, cycle or limit; a removed route's `modulation.removed` says
+  which end went or stopped fitting, and a recording's `record.warning`
+  event carries the reason too). A copy past 4096
   routes is refused whole (`modulation.limit`); an overdub's is trimmed
   instead. `track.duplicate` copies every route whose target is on the
-  track (before M5 it copied none). A move that would close a cycle is
-  refused (`modulation.cycle`), and heal and `take.comp` join only pieces
+  track (before M5 it copied none). A move that would close a cycle (a
+  take's, or since round 193 a track FX's by `fx.move`) is refused
+  (`modulation.cycle`), and heal and `take.comp` join only pieces
   whose routes match. All four bakes print the modulation exactly; a
   consolidate or mix-to-track is refused as stale when anything its render
   read changed before its commit, a route's source and the tracks feeding
