@@ -381,9 +381,20 @@ std::vector<Id> modulationsClosingCycles(const Session& s, const std::vector<Id>
 // feeds its destination; a MIDI send's source feeds the rack of each Notes
 // module that follows its destination; a modulation route's rack feeds the
 // node that applies its target. The check adds every edge with its kind.
-enum class CycleEdgeKind { ParentSend, Route, NotesFollow, Modulation };
+// `Count` ends the list (no edge has it), so the list below cannot miss a
+// kind (round 202 F2).
+enum class CycleEdgeKind { ParentSend, Route, NotesFollow, Modulation, Count };
 inline constexpr std::array kCycleEdgeKinds{CycleEdgeKind::ParentSend, CycleEdgeKind::Route,
                                             CycleEdgeKind::NotesFollow, CycleEdgeKind::Modulation};
+static_assert(kCycleEdgeKinds.size() == static_cast<std::size_t>(CycleEdgeKind::Count),
+              "every kind of cycle edge is in kCycleEdgeKinds");
+static_assert(
+    [] {
+        for (std::size_t i = 0; i < kCycleEdgeKinds.size(); ++i)
+            if (kCycleEdgeKinds[i] != static_cast<CycleEdgeKind>(i)) return false;
+        return true;
+    }(),
+    "kCycleEdgeKinds lists each kind once, in order");
 // "parent_send", "route", "notes_follow", "modulation".
 std::string_view cycleEdgeWord(CycleEdgeKind kind);
 struct CycleEdge {
@@ -396,6 +407,9 @@ std::vector<CycleEdge> cycleEdges(const Session& s);
 // The edges along the cycle the check reports, every edge between each
 // node of it and the next; empty when there is none.
 std::vector<CycleEdge> reportedCycle(const Session& s);
+// Whether the cycle check still finds a cycle once every edge in `removed`
+// is taken out.
+bool hasCycleWithout(const Session& s, const std::vector<CycleEdge>& removed);
 // Whether the modulation routes into FX `a` and into FX `b` match one for
 // one: the same source module and input, parameter, depth, enabled and lane
 // (ADR-0096 M5: what item.heal and take.comp require of the pieces they join).

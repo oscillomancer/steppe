@@ -4481,6 +4481,11 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
         locateTakes(n, pos, false, !restartConsole);  // adoption keeps takes playing
+        // A seek relocates a launched clip, as locateNode does: a loop clip
+        // then plays by its phase before its anchor (engine.md §3.1). The
+        // in-callback executor's seek once skipped it, and a clip the
+        // renderer played by its phase stayed silent there (F6).
+        if (restartConsole) launchRelocated(n);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
                              [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });

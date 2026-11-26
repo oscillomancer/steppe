@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "clip_player_support.h"
+#include "engine_test_access.h"
 #include "supple/params/params.h"
 
 using namespace supple;
@@ -329,4 +330,167 @@ TEST_CASE("a render without launches keeps a node's item-chain route live (M5, F
     off["enabled"] = false;
     p.runArgs("modulation.set", off);
     CHECK(rendered(p.app->head()).audio.channels[0][24000] != live.audio.channels[0][24000]);
+}
+
+namespace {
+
+// A live run at block 32 that launches cl_1 on the next bar and pauses in
+// the block after its clip chain's entry (one grid interval before the
+// switch), before the switch's block; it plays again 300 cycles later and
+// the launch, not heard, is placed again (ADR-0097, revision 2026-11-26).
+struct StoppedEntry {
+    std::vector<float> out;
+    std::uint32_t latency = 0;
+    std::int64_t paused = 0, resumed = 0;  // cycles
+    std::vector<LaunchLogEntry> log;
+    std::uint64_t epochBefore = 0, misses = 0, errors = 0;
+    // tr_1's node holds the chain's entry just before the stop, and after
+    // it (stopped, its take-back done).
+    bool entryBefore = false, entryAfter = true;
+};
+bool holdsEntry(const Engine& engine) {
+    for (const detail::Node& n : EngineTestAccess::latestPlan(engine).nodes)
+        if (n.id == id("tr_1")) return n.launchEntryValid;
+    return false;
+}
+StoppedEntry stoppedAtEntry(const model::Session& s, const fs::path& dir,
+                            const EngineOptions& options) {
+    constexpr std::uint32_t kBlock = 32;
+    const std::int64_t frames = 48000 * 6;
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+    REQUIRE(engine.load(s, dir));
+    engine.play();
+    std::int64_t done = 0;
+    const auto run = [&](std::int64_t until) {
+        if (until <= done) return;
+        if (options.anticipative)
+            runAheadOnState(engine, backend, until - done, kBlock);
+        else
+            backend.run(until - done);
+        done = until;
+        engine.service();
+    };
+    run(100);
+    const Engine::LaunchRequest first = request("tr_1", "cl_1");
+    const auto placed = engine.launch(std::span(&first, 1), model::LaunchQuantize::Bar);
+    REQUIRE(placed);
+    // The entry's block (32 frames, a grid interval, before the switch),
+    // then stop: the switch's block has not run.
+    const std::int64_t entry = (placed->stream - 32) / kBlock;
+    REQUIRE(entry < placed->stream / kBlock);
+    StoppedEntry out;
+    out.paused = entry + 1;
+    run(out.paused);
+    out.entryBefore = holdsEntry(engine);
+    out.epochBefore = EngineTestAccess::epoch(engine);
+    engine.pause();
+    run(done + 300);
+    out.entryAfter = holdsEntry(engine);
+    engine.play();
+    out.resumed = done;
+    run(frames / kBlock);
+    out.misses = engine.anticipationMisses();
+    out.latency = engine.outputLatency();
+    out.log = engine.launchLog();
+    engine.stop();
+    out.errors = engine.processErrors();
+    out.out = backend.capture().channels[0];
+    return out;
+}
+
+// The mix offline from `start` seconds for `frames`, replaying `log`.
+std::vector<float> mixFrom(Project& p, const model::Session& s, double start, std::size_t frames,
+                           const std::vector<LaunchLogEntry>& log) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.startSeconds = start;
+    settings.endSeconds = start + double(frames) / 48000 + 0.05;
+    settings.blockSize = 32;
+    settings.projectDir = p.app->projectDir();
+    settings.launches = log;
+    auto r = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
+}  // namespace
+
+TEST_CASE(
+    "a stop between a modulated clip chain's entry and its switch takes the entry back "
+    "(M5 G1, F6)" *
+    doctest::description("rt")) {
+    // cl_1 (constant 0.5 through a gain, routed) launched on an off-grid
+    // bar; the transport paused after the chain's entry, before its switch.
+    // The switch was not heard, so the launch is taken back with its entry
+    // (the undo record carries the entry's state) and placed again at the
+    // next bar after play: nothing of the first launch is left coming in.
+    // With the route disabled the output equals the same run with no route
+    // (the entry moves nothing), in both executors, and the two executors
+    // agree; with it enabled, the resumed epoch plays as its log replays.
+    // Without the record's entry, the stale entry stayed on the node.
+    Project p;
+    modulators(p);
+    offGrid(p);
+    halfClip(p, "sc_1", -0.25);  // cl_1, mr_1
+    const model::Session routed = p.app->head();
+    p.run("modulation.set", R"({"modulation": "mr_1", "enabled": false})");
+    const model::Session disabled = p.app->head();
+    p.run("modulation.remove", R"({"modulation": "mr_1"})");
+    const model::Session plain = p.app->head();
+    std::vector<float> withOut[2];
+    std::uint32_t latency[2] = {0, 0};
+    std::string logs[2];
+    for (const bool ahead : {false, true}) {
+        const EngineOptions options = ahead ? EngineOptions{.workers = 0} : kInCallback;
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        const StoppedEntry with = stoppedAtEntry(disabled, p.app->projectDir(), options);
+        const StoppedEntry without = stoppedAtEntry(plain, p.app->projectDir(), options);
+        CHECK(with.errors == 0);
+        CHECK(with.misses == 0);
+        // The entry was made (in-callback: the renderer had switched
+        // already) and is taken back with its record: the stale entry would
+        // run the chain entered on silence (inaudible through this memoryless
+        // gain, so checked on the node).
+        if (!ahead) CHECK(with.entryBefore);
+        CHECK_FALSE(with.entryAfter);
+        // Logged once, in the new epoch: placed again.
+        std::size_t before = 0, after = 0;
+        for (const LaunchLogEntry& e : with.log)
+            (e.epoch <= with.epochBefore ? before : after) += e.clip == id("cl_1");
+        INFO(describe(with.log));
+        CHECK(before == 0);
+        CHECK(after == 1);
+        CHECK(describe(with.log) == describe(without.log));
+        CHECK(
+            std::any_of(without.out.begin(), without.out.end(), [](float v) { return v != 0.0f; }));
+        INFO(differences(with.out, 0, without.out, with.out.size()));
+        CHECK(with.out == without.out);
+        withOut[ahead] = with.out;
+        latency[ahead] = with.latency;
+        logs[ahead] = describe(with.log);
+        // Routed: the resumed epoch as its own log replays, from where it
+        // went on (the frame it paused at), for two seconds.
+        const StoppedEntry live = stoppedAtEntry(routed, p.app->projectDir(), options);
+        std::vector<LaunchLogEntry> resumed;
+        for (const LaunchLogEntry& e : live.log)
+            if (e.epoch > live.epochBefore) resumed.push_back(e);
+        REQUIRE(resumed.size() == 1);
+        const std::size_t n = 96000;
+        const auto offline = mixFrom(p, routed, double(live.paused * 32) / 48000, n, resumed);
+        const std::size_t at = live.latency + std::size_t(live.resumed * 32);
+        INFO("routed, the resumed epoch against its log's replay: " << differences(live.out, at,
+                                                                                   offline, n));
+        CHECK(maxDiff(live.out, at, offline, n) == 0.0);
+    }
+    // The executors agree (but the last render-ahead span).
+    const std::size_t whole = withOut[0].size() - 4096 - std::max(latency[0], latency[1]);
+    const std::vector<float> reference(withOut[0].begin() + latency[0],
+                                       withOut[0].begin() + latency[0] + whole);
+    INFO(differences(withOut[1], latency[1], reference, whole));
+    CHECK(maxDiff(withOut[1], latency[1], reference, whole) == 0.0);
+    CHECK(logs[1] == logs[0]);
 }

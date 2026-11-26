@@ -1370,6 +1370,47 @@ or leaves the anticipative executor's live region without a continuous handoff i
 the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
 engine.md §1.4.2 has the rules.
 
+### Revision 2026-11-26: a launch applied ahead and unheard is taken back
+
+Review round 192 F6 found that a pause, a pause and return, or a seek before a launch's switch was
+heard left the anticipative renderer's apply in place: the track played the clip straight on at the
+next play, and the log claimed a launch never heard. The in-callback executor's early half (240
+frames of a modulated clip chain's input) had the same defect. Decided (the lead's plan, approved by
+the co-director with five additions): heard means handed to the device callback; each executor
+records undo records for each apply and, on leaving an epoch, takes back those at or past where
+hearing ended, newest first; the main thread removes their log entries, voids their slots and places
+them again in order at the next play. Every kind of slot is judged alike; a dropped ack for an
+unheard slot is not `launch_unlogged`; a stop exactly at the switch frame is unheard. engine.md
+§1.4.2 and §3.1 have the rules.
+
+Review round 201 (same date) found that an early half's record, undone, also undid a heard switch
+made after it, and that the executors and the main thread judged "heard" from different sources (an
+eight-entry ring read as "reused = heard", the renderer's own count after a timed-out wait, each
+side's plan for the shift). Decided: an early half's record restores only that half; one verdict per
+slot, from one end (the callback's, published per epoch in a ring of 64) and one key (set in the
+slot by the first executor to apply it); an end not known is taken as unheard, and a renderer whose
+wait timed out applies and takes back nothing until the callback's end is known; a capture that
+lists a launch whose verdict is not in, or that ran over such a late or taken-as-unheard verdict, is
+not as heard (`launch_unsettled`).
+
+Review round 203 (same date) found that the main thread judged a log entry again at every service,
+so 64 epochs after a heard launch its ring entry was reused and the launch was taken back as unheard.
+Decided: a verdict is made once and stored. The callback writes each slot's verdict as it leaves the
+epoch, before publishing the end; each executor takes back at its own leave by those verdicts; the
+main thread judges each entry once (a slot's by its verdict, a return by the end it copies at its
+first read) and never looks at a heard one again. "Unknown = unheard" is kept only for an epoch no
+service read in time. The key is the one set at the switch; a shift change between an early half and
+its switch, or between the executors' switches, marks the capture rather than being approximated, and
+so does a capture begun over the frames a late renderer leave rendered before it settled.
+
+Review round 205 (same date) found that waiting for a slot's log entries to be judged held every
+launch's slot until its epoch ended (the 257th launch in one play was refused), and that a slot whose
+ack was not read could be reused, dropping a heard launch. Decided, as the simpler lifetime: a slot is
+taken again only once its switch is known heard (in its epoch, played past; after it, by its verdict),
+the launch reads the acks first and settles the slot's entries as heard as it takes it; an unheard
+slot is voided and placed again, never reused. A seeded sequence test of launches, stops, seeks,
+services and captures on both executors holds these invariants (test_launch_sequence.cpp).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

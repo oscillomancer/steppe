@@ -483,17 +483,19 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   launchFresh, launchReturned, skipLive, launchFadeFrames,
                                   arrangementGain, arrangementGains, launchBuf, launchReaders,
                                   launchWarm, launchWarmAt, launchSwitchAt, launchSwitchPhase,
-                                  launchSwitchPending, launchWarmNext, launchWarmValid, clipVoices,
-                                  clipWindow, postItems, itemShift, items, mix, silentFrom,
-                                  silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
-                                  panSettings, panCache, type, mute, master, decodeInput,
-                                  phaseInvert, mono, utility, soloSilenced, postKeyed, stageSlot,
-                                  decoder, encoder, fader, keyEncoder, keyFader, monitorInputs,
-                                  tapeAuto, midiIn, liveHeld, live, autoVolume, autoPan, autoMute,
-                                  autoWidth, autoPanLeft, autoPanRight, autoPanBoost, holdWidth,
-                                  holdPanLeft, holdPanRight, holdPanBoost, holdVolume, holdPan,
-                                  vcas, auxPostGain, meterSlot, meterGeneration, meterPeak,
-                                  meterSumSq] = n;
+                                  launchSwitchPending, launchWarmNext, launchWarmValid,
+                                  launchNextKey, launchWarmKey, launchEntryKey, launchUndos,
+                                  launchUndoCount, launchUndoLostKey, launchUndoLostEpoch,
+                                  clipVoices, clipWindow, postItems, itemShift, items, mix,
+                                  silentFrom, silentTo, dropItems, noteTarget, volumeDb, pan,
+                                  staticGain, panSettings, panCache, type, mute, master,
+                                  decodeInput, phaseInvert, mono, utility, soloSilenced, postKeyed,
+                                  stageSlot, decoder, encoder, fader, keyEncoder, keyFader,
+                                  monitorInputs, tapeAuto, midiIn, liveHeld, live, autoVolume,
+                                  autoPan, autoMute, autoWidth, autoPanLeft, autoPanRight,
+                                  autoPanBoost, holdWidth, holdPanLeft, holdPanRight, holdPanBoost,
+                                  holdVolume, holdPan, vcas, auxPostGain, meterSlot,
+                                  meterGeneration, meterPeak, meterSumSq] = n;
     d.put(a, "id", n.id);
     d.put(a, "type", n.type);
     d.put(a, "master", n.master);
