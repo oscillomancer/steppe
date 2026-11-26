@@ -2350,6 +2350,15 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
+  Each command declares in the registry the codes it answers:
+  `modulation.add`, `modulation.set` and `modulate` their route checks;
+  every command that copies routes (M5) `modulation.limit`, and every one
+  that moves a take to another track `modulation.cycle`, both declared by
+  the edit wrapper that raises them; `item.heal` `item.heal_fx`; and the
+  background bakes and their commits `item.consolidate_stale` and
+  `item.mix_stale`. A test keeps the declarations and the raised codes
+  together. Warnings have no registry: `modulation.not_copied`,
+  `modulation.stacked` and `modulation.removed` are listed here only.
   The warning `modulation.not_copied` (M5) carries no hint, so its message
   holds the remedy.
 - Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds

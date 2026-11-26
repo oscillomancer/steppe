@@ -418,6 +418,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `item.locked`: a locked item is in the way Hint: unlock it with item.set first
 - `clip.unsupported`: a clip's loop window has no item equivalent Hint: set its loop to the whole content, or off
 - `launch.commit.fade`: a piece would start or end inside a clip's own fade Hint: capture again with the switches and loop wraps outside the clip's fades, or set its fades to 0 (clip.set); the performance is kept
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 

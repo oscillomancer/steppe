@@ -282,6 +282,9 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     commit.summary = "Attach consolidated audio and merge MIDI as one replayable edit.";
     commit.args = commitSchema();
     commit.result = schema::any();
+    commit.errors = {{"item.consolidate_stale",
+                      "the selection, or what its render read, changed since the job began",
+                      "consolidate again once the edits are done"}};
     commit.run = [](const Commit& a, cmd::Context& ctx) -> Result<json::Value> {
         auto& app = ctx.service<EngineApp>();
         const auto s = app.view();
@@ -361,6 +364,12 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     command.args = argsSchema();
     command.result = schema::any();
     command.errors = {
+        {"item.consolidate_stale",
+         "the selection, or what its render read (a route's source, a track it hears), changed",
+         "consolidate again once the edits are done"},
+        // Its job's commit answers the route limit (addChecked, ADR-0096 M5).
+        {"modulation.limit", "the consolidated takes' routes would pass the route limit",
+         "remove routes first (modulation.list), for instance the copied chain's"},
         {"item.consolidate_*", "invalid material, stale inputs or failed capture",
          "repair the selected sources/layout and retry consolidation"},
         {"item.follow_merge", "merging following MIDI takes would change how a note sounds",

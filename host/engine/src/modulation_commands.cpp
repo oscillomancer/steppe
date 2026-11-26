@@ -437,6 +437,28 @@ Status checkRoute(EngineApp& app, const model::Session& s, model::Modulation& m,
     return {};
 }
 
+// What checkRoute and checkCycle answer (modulation.add, modulation.set and,
+// through modulation.add, modulate); `add` adds the route limit.
+std::vector<cmd::ErrorSpec> routeErrors(bool add) {
+    std::vector<cmd::ErrorSpec> out = {
+        {"modulation.source", "the source is not a Mod Out module",
+         "use rack.get to find the rack's Mod Out, or add one with module.add"},
+        {"modulation.target", "the target is missing, not one object, or not modulatable",
+         "check fx.describe or the track's params, and name one fx, track or route"},
+        {"modulation.envelope", "the parameter takes routes through an envelope it lacks",
+         "add one with env.add, or use modulate, which adds it"},
+        {"modulation.depth", "the depth is outside the target's range",
+         "-1..1 for a plug-in parameter, -48..48 dB for volume, -200..200 % for pan or width"},
+        {"modulation.duplicate", "the same source already reaches that parameter",
+         "change that route's depth with modulation.set instead"},
+        {"modulation.cycle", "the route would let its rack hear what it modulates",
+         "modulate another track, or remove the send into the rack's In module"}};
+    if (add)
+        out.push_back({"modulation.limit", "the project holds the most routes it can",
+                       "remove routes you no longer need with modulation.remove"});
+    return out;
+}
+
 // After the edit: a cycle is the model's to find; say it at the target.
 Status checkCycle(EngineApp& app) {
     Status ok = model::checkInvariants(app.txn().preview());
@@ -528,6 +550,7 @@ void registerModulationCommands(cmd::Registry& registry) {
                              "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})"),
                        j(R"({"modulation": "mr_1", "param": "gain", "param_name": "<any>"})"),
                        "song_with_mod_out"}};
+        c.errors = routeErrors(true);
         c.run = [](const ModAddArgs& a, Context& ctx) -> Result<ModAdded> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -615,6 +638,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.result = emptySchema();
         c.examples = {{"Deepen", j(R"({"modulation": "mr_1", "depth": 0.5})"), j("{}"),
                        "song_with_modulation"}};
+        c.errors = routeErrors(false);
         c.run = [](const ModSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -882,8 +906,15 @@ void registerModulationCommands(cmd::Registry& registry) {
                              "rack": "rk_1", "module": "mo_3", "mod_out": "mo_2",
                              "input": "in_1"})"),
                        "song_with_mod_out"}};
-        c.errors = {{"modulation.cycle", "a follower on a track the target feeds",
-                     "listen to another track, or modulate a buss it feeds"}};
+        // Its route goes through modulation.add, so it answers what that does;
+        // a follower on a track the target feeds is its own cycle.
+        c.errors = routeErrors(true);
+        for (cmd::ErrorSpec& e : c.errors)
+            if (e.code == "modulation.cycle")
+                e = {"modulation.cycle",
+                     "the route, or a follower on a track the target feeds, "
+                     "would let the rack hear what it modulates",
+                     "listen to another track, or modulate a buss it feeds"};
         c.run = [](const ModulateArgs& a, Context& ctx) -> Result<Modulated> {
             EngineApp& app = engine::app(ctx);
             const auto nested = [&](const char* name, json::Value args,

@@ -63,6 +63,16 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `modulation.source`: the source is not a Mod Out module Hint: use rack.get to find the rack's Mod Out, or add one with module.add
+- `modulation.target`: the target is missing, not one object, or not modulatable Hint: check fx.describe or the track's params, and name one fx, track or route
+- `modulation.envelope`: the parameter takes routes through an envelope it lacks Hint: add one with env.add, or use modulate, which adds it
+- `modulation.depth`: the depth is outside the target's range Hint: -1..1 for a plug-in parameter, -48..48 dB for volume, -200..200 % for pan or width
+- `modulation.duplicate`: the same source already reaches that parameter Hint: change that route's depth with modulation.set instead
+- `modulation.cycle`: the route would let its rack hear what it modulates Hint: modulate another track, or remove the send into the rack's In module
+- `modulation.limit`: the project holds the most routes it can Hint: remove routes you no longer need with modulation.remove
+
 ### Examples
 
 **Add** (`song_with_mod_out`)
@@ -387,6 +397,15 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.source`: the source is not a Mod Out module Hint: use rack.get to find the rack's Mod Out, or add one with module.add
+- `modulation.target`: the target is missing, not one object, or not modulatable Hint: check fx.describe or the track's params, and name one fx, track or route
+- `modulation.envelope`: the parameter takes routes through an envelope it lacks Hint: add one with env.add, or use modulate, which adds it
+- `modulation.depth`: the depth is outside the target's range Hint: -1..1 for a plug-in parameter, -48..48 dB for volume, -200..200 % for pan or width
+- `modulation.duplicate`: the same source already reaches that parameter Hint: change that route's depth with modulation.set instead
+- `modulation.cycle`: the route would let its rack hear what it modulates Hint: modulate another track, or remove the send into the rack's In module
 
 ### Examples
 

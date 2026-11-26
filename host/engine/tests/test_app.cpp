@@ -16,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <set>
 #include <thread>
 
@@ -40,6 +41,7 @@
 #endif
 #include "audition_loader.h"
 #include "bridge_patience.h"
+#include "command_validation.h"
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
@@ -6427,6 +6429,81 @@ TEST_CASE(
     REQUIRE(d2.execute({"project.open", j(R"({"path": "copied.json"})"), kTest}));
     CHECK(model::serializeProject(reopened->head()) == model::serializeProject(app->head()));
     CHECK(inert(d2) == std::vector<std::string>{"take", ""});
+}
+
+TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)") {
+    // A client words a refusal from the registry entry of the command it ran:
+    // the route commands, the copies and moves addChecked refuses for (by
+    // its own lists, detail::copiedPath and movesTakes), item.heal and the
+    // stale bakes. Every modulation.* code raised in the route commands'
+    // and the wrapper's sources is declared by a command; warnings are not
+    // in the registry (session-model.md lists modulation.not_copied).
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const auto declares = [&](const char* name, const std::string& code) {
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE_MESSAGE(info, name);
+        return std::any_of(info->errors.begin(), info->errors.end(),
+                           [&](const cmd::ErrorSpec& e) { return e.code == code; });
+    };
+    std::vector<std::string> undeclared;
+    const auto need = [&](const char* name, const std::string& code) {
+        if (!declares(name, code)) undeclared.push_back(std::string(name) + ": " + code);
+    };
+    for (const char* name :
+         {"item.paste", "item.consolidate", "item.consolidate.commit", "item.add", "clip.duplicate",
+          "scene.capture", "scene.insert", "arrangement.build", "track.duplicate", "launch.commit",
+          "item.duplicate", "item.split", "clip.add", "take.add"}) {
+        CHECK_MESSAGE(!detail::copiedPath(name).empty(), name);
+        need(name, "modulation.limit");
+    }
+    for (const char* name : {"item.move", "clip.move", "take.extract", "item.explode-takes"}) {
+        CHECK_MESSAGE(detail::movesTakes(name), name);
+        need(name, "modulation.cycle");
+    }
+    const std::vector<std::string> route = {"modulation.source",    "modulation.target",
+                                            "modulation.envelope",  "modulation.depth",
+                                            "modulation.duplicate", "modulation.cycle"};
+    for (const std::string& code : route) {
+        need("modulation.add", code);
+        need("modulation.set", code);
+        need("modulate", code);
+    }
+    need("modulation.add", "modulation.limit");
+    need("modulate", "modulation.limit");
+    need("item.heal", "item.heal_fx");
+    need("item.consolidate", "item.consolidate_stale");
+    need("item.consolidate.commit", "item.consolidate_stale");
+    need("item.mix-to-track", "item.mix_stale");
+    need("item.mix-to-track.commit", "item.mix_stale");
+    // The sources: each modulation.* literal that is neither a command's
+    // name nor a warning's code is declared somewhere.
+    const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "src";
+    const std::set<std::string> notErrors = {"modulation.add",       "modulation.set",
+                                             "modulation.remove",    "modulation.list",
+                                             "modulation.telemetry", "modulation.stacked",
+                                             "modulation.removed",   "modulation.not_copied"};
+    for (const char* file : {"modulation_commands.cpp", "command_validation.h"}) {
+        std::ifstream in(src / file);
+        REQUIRE_MESSAGE(in, file);
+        const std::string text{std::istreambuf_iterator<char>(in), {}};
+        static const std::regex code(R"re("(modulation\.[a-z_]+)")re");
+        std::set<std::string> raised;
+        for (std::sregex_iterator i(text.begin(), text.end(), code), e; i != e; ++i)
+            raised.insert((*i)[1]);
+        for (const std::string& c : raised) {
+            if (notErrors.count(c)) continue;
+            bool any = false;
+            for (const cmd::CommandInfo* info : registry.all())
+                any = any || std::any_of(info->errors.begin(), info->errors.end(),
+                                         [&](const cmd::ErrorSpec& s) { return s.code == c; });
+            if (!any) undeclared.push_back(std::string("no command: ") + c + " (" + file + ")");
+        }
+    }
+    std::string list;
+    for (const std::string& u : undeclared) list += u + "\n";
+    INFO("undeclared:\n" << list);
+    CHECK(undeclared.empty());
 }
 
 TEST_CASE(

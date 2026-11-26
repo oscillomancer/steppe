@@ -261,6 +261,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `track.unknown`: no such track Hint: use a live id from track.list
 - `track.strip_type`: a master cannot be duplicated Hint: duplicate channels and busses
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 

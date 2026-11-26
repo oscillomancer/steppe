@@ -274,6 +274,9 @@ void registerMixCommands(cmd::Registry& registry) {
     commit.summary = "Put a finished item mix on a new muted channel as one replayable edit.";
     commit.args = commitSchema();
     commit.result = schema::any();
+    commit.errors = {{"item.mix_stale",
+                      "the selection, or what its mix read, changed since the job began",
+                      "mix again once the edits are done"}};
     commit.run = [](const Commit& a, cmd::Context& ctx) -> Result<json::Value> {
         auto& app = ctx.service<EngineApp>();
         const auto s = app.view();
@@ -346,6 +349,9 @@ void registerMixCommands(cmd::Registry& registry) {
         {"item.mix_not_channel", "an item is not on a channel", "select items on channels only"},
         {"item.mix_empty", "nothing selected plays material", "select items with audio or MIDI"},
         {"track.frozen", "an item is on a frozen channel", "unfreeze the channel first"},
+        {"item.mix_stale",
+         "the selection, or what its mix read (a route's source, a track it hears), changed",
+         "mix again once the edits are done"},
         {"item.mix_*", "stale selection, failed render or media", "repair and retry the mix"}};
     command.examples = {{"Mix an audio item to a new channel",
                          *json::parse(R"({"items":["it_1"]})"), *json::parse(R"({"job":"<any>"})"),

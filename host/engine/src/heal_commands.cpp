@@ -28,7 +28,9 @@ void registerHealCommands(cmd::Registry& registry) {
                  .field("items", &Args::items, schema::arrayOf(model::idSchema()).minItems(2))
                  .build();
     c.result = schema::any();
-    c.errors = {{"item.heal_*", "selection cannot be restored as a continuous source",
+    c.errors = {{"item.heal_fx", "the pieces' take FX, their states or their routes differ",
+                 "make the chains and routes match (modulation.list {fx}), or consolidate"},
+                {"item.heal_*", "selection cannot be restored as a continuous source",
                  "select unchanged split pieces or use item.consolidate instead"},
                 {"item.selection", "a linked or warp peer is unselected",
                  "include every affected peer or suspend the edit link"}};

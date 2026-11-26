@@ -220,6 +220,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `scene.empty`: a scene in the sequence has no clips Hint: add clips with clip.add
 - `scene.insert.occupied`: items are already in an entry's span Hint: move or remove them, or start at another bar
 - `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for fewer bars
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 

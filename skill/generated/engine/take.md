@@ -100,6 +100,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
+
 ### Examples
 
 **Copy a take** (`song_with_item`)
@@ -1105,6 +1109,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the move puts a modulated take where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 

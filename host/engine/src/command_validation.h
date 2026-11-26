@@ -113,6 +113,19 @@ inline bool movesTakes(std::string_view command) {
 // error restores this invocation's savepoint even inside a larger transaction.
 template <class Args, class Output>
 void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
+    // What the wrapper below answers for a copy or a move (ADR-0096 M5),
+    // declared here with it, so a registry walk finds each.
+    const auto declare = [&](cmd::ErrorSpec spec) {
+        if (std::none_of(command.errors.begin(), command.errors.end(),
+                         [&](const cmd::ErrorSpec& e) { return e.code == spec.code; }))
+            command.errors.push_back(std::move(spec));
+    };
+    if (!detail::copiedPath(command.name).empty())
+        declare({"modulation.limit", "the copy's routes would pass the project's route limit",
+                 "remove routes first (modulation.list), for instance the copied chain's"});
+    if (detail::movesTakes(command.name))
+        declare({"modulation.cycle", "the move puts a modulated take where its rack hears it",
+                 "remove the route, or choose another track"});
     if (command.kind != cmd::Kind::Query) {
         auto original = std::move(command.run);
         auto encoded = command.args;
