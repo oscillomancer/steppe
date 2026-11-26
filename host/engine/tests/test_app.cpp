@@ -6971,10 +6971,14 @@ TEST_CASE(
     // Other, then load a preset with a sourceless Notes module or patch one
     // in (refused by the nested module.add at the module's entry); variants
     // 8 and 9 are variant 4 with the parent send turned off, or turned on
-    // when it already was: the record rack closed the cycle (F3). Each is
+    // when it already was: the record rack closed the cycle (F3). Round 202
+    // F1: variant 10 is variant 4 with Other under Listened, its parent send
+    // off, turned on with the record rack: Other's send to Listened makes
+    // the parent send redundant, so the answer is the record rack's, and
+    // following its hint (the parent send alone) is accepted. Each is
     // refused with the declared modulation.cycle at its argument, with its
     // row's hint, and changes nothing.
-    for (int variant = 0; variant < 10; ++variant) {
+    for (int variant = 0; variant < 11; ++variant) {
         INFO("variant " << variant);
         Root root;
         auto app = makeApp(root.path);
@@ -7090,7 +7094,7 @@ TEST_CASE(
             rowPath = "/rack";
             args = j(R"({"modules": {"keys": {"type": "notes"}}})");
             args["rack"] = rack;
-        } else {  // Synth's Out as Other's input (round 199 probe I; 8, 9 round 200 F3)
+        } else {  // Synth's Out as Other's input (round 199 probe I; 8, 9 round 200 F3; 10)
             const std::string synth =
                 run("track.add", j(R"({"name": "Synth"})"))["track"].asString();
             json::Value addRack = json::Value::object();
@@ -7110,6 +7114,16 @@ TEST_CASE(
             args["record_rack"] = out;
             if (variant == 8) args["parent_send"] = false;
             if (variant == 9) args["parent_send"] = true;  // on already: no new edge
+            if (variant == 10) {  // under Listened, its parent send off, then on
+                json::Value move = json::Value::object();
+                move["track"] = other;
+                move["parent"] = listened;
+                run("track.move", move);
+                json::Value off = j(R"({"parent_send": false})");
+                off["track"] = other;
+                run("track.set", off);
+                args["parent_send"] = true;
+            }
             // Every kind of edge the check walks is in this project.
             std::set<model::CycleEdgeKind> kinds;
             for (const model::CycleEdge& e : model::cycleEdges(app->view())) kinds.insert(e.kind);
@@ -7134,6 +7148,12 @@ TEST_CASE(
         CHECK_MESSAGE(row != detail::kCycleRows.end(), "no row " << wantCommand << " " << wantPath);
         if (row != detail::kCycleRows.end()) CHECK(r.error().hint == row->hint);
         CHECK(model::serializeProject(app->view()) == before);
+        if (variant == 10) {  // its hint followed: the record rack left out
+            json::Value parentOnly = j(R"({"parent_send": true})");
+            parentOnly["track"] = args["track"];
+            const auto followed = d.execute({"track.set", parentOnly, kTest});
+            CHECK_MESSAGE(followed, (followed ? "" : followed.error().toString()));
+        }
     }
 }
 

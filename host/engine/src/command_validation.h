@@ -230,9 +230,10 @@ inline constexpr std::array<CycleRow, 29> kCycleRows{{
 // gives (a parent send or a source's sends turned off, or a record rack
 // cleared, makes no edge; a Notes source cleared does: the module then
 // follows its rack's channel):
-// the first whose kind of edge is one the edit added to the cycle the check
-// reports (round 200 F3), else the first of them, else the command's row
-// without an argument.
+// the first whose new edges the cycle needs (taking them out of the edit's
+// result leaves no cycle: rounds 200 F3, 202 F1), else the first of them
+// (two edges each needed: either argument is a fix), else the command's
+// row without an argument.
 inline bool makesEdge(const CycleRow& r, const json::Value& fields) {
     const json::Value* v = fields.find(std::string(r.field));
     if (!v) return false;
@@ -241,7 +242,8 @@ inline bool makesEdge(const CycleRow& r, const json::Value& fields) {
     return true;
 }
 inline const CycleRow* cycleRow(std::string_view command, const json::Value& fields,
-                                const std::vector<model::CycleEdgeKind>& added = {}) {
+                                const model::Session* after = nullptr,
+                                const std::vector<model::CycleEdge>& added = {}) {
     const CycleRow* fallback = nullptr;
     const CycleRow* given = nullptr;
     for (const CycleRow& r : kCycleRows) {
@@ -249,19 +251,23 @@ inline const CycleRow* cycleRow(std::string_view command, const json::Value& fie
         if (r.field.empty()) {
             if (!fallback) fallback = &r;
         } else if (makesEdge(r, fields)) {
-            if (std::find(added.begin(), added.end(), r.edge) != added.end()) return &r;
             if (!given) given = &r;
+            if (!after) continue;
+            std::vector<model::CycleEdge> mine;
+            for (const model::CycleEdge& e : added)
+                if (e.kind == r.edge) mine.push_back(e);
+            if (!mine.empty() && !model::hasCycleWithout(*after, mine)) return &r;
         }
     }
     return given ? given : fallback;
 }
-// The kinds of the edges on the cycle `after` reports that `before` lacks.
-inline std::vector<model::CycleEdgeKind> addedCycleEdges(const model::Session& before,
-                                                         const model::Session& after) {
+// The edges `after` has that `before` lacks.
+inline std::vector<model::CycleEdge> addedCycleEdges(const model::Session& before,
+                                                     const model::Session& after) {
     const auto old = model::cycleEdges(before);
-    std::vector<model::CycleEdgeKind> out;
-    for (const model::CycleEdge& e : model::reportedCycle(after))
-        if (std::find(old.begin(), old.end(), e) == old.end()) out.push_back(e.kind);
+    std::vector<model::CycleEdge> out;
+    for (const model::CycleEdge& e : model::cycleEdges(after))
+        if (std::find(old.begin(), old.end(), e) == old.end()) out.push_back(e);
     return out;
 }
 // What the registry declares for a command that has rows: its rows' causes
@@ -388,8 +394,8 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     const model::Session after = app.txn().preview();
                     Status ok = model::checkInvariants(after);
                     if (!ok && ok.error().code == "modulation.cycle") {
-                        row =
-                            detail::cycleRow(name, fields, detail::addedCycleEdges(before, after));
+                        row = detail::cycleRow(name, fields, &after,
+                                               detail::addedCycleEdges(before, after));
                         Error e = ok.error();
                         e.path = std::string(row->path);
                         e.hint = std::string(row->hint);

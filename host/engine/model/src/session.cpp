@@ -1329,6 +1329,8 @@ std::string_view cycleEdgeWord(CycleEdgeKind kind) {
             return "notes_follow";
         case CycleEdgeKind::Modulation:
             return "modulation";
+        case CycleEdgeKind::Count:
+            break;
     }
     return "";
 }
@@ -1336,6 +1338,16 @@ std::string_view cycleEdgeWord(CycleEdgeKind kind) {
 std::vector<CycleEdge> cycleEdges(const Session& s) {
     Checker c{s, {}, {}, nullptr};
     return c.cycleGraph().edges();
+}
+
+bool hasCycleWithout(const Session& s, const std::vector<CycleEdge>& removed) {
+    Checker c{s, {}, {}, nullptr};
+    const CycleGraph all = c.cycleGraph();
+    CycleGraph kept;
+    for (const CycleEdge& e : all.edges())
+        if (std::find(removed.begin(), removed.end(), e) == removed.end())
+            kept.add(e.kind, e.from, e.to);
+    return !findCycle(kept).empty();
 }
 
 std::vector<CycleEdge> reportedCycle(const Session& s) {

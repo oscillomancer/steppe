@@ -2297,9 +2297,11 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.cycle` in the registry, and an edit that closes a cycle is
   refused at the row's argument with the row's hint and changes nothing.
   When an edit gives the arguments of several rows, the refusal takes the
-  first whose kind of edge the edit added to the reported cycle; an
-  argument that makes no edge (a parent send or a source's sends turned
-  off, a record rack cleared) picks no row. The modulation commands refuse
+  first whose new edges the cycle needs (without them the edit's result
+  has no cycle), so following its hint leads to an accepted call; when
+  each is needed, the first given; an argument that makes no edge (a
+  parent send or a source's sends turned off, a record rack cleared)
+  picks no row. The modulation commands refuse
   in their own checks; `rack.patch` adds its modules through `module.add`,
   which refuses at the module's entry (`/modules/<name>/source` or
   `/modules/<name>/rack`). The check adds every edge with its kind, so the
@@ -2314,7 +2316,9 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     copy (`track.duplicate`, `module.duplicate` in its own rack, the take
     copies) mirrors its source's edges, so only its copied modulation
     routes can close a cycle, and the copy drops those
-    (`modulation.not_copied`, reason `cycle`); a remove takes edges away, except that `track.remove` leaves
+    (`modulation.not_copied`, reason `cycle`); `fx.copy` (which copies no
+    modulation routes), `fx.preset.load` and `fx.patch.*` make no edge the
+    check walks; a remove takes edges away, except that `track.remove` leaves
     the Notes modules that played the track following their rack's
     channel (a row); undo restores a state that held. A Notes module's own
     source track is no edge (its notes reach the rack upstream of the FX
