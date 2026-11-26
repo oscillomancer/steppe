@@ -6120,3 +6120,33 @@ TEST_CASE("names: a copy of a named take reads apart from the original") {
     std::sort(notes.begin(), notes.end());
     CHECK(notes == std::vector<std::string>{"(take: Stabs, take 1)", "(take: Stabs, take 2)"});
 }
+
+TEST_CASE("modulation words: a built-in action's own words stand on the action path") {
+    // Round 194 G3: a built-in action (Track: duplicate selected) words its
+    // M5 refusal with the verb of what it ran; AppActions must not word it
+    // again with no command ("The copy would…"). (A bound action, with a
+    // command of its own, is worded by it: the walk's words, per command.)
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    const std::string own =
+        "Duplicating the track would make more than 4096 modulation routes, the most a "
+        "project holds.";
+    actions::Action builtin;
+    builtin.id = "test.duplicate";
+    builtin.name = "Test: duplicate";
+    builtin.builtin = [own](const actions::Context&) -> Result<json::Value> {
+        return Error("modulation.limit", own, "/args/tracks");
+    };
+    f.actions->registry().add(builtin);
+    auto r = f.actions->run("test.duplicate");
+    REQUIRE_FALSE(r);
+    CHECK(r.error().message == own);
+    REQUIRE(said.size() == 1);
+    CHECK(said.back() == "Test: duplicate: " + own);
+    CHECK(said.back().find("The copy") == std::string::npos);
+}
