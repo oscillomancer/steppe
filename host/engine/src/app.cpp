@@ -740,18 +740,22 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
                 txn.create(std::move(item));
             }
     }
-    // A copy keeps its routes (ADR-0096 M5): each route into one of the
-    // copied FX, onto its copy, with the same source, parameter, depth,
-    // enabled and lane. Whether the destination can keep it is known only
-    // once the command has placed the copy (settleCopiedRoutes).
+    // A copy keeps its routes (ADR-0096 M5). Whether the destination can
+    // keep them is known only once the command has placed the copy
+    // (settleCopiedRoutes).
+    copyRoutesInto(source, txn, ids);
+    return fresh;
+}
+
+void copyRoutesInto(const model::Session& source, model::EditTxn& txn,
+                    const std::map<model::Id, model::Id>& fx) {
     for (const auto& e : source.modulations) {
-        const auto to = ids.find(e.value->target.object);
-        if (to == ids.end() || to->first == original) continue;
+        const auto to = fx.find(e.value->target.object);
+        if (to == fx.end() || to->first.kind != model::Kind::Fx) continue;
         model::Modulation route = *e.value;
         route.target.object = to->second;
         txn.copiedRoute(txn.create(std::move(route)), e.id);
     }
-    return fresh;
 }
 
 std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToLimit,

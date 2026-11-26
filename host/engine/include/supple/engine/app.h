@@ -1474,6 +1474,13 @@ class EngineApp : public cmd::Host {
 // transaction (EditTxn::copiedRoute) for settleCopiedRoutes.
 Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, model::Id original,
                            model::Take copy, double shift = 0);
+// Copies each route of `source` whose target is an FX among `fx`'s keys onto
+// that FX's copy, its value (ADR-0096 M5): the same source, parameter,
+// depth, enabled and lane, in the originals' id order, each noted on the
+// transaction (EditTxn::copiedRoute) for settleCopiedRoutes. Keys that are
+// not FX are skipped. copyTake and take.add {from} use it.
+void copyRoutesInto(const model::Session& source, model::EditTxn& txn,
+                    const std::map<model::Id, model::Id>& fx);
 // A route a copy could not keep (ADR-0096 M5): `reason` is source, cycle or
 // limit; `message` names it, the copy's FX and the remedy.
 struct RouteNotCopied {

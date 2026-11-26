@@ -6284,6 +6284,57 @@ TEST_CASE("modulation commands: a route into a take that does not play is inert:
     CHECK(pieces[firstFirst ? 1 : 0].second == "take");
 }
 
+TEST_CASE("modulation commands: take.add {from} copies the routes into the FX it copies (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string fx = run("fx.add", fxArgs).find("fx")->asString();
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx;
+    add["target"]["param"] = "gain";
+    run("modulation.add", add);
+    // A copy of the take within its item: its FX's copy carries the route,
+    // with the same source, parameter and depth, in the same undo step.
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = take;
+    const auto copied = run("take.add", copy);
+    CHECK_FALSE(copied.find("warnings"));
+    const auto second = model::Id::parse(copied.find("id")->asString());
+    REQUIRE(second);
+    const model::Session s = app->view();
+    REQUIRE(s.modulations.size() == 2);
+    const model::Take* made = s.takes.find(*second);
+    REQUIRE(made);
+    REQUIRE(made->chain.size() == 1);
+    const auto onCopy = model::modulationsInto(s, made->chain[0]);
+    REQUIRE(onCopy.size() == 1);
+    const model::Modulation& route = *s.modulations.find(onCopy[0]);
+    CHECK(route.source.module == model::Id::parse("mo_2"));
+    CHECK(route.source.input == "in_1");
+    CHECK(route.target.param == "gain");
+    CHECK(route.depth == 0.25);
+    CHECK(model::modulationsInto(s, *model::Id::parse(fx)).size() == 1);
+    REQUIRE(app->undo());
+    CHECK(app->view().modulations.size() == 1);
+    CHECK_FALSE(app->view().takes.contains(*second));
+}
+
 TEST_CASE(
     "modulation commands: a take FX is a target, and copies of its take keep its routes (M5)") {
     Root root;

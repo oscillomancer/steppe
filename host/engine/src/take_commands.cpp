@@ -380,6 +380,9 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Add a take to an item or clip, optionally copied from one of its takes.";
+        c.description =
+            "from: copy that take of the same item or clip, its FX included; the copy keeps the "
+            "modulation routes into its FX (ADR-0096 M5), in the same undo step.";
         c.tags = {"take"};
         c.args = schema::object<TakeAddArgs>("take_add_args")
                      .field("item", &TakeAddArgs::item, ownerIdArg())
@@ -410,11 +413,16 @@ void registerTakeCommands(cmd::Registry& registry) {
                     model::fitTakeContext(copy, model::TakeHome::Clip);
                 unpoolCopiedSource(copy, s, app(ctx).txn());
                 copy.chain.clear();
+                std::map<Id, Id> copies;
                 for (Id fx : (*takeSource)->chain) {
                     auto chained = dangling<model::FxInstance>(s, fx, "/takes");
                     if (!chained) return std::move(chained).error();
                     copy.chain.push_back(app(ctx).txn().create(**chained));
+                    copies.emplace(fx, copy.chain.back());
                 }
+                // The routes into its FX too (ADR-0096 M5), settled once the
+                // command returns (addChecked).
+                copyRoutesInto(s, app(ctx).txn(), copies);
             }
             auto& txn = app(ctx).txn();
             Id fresh = txn.create(std::move(copy));

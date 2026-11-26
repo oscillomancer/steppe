@@ -66,7 +66,7 @@ Result:
 
 Add a take to an item or clip, optionally copied from one of its takes.
 
-
+from: copy that take of the same item or clip, its FX included; the copy keeps the modulation routes into its FX (ADR-0096 M5), in the same undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 

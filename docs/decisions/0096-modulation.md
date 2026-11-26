@@ -108,7 +108,8 @@ changes is in engine.md §1.4.1, "Take FX targets".
     pasting or splitting an item; laying a clip on the timeline (by hand,
     a scene insert or an arrangement build); capturing items into clips;
     duplicating a clip or a track; committing a performance; an overdub's
-    new take; a consolidation's MIDI merge.
+    new take; a consolidation's MIDI merge; copying a take within its item
+    or clip (`take.add {from}`, ruled 2026-11-26).
   - **`track.duplicate`.** It copies every route whose target is on the
     track: fader, pan, width, its sends' levels, chain, input-chain and
     take FX. Before M5 it copied none. Its copy cannot close a cycle.

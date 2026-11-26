@@ -98,6 +98,7 @@ inline std::string copiedPath(std::string_view command) {
     if (command == "launch.commit") return "/performance";
     if (command == "item.duplicate" || command == "item.split" || command == "clip.add")
         return "/item";
+    if (command == "take.add") return "/from";
     return "";
 }
 // The commands that move a take to another track, whose cycle refusal is at

@@ -2197,7 +2197,10 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     `clip.duplicate`;
   - `scene.insert`, `arrangement.build`, `track.duplicate` and
     `launch.commit`;
-  - the new take of a MIDI overdub, and `item.consolidate`'s MIDI merge.
+  - the new take of a MIDI overdub, and `item.consolidate`'s MIDI merge;
+  - `take.add {from}`, which copies a take within its item or clip, FX
+    included, and copies the routes into those FX (`copyRoutesInto`, as
+    `copyTake` does; the co-director's ruling of 2026-11-26).
 - **`track.duplicate`.** It copies every route whose target is on the
   duplicated track: its volume, pan and width; the level of each send it
   copies (onto the copy's new send); and its chain, input-chain and take
@@ -2250,6 +2253,7 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     - `/scene`: `scene.insert`;
     - `/sequence`: `arrangement.build`;
     - `/tracks`: `track.duplicate`;
+    - `/from`: `take.add`;
     - `/performance`: `launch.commit`, or the root `""` when it commits
       the last capture without naming one.
 - **A recording is never refused for the limit.** The overdub's copy at

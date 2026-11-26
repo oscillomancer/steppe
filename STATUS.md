@@ -970,7 +970,8 @@ instructions are in `docs/guides/installing.md`.
   depend on the block size; on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
   pressed within 32 more frames of its boundary takes the next. A route
-  into a take that does not play is idle. Copies keep their routes: every
+  into a take that does not play is idle (`modulation.list` says `inert:
+  "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same
   undo step, and one the copy cannot keep (its source missing, or a
   cycle) is dropped and named (`modulation.not_copied`). A copy past 4096
