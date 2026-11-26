@@ -1291,7 +1291,8 @@ window with that source picked. A modulated parameter's lane has a
 move it), and its title names the parameter first ("Filter 1 Cutoff ·
 Marram"). On a fader, pan or FX parameter, the right-click menu's **Show
 modulation source** takes you there too; clicking the violet bar only
-changes the depth.
+changes the depth. The same menu's **Remove modulation** removes one
+route, named by its source, and leaves the rack as it is.
 
 ## Timing audio with hits and stretch markers
 
