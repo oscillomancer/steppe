@@ -1037,7 +1037,8 @@ instructions are in `docs/guides/installing.md`.
   read the same. A take's FX (ADR-0096 M5) modulate from the FX window as
   a track's do; the item's or clip's inspector lists the routes of its
   heard take (the names carry no mark by default:
-  `views::kTakeNameMarksShown`, Nate's call), and a route into a take
+  `views::kTakeNameMarksShown`, Nate's call), a clip's modulated take FX
+  parameter has its lane in the MIDI editor with the band and live value, and a route into a take
   that does not play says why ("another take of its item plays", "its item
   is muted"). The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is

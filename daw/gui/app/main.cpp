@@ -698,6 +698,10 @@ int frontendMain(int argc, char** argv) {
     // The MIDI editor takes its wheel bindings from it too.
     const fs::path mouseFile = views::MouseMap::defaultFile(product::kSlug);
     midiEditor.setMouseMap(&shell.arrange()->gestures().mouse);
+    // The arrange's modulation feed (ADR-0096 M5): the clip-time lanes'
+    // bands and live values, as the timeline's.
+    midiEditor.setModulation(&shell.arrange()->trackLayout().unipolarSource,
+                             &shell.arrange()->trackLayout().liveOffsets);
     gui::MouseDialog mouseDialog(root, shell.arrange()->gestures().mouse,
                                  o.offscreen ? fs::path{} : mouseFile);
     mouseDialog.onError = [](const std::string& message) {
