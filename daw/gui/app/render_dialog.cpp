@@ -159,9 +159,12 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
                "audio in Edit > Audio device starts clean)";
     // A launch whose heard-or-not verdict was not in when the capture was
     // read (just after a stop or seek, round 201), or came late (a renderer
-    // or shift change it could not follow, round 203): in the first case the
-    // capture's facts change once it is in and followCapture redoes the
-    // line; in the others only a new capture is as heard.
+    // or shift change it could not follow, round 203; frames the renderer
+    // rendered before it settled, or a launch an executor passed or missed
+    // at a play start, counted and expected never, rounds 209 and 214): in
+    // the first case the capture's facts change once it is in and
+    // followCapture redoes the line; in the others only a new capture is as
+    // heard.
     if (reason == "launch_unsettled")
         return "whether a launch was heard was not known in time (let the transport settle, "
                "then capture again)";
