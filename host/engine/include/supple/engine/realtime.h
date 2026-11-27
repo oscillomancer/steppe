@@ -1377,6 +1377,9 @@ class Engine {
         // Main thread only: what to re-place after a miss or a new epoch.
         LaunchRequest request;
         model::LaunchQuantize quantize = model::LaunchQuantize::Bar;
+        // Main thread: the order its launch was made in (placed again, it
+        // keeps it), against the track's newest (launchNewest_).
+        std::uint64_t order = 0;
     };
     struct LaunchAck {
         std::uint64_t track = 0, clip = 0, epoch = 0, scene = 0;
@@ -1723,8 +1726,21 @@ class Engine {
                                      model::LaunchQuantize quantize) const;
     // launch()'s one attempt: placed, published and decided; `missed` when
     // every slot it published was missed.
+    // `into`: a launch placed again goes back into its own slot, keeping its
+    // order (round 207 F1).
     Result<LaunchPlaced> publishLaunch(std::span<const LaunchRequest> requests,
-                                       model::LaunchQuantize quantize, bool& missed);
+                                       model::LaunchQuantize quantize, bool& missed,
+                                       LaunchSlot* into = nullptr);
+    // Main thread: each track's newest launch, by the order launches were
+    // made in; one taken back that a newer launch on its track replaced is
+    // dropped, not placed again (round 207 F1).
+    std::uint64_t launchOrderNext_ = 0;
+    std::map<std::uint32_t, std::uint64_t> launchNewest_;
+    // A waiting slot whose launch a newer one on its track replaced: freed.
+    void freeLaunchSlot(LaunchSlot& s, std::uint64_t st);
+    bool replaced(const LaunchSlot& s) const;
+    // placeLaunchesAgain: `slot`'s launch placed again in its own slot.
+    Result<LaunchPlaced> launchInto(LaunchSlot& slot);
     // placeLaunch on a playrate plan while playing (S3): the first stream
     // frame at or after `floor` whose song position, on a copy of the
     // running rate timeline, reaches the quantize boundary.

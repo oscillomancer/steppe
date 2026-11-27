@@ -86,6 +86,9 @@ struct EngineTestAccess {
     }
     static void endWrite(Engine& e, std::uint64_t seq) { e.xportSeq_.store(seq + 2); }
     static std::uint64_t epoch(const Engine& e) { return e.epoch_.load(); }
+    // Whether the renderer's leave of an epoch still waits for the callback's
+    // end (settleLeave; round 201 F2).
+    static bool leavePending(const Engine& e) { return e.launchLeavePending_ != UINT64_MAX; }
     // The launch slots a new launch could not take (round 205): waiting, or
     // applied and not yet known heard.
     static std::size_t slotsHeld(const Engine& e) {

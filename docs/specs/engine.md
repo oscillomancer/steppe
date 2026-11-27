@@ -697,7 +697,16 @@ the same.*
     such a leave is still pending leaves that epoch too (it applied
     nothing there) and moves the late span on to the epoch it goes on in
     (round 205 F3). A record applied as a relocation in a later epoch is
-    judged by its frame there against that epoch's end.
+    judged by its frame there against that epoch's end. A block the
+    renderer renders with such a leave pending does not count as run: a
+    launch the callback switched meanwhile (a Notes feed's target) is
+    switched on the renderer's targets once the leave settles, at its next
+    block if still in that epoch, else at its first block after it, playing
+    by its phase as a relocation does, and `launch.state` lists it as
+    queued until then (an applied launch heard by the callback, or of an
+    ended epoch, that an executor has not switched). The renderer passing
+    such a launch's frame marks the late span whether or not anything was
+    applied ahead (round 207).
   - **A slot's lifetime** (round 205): a launch takes a free slot, or one
     whose launch every executor is done with and whose switch is known
     heard: in its epoch once the callback has played past its key, after
@@ -708,6 +717,16 @@ the same.*
     epoch and taken back (`LaunchSlot::left`). So a long play reuses slots
     as their launches are heard, and many epochs without a service lose
     no heard launch.
+  - **The newest launch on a track wins** (round 207): after a take-back a
+    track holds what the in-callback executor, which never ran ahead,
+    would. A launch replaces every launch still waiting on its track
+    (pending, committed, missed or voided), and one taken back that a
+    newer launch on its track replaced (`LaunchSlot::order`, the track's
+    newest) is dropped, not placed again, nor listed by `launch.state`. One
+    placed again goes back into its own slot, so every taken-back launch
+    settles in one service. A launch first takes back and voids what the
+    executors have judged unheard, so with no service at all the slots
+    held stay bounded by the tracks.
   - The main thread judges each log entry once: a slot's entry by the
     slot's verdict, or as heard when its slot is taken (above), a return
     by its epoch's end, which it copies from the ring the first

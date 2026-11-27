@@ -394,6 +394,23 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
     }
 }
 
+Result<Engine::LaunchPlaced> Engine::launchInto(LaunchSlot& slot) {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan)
+        return Error("launch.engine", "no project is loaded in the engine", "",
+                     "start the engine with a project first");
+    const LaunchRequest r = slot.request;
+    if (auto refused = launchRefused(*plan, r)) return std::move(*refused);
+    for (int attempt = 0;; ++attempt) {
+        bool missed = false;
+        auto placed = publishLaunch(std::span(&r, 1), slot.quantize, missed, &slot);
+        if (!placed || !missed || attempt == 2) {
+            if (placed) captureBeforeStretchCut();
+            return placed;
+        }
+    }
+}
+
 std::optional<Error> Engine::launchRefused(const detail::Plan& plan, const LaunchRequest& r) const {
     // The scene (r.scene) is not read: EngineApp::launchRefusals answers a
     // scene from its clips' refusals, asked without it (round 149 S2).
@@ -450,14 +467,29 @@ bool Engine::slotReusable(const LaunchSlot& s, std::uint64_t st, std::uint64_t c
     return e < current && s.verdict.load(std::memory_order_acquire) == 1;
 }
 
+bool Engine::replaced(const LaunchSlot& s) const {
+    const auto it = launchNewest_.find(s.track.load());
+    return it != launchNewest_.end() && s.order < it->second;
+}
+
+void Engine::freeLaunchSlot(LaunchSlot& s, std::uint64_t st) {
+    if (s.state.compare_exchange_strong(st, next(st, LaunchSlot::kFree)) &&
+        (status(st) == LaunchSlot::kPending || status(st) == LaunchSlot::kCommitted))
+        launchesQueued_.fetch_sub(1);
+}
+
 Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest> requests,
-                                                   model::LaunchQuantize quantize, bool& missed) {
+                                                   model::LaunchQuantize quantize, bool& missed,
+                                                   LaunchSlot* into) {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     auto placed = placeLaunch(requests, quantize);
     if (!placed) return placed;
     // Every ack in first, so each applied slot's log entries exist before a
-    // slot is chosen (round 205 F2).
+    // slot is chosen (round 205 F2), and what the executors have judged
+    // unheard taken back and voided (round 207 F1: with no service between,
+    // a track's launches still do not pile up).
     if (readLaunchAcks()) sortLaunchLog();
+    if (!into) takeBackUnheard();
     const std::uint64_t current = epoch_.load(std::memory_order_acquire);
     auto& slots = *launchSlots_;
     const std::uint8_t required = options_.anticipative ? 3 : 2;
@@ -476,7 +508,11 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
         };
         LaunchSlot* slot = nullptr;
         std::uint64_t st = 0;
-        for (int tries = 0; !slot && tries < 16; ++tries) {
+        if (into) {  // placed again: its own slot
+            st = into->state.load();
+            if (into->state.compare_exchange_strong(st, next(st, LaunchSlot::kFree))) slot = into;
+        }
+        for (int tries = 0; !into && !slot && tries < 16; ++tries) {
             LaunchSlot* pick = nullptr;
             for (LaunchSlot& s : slots) {
                 const std::uint64_t now = s.state.load();
@@ -508,6 +544,20 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
                          "wait for the queued launches to play");
         if (status(st) == LaunchSlot::kPending || status(st) == LaunchSlot::kCommitted)
             launchesQueued_.fetch_sub(1);
+        if (!into) {
+            // The track's newest; any other launch still waiting on it is
+            // replaced, as its waiting slot is (round 207 F1).
+            slot->order = ++launchOrderNext_;
+            launchNewest_[r.track.n] = slot->order;
+            for (LaunchSlot& other : slots) {
+                if (&other == slot || other.track.load() != r.track.n) continue;
+                const std::uint64_t now = other.state.load();
+                const auto o = status(now);
+                if (o == LaunchSlot::kPending || o == LaunchSlot::kMissed ||
+                    o == LaunchSlot::kCommitted || o == LaunchSlot::kVoided)
+                    freeLaunchSlot(other, now);
+            }
+        }
         slot->request = r;
         slot->quantize = quantize;
         slot->track.store(r.track.n, std::memory_order_relaxed);
@@ -582,9 +632,19 @@ std::vector<Engine::LaunchPending> Engine::launchesPending() const {
         // its hearing ended, to be taken back (ADR-0097, revision
         // 2026-11-26: launch.state says such a launch is queued).
         const auto st = status(s.state.load(std::memory_order_acquire));
+        // (Or applied, heard by the callback or in an ended epoch, and still
+        // waiting for an executor to switch its targets: a renderer whose
+        // leave is held late has not switched them yet; round 207.)
+        const std::uint8_t need = s.required.load(std::memory_order_relaxed);
+        const std::uint64_t slotEpoch = s.epoch.load(std::memory_order_relaxed);
+        const std::uint64_t now = epoch_.load(std::memory_order_acquire);
+        const bool behind =
+            st == LaunchSlot::kApplied && (s.done.load(std::memory_order_acquire) & need) != need &&
+            (slotEpoch < now || (slotEpoch == now && playedStream(now) > s.key.load()));
         if (st != LaunchSlot::kPending && st != LaunchSlot::kCommitted &&
-            st != LaunchSlot::kMissed && st != LaunchSlot::kVoided && !unheardApplied(s))
+            st != LaunchSlot::kMissed && st != LaunchSlot::kVoided && !unheardApplied(s) && !behind)
             continue;
+        if (replaced(s)) continue;  // not placed again (round 207 F1)
         LaunchPending p;
         p.request = s.request;
         p.placed.epoch = s.epoch.load(std::memory_order_relaxed);
@@ -754,6 +814,32 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     // this block may go, or this executor sees the slot (LaunchSlot).
     launchHorizon_[c].epoch.store(epoch);
     launchHorizon_[c].end.store(stream + k);
+    // The renderer's leave of an epoch the callback had not left (its wait
+    // timed out) waits for the callback's end: until then nothing applies
+    // and nothing is taken back (round 201 F2), and such a block does not
+    // count as run (what it passed it did not switch: round 207).
+    if (renderer && launchLeavePending_ != UINT64_MAX && !settleLeave(p, liveClass, stream)) {
+        // Passing a launch of this epoch it has not switched: these frames
+        // lack it (switched once settled, late), so a capture over them is
+        // not as heard (round 207; one with nothing applied ahead to take
+        // back was not marked).
+        if (launchesQueued_.load() != 0 &&
+            launchLateEpoch_.load(std::memory_order_relaxed) != epoch)
+            for (const LaunchSlot& slot : *launchSlots_) {
+                const std::uint64_t was = status(slot.state.load());
+                if ((was != LaunchSlot::kCommitted && was != LaunchSlot::kApplied) ||
+                    slot.epoch.load(std::memory_order_relaxed) != epoch ||
+                    (slot.done.load(std::memory_order_acquire) & mine) == mine ||
+                    slot.target.load(std::memory_order_relaxed) >= stream + k)
+                    continue;
+                launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+                launchLateEpoch_.store(epoch, std::memory_order_release);
+                launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+                notifyMain();
+                break;
+            }
+        return k;
+    }
     const bool lastValid = launchLastValid_[c];
     const std::uint64_t lastEpoch = launchLastEpoch_[c];
     const std::int64_t lastStream = launchLastStream_[c];
@@ -765,12 +851,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     launchLastStream_[c] = stream;
     // A new epoch for this executor: what it applied in the one it left and
     // the listener did not hear goes back (ADR-0097, dated 2026-11-26).
-    // The renderer's leave of an epoch the callback had not left (its wait
-    // timed out) waits for the callback's end: until then nothing applies
-    // and nothing is taken back (round 201 F2).
     // (Each executor takes back at its leave of an epoch: round 203 F1.)
-    if (renderer && launchLeavePending_ != UINT64_MAX && !settleLeave(p, liveClass, stream))
-        return k;
     if (launchesQueued_.load() == 0) return k;
     std::int64_t soonest = INT64_MAX;
     for (LaunchSlot& slot : *launchSlots_) {
@@ -904,10 +985,11 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             }
             continue;  // pending or committed: the main thread places it again
         }
-        bool any = false, passed = false, due = false, lacking = false;
+        bool any = false, passed = false, due = false, lacking = false, allPassed = true;
         std::int64_t first = INT64_MAX, after = INT64_MAX;
         forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
             const std::int64_t at = target + n.timelineShift;
+            if (at >= stream) allPassed = false;
             // A channel with clip chains takes it its lead early as well
             // (prelaunch), and a pitch-keeping one its warm-up early
             // (prewarm, S3 step D): the first of them decides it.
@@ -929,6 +1011,17 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         });
         if (!any) {  // nothing of it runs here
             if (was == LaunchSlot::kApplied) launchDone(slot, mine);
+            continue;
+        }
+        // Applied by the other executor while this one passed its frames
+        // without looking (the renderer, its leave of the epoch before held
+        // late until the callback's end is known): switched now, at this
+        // block, as a relocation switches (playing by its phase from here,
+        // as the other executor's targets do), so no target of it is left
+        // behind (round 207).
+        if (was == LaunchSlot::kApplied && allPassed && !due) {
+            apply([&](std::int64_t at) { return at < stream; }, true);
+            launchDone(slot, mine);
             continue;
         }
         if (was == LaunchSlot::kPending) {
@@ -1366,8 +1459,13 @@ void Engine::placeLaunchesAgain() {
         const bool missed = status(st) == LaunchSlot::kMissed || status(st) == LaunchSlot::kVoided;
         const bool stale = status(st) == LaunchSlot::kPending && s.epoch.load() != epoch;
         if (!missed && !stale) continue;
+        // Replaced by a newer launch on its track: dropped (round 207 F1).
+        if (replaced(s)) {
+            freeLaunchSlot(s, st);
+            continue;
+        }
         const LaunchRequest r = s.request;
-        auto placed = launch(std::span<const LaunchRequest>(&r, 1), s.quantize);
+        auto placed = launchInto(s);
         if (!placed && placed.error().code == "launch.later") continue;  // next service
         if (!placed) {
             // Its track can no longer play it: dropped.

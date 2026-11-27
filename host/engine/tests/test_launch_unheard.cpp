@@ -741,6 +741,16 @@ TEST_CASE(
             e.run(e.done + 2);
             e.engine.service();
             EngineTestAccess::rendererLeaveLate(e.engine, false);
+            // The renderer settles its leave at its next block, once the
+            // callback has made room in its ring: played on until it has (by
+            // condition; under load that can take longer than the next
+            // cycles, and the launch is then placed again from later on).
+            for (int i = 0; ahead && EngineTestAccess::leavePending(e.engine) && i < 400; ++i) {
+                while (!e.engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+                }
+                e.run(e.done + 1);
+            }
+            CHECK_FALSE(EngineTestAccess::leavePending(e.engine));
             e.run(e.done + 8);
             e.engine.service();
             CHECK(e.node() == e.plays());
@@ -1018,4 +1028,138 @@ TEST_CASE("a seek while a late renderer leave is pending moves the late span on 
         CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
         e.engine.stop();
     }
+}
+
+namespace {
+// tr_1's log entries from epoch `from` on, as "cl_1 cl_2 …" ("arr" for a
+// return).
+std::string tr1From(const Engine& engine, std::uint64_t from) {
+    std::string out;
+    for (const LaunchLogEntry& le : engine.launchLog())
+        if (le.track == id("tr_1") && le.epoch >= from)
+            out += (out.empty() ? "" : " ") +
+                   (le.action == LaunchLogEntry::Action::Clip ? le.clip.str() : std::string("arr"));
+    return out;
+}
+}  // namespace
+
+TEST_CASE(
+    "a launch taken back that a newer launch on its track replaced is not placed again "
+    "(round 207 F1)" *
+    doctest::description("rt")) {
+    // Launches on tr_1, each run one cycle (applied ahead by the renderer,
+    // not heard) and followed by a seek, with no service between; then a
+    // last launch and services. As the in-callback executor, which never ran
+    // ahead, would hold it: the newest launch plays, alone, logged once in
+    // the epochs after the first seek; nothing replaced plays first or
+    // restarts, every taken-back launch settles in one service, and no slot
+    // stays held. Sequences: cl_1 then cl_2 on Bar (review PROBE207 O); cl_1,
+    // cl_2, cl_1 (R2); both executors.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    struct Case {
+        std::vector<const char*> seeked;
+        const char* last;
+        model::LaunchQuantize quantize;
+    };
+    const Case cases[] = {{{"cl_1"}, "cl_2", model::LaunchQuantize::Bar},
+                          {{"cl_1"}, "cl_2", model::LaunchQuantize::None},
+                          {{"cl_1", "cl_2"}, "cl_1", model::LaunchQuantize::Bar},
+                          {{"cl_1", "cl_2", "cl_1"}, nullptr, model::LaunchQuantize::None}};
+    for (const bool ahead : {false, true})
+        for (const Case& c : cases) {
+            std::string name;
+            for (const char* clip : c.seeked) name += std::string(clip) + ", seek, ";
+            name += c.last ? c.last : "(none)";
+            INFO(std::string(ahead ? "anticipative: " : "in-callback: ") << name);
+            Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                     48000 * 12);
+            e.engine.play();
+            e.run(20);
+            e.engine.service();
+            const std::uint64_t first = EngineTestAccess::epoch(e.engine) + 1;
+            for (const char* clip : c.seeked) {
+                const Engine::LaunchRequest r = request("tr_1", clip);
+                REQUIRE(e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None));
+                e.run(e.done + 1);
+                e.engine.seek(2.5);
+                e.run(e.done + 2);
+            }
+            const char* newest = c.last ? c.last : c.seeked.back();
+            if (c.last) {
+                const Engine::LaunchRequest r = request("tr_1", c.last);
+                REQUIRE(e.engine.launch(std::span(&r, 1), c.quantize));
+            }
+            e.engine.service();
+            e.run(e.done + 400);
+            e.run(e.done + 3500);  // past the next bar
+            e.engine.service();
+            CHECK(e.engine.launchesPending().empty());
+            CHECK(tr1From(e.engine, first) == newest);
+            CHECK(e.plays() == std::string("clip ") + newest);
+            CHECK(e.node() == e.plays());
+            CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
+            e.engine.stop();
+        }
+}
+
+TEST_CASE(
+    "launches each followed by a seek, with or without a service, hold few slots "
+    "(round 207 F1)" *
+    doctest::description("rt")) {
+    // A launch, one or three cycles, a seek (or a pause and play), 300 times
+    // (review PROBE207 R): with a service after each, after every tenth, or
+    // never, no launch is refused, the slots held stay few, and once serviced
+    // the newest launch plays with no slot held. Both executors.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true})
+        for (const int every : {1, 10, 0})
+            for (const bool pause : {false, true}) {
+                INFO(std::string(ahead ? "anticipative" : "in-callback")
+                     << ", service every " << every << (pause ? ", pause and play" : ", seek"));
+                Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback,
+                         32, 48000 * 12);
+                e.engine.play();
+                e.run(20);
+                e.engine.service();
+                int refused = 0;
+                std::size_t most = 0;
+                for (int i = 0; i < 300; ++i) {
+                    const Engine::LaunchRequest r = request("tr_1", i % 2 ? "cl_2" : "cl_1");
+                    const auto placed =
+                        e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+                    if (!placed) {
+                        INFO("launch " << i + 1 << ": " << placed.error().toString());
+                        CHECK(placed);
+                        if (++refused > 3) break;
+                    }
+                    e.run(e.done + (i % 3 ? 1 : 3));
+                    if (pause) {
+                        e.engine.pause();
+                        e.run(e.done + 1);
+                        e.engine.play();
+                    } else {
+                        e.engine.seek(2.5);
+                    }
+                    e.run(e.done + 1);
+                    if (every && (i + 1) % every == 0) e.engine.service();
+                    most = std::max(most, EngineTestAccess::slotsHeld(e.engine));
+                }
+                CHECK(refused == 0);
+                INFO("most held: " << most);
+                CHECK(most <= 3);
+                e.engine.service();
+                e.run(e.done + 800);
+                e.engine.service();
+                e.run(e.done + 400);
+                e.engine.service();
+                CHECK(e.engine.launchesPending().empty());
+                CHECK(e.plays() == "clip cl_2");
+                CHECK(e.node() == e.plays());
+                CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
+                e.engine.stop();
+            }
 }
