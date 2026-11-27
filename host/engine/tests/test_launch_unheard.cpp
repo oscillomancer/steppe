@@ -1320,6 +1320,58 @@ TEST_CASE(
     e.engine.stop();
 }
 
+TEST_CASE(
+    "a capture begun while playing inside a switch's crossfade replays the crossfade from what "
+    "was going out (fault B)" *
+    doctest::description("rt")) {
+    // In-callback (the anticipative executor places a capture at a later
+    // service, past a 5 ms crossfade): cl_1 on bar 2, cl_2 on bar 3
+    // (192000); the capture switched on 96 frames into the switch begins
+    // there. Its replay begins in cl_2 as the relocation would, by its
+    // phase, its crossfade over, unless it lists what was going out: cl_1,
+    // then cl_2 at frame 0 crossfading from it on the switch's clock. It
+    // sounds as live (tr_1 audio only: no history begins with it); also on a
+    // shifted channel, whose switch is 64 frames behind its target.
+    for (const bool shifted : {false, true}) {
+        INFO("shifted channel " << shifted);
+        Project p;
+        twoAudioClips(p, 300000);
+        if (shifted) shiftedChannel(p);
+        const model::Session s = p.app->head();
+        Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 8);
+        e.engine.play();
+        e.run(100);
+        CHECK(e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar) == 96000);
+        e.run(3500);
+        CHECK(e.place(request("tr_1", "cl_2"), model::LaunchQuantize::Bar) == 192000);
+        e.run((192000 + 96) / 32);
+        e.engine.service();
+        REQUIRE(e.engine.captureLaunches(true));
+        e.run(e.done + 1000);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        INFO("capture from " << capture->startSample << ":" << describe(capture->launches));
+        REQUIRE(capture->startSample > 192000);
+        REQUIRE(capture->startSample < 192000 + 240);
+        CHECK(capture->launches.size() == 2);
+        if (capture->launches.size() == 2) {
+            CHECK(capture->launches[0].clip == id("cl_1"));
+            CHECK(capture->launches[1].clip == id("cl_2"));
+            CHECK(capture->launches[1].runningFrame == 0);
+        }
+        constexpr std::size_t kN = 9600;
+        const auto offline = replay(s, p.app->projectDir(), capture->launches, kN,
+                                    double(capture->startSample) / 48000);
+        const std::uint32_t latency = e.engine.outputLatency();
+        e.engine.stop();
+        const auto& out = e.backend.capture().channels[0];
+        const std::size_t at = latency + std::size_t(capture->startSample);
+        INFO(differences(out, at, offline, kN));
+        CHECK(maxDiff(out, at, offline, kN) == 0.0);
+    }
+}
+
 namespace {
 // tr_1 (twoAudioClips) armed and monitored with a MIDI input: live,
 // switched by the callback alone in the anticipative engine.

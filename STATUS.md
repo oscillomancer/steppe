@@ -443,9 +443,7 @@ instructions are in `docs/guides/installing.md`.
       as-heard line does not word `launch_unsettled` yet (gui-lead). Open,
       found by the seeded sequence test (rounds 205 and 207; ruled for
       branch capture-start-state): a capture is as heard but its replay
-      differs when it begins (B) at a play start inside a crossfade
-      carried from before the stop or from a clip the stop kept (the
-      replay fades from silence), (D) inside a sounding MIDI note while
+      differs when it begins (D) inside a sounding MIDI note while
       playing (to be marked: an exact replay needs pre-roll from the
       note's start with every instrument's state, the open pre-roll item);
       (F5, anticipative,

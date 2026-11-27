@@ -795,11 +795,14 @@ the same.*
     takes the song there; from then on it plays by its phase wherever the
     song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
-    a performance replays exactly from its log. A render (a replay) that
-    begins in a clip anchored after its start, one a seek back carried
-    there, plays it by its phase from its first frame with no crossfade,
-    as the relocation did live (it once left it silent up to the anchor;
-    fault A).
+    a performance replays exactly from its log. A render (a replay)
+    begins as a relocation: each track's first entry at its first frame,
+    when anchored before or after the render's start, is what was carried
+    there and plays by its phase from that frame with no crossfade, as the
+    relocation did live (a loop clip a seek back carried before its anchor
+    too: fault A; one carried inside a crossfade: fault B). An entry
+    anchored at the start is a launch there and crossfades from what came
+    before it, the track's carried entry or, with none, the arrangement.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
   was left's sounding notes at the switch sample. An audio clip laid one
   item per period (`clipLaysAsOneItem` false) that fades out reads on in
@@ -1048,7 +1051,11 @@ the same.*
   budget). The replay plays a logged return as heard: the whole log
   replayed equals live, the executors' fade into the arrangement
   included (round 176 F3). What each track played as a capture
-  began is its newest entry by the start, a return included, so removing
+  began is its newest entry before the start, a return included (an
+  entry at the start is a switch at its frame 0, crossfading from it);
+  for a capture begun while playing inside a switch's crossfade, what the
+  switch faded from comes first and the switch after it, so the replay
+  crossfades as live did (fault B). So removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip

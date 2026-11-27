@@ -483,26 +483,20 @@ std::vector<float> replay(const model::Session& s, const fs::path& dir,
     return r->audio.channels[0];
 }
 
-// A known fault the sequences found (round 205; narrowed in round 207 F3;
-// capture-start-state removes it): what each track plays where a replay
-// starts is listed as a launch at frame 0, so the replay cannot hold (B) a
-// crossfade
-// running where playing begins: carried on from an earlier epoch (a pause
-// or seek inside it), or, for a capture beginning at a play start, a
-// switch there from a clip the stop kept (the replay fades from silence).
-// (A, a loop clip a seek back carried before its anchor, which live plays
-// by its phase and the replay once left silent, is gone: a render plays a
-// clip it begins in, anchored after its start, by its phase, as live does
-// after the relocation.) A return anchored after the start replays exactly, and so do a switch
-// at an epoch's start from silence and a capture begun inside a crossfade
-// while playing. Found in round 207 by the MIDI track: (D) a capture
-// begun while playing inside a sounding note, which live holds and the
-// replay, starting inside the note, never starts (to be marked not as
-// heard). (G, an epoch a loop change began while playing inside a note,
-// where the in-callback executor held the note on, is gone with round 215
-// F-B1: every executor starts an epoch afresh.) `offset`: the start's
-// frame from the epoch's first, `start` its song sample. Returns "B", "D"
-// or nothing.
+// The known fault the sequences found (round 207, by the MIDI track): (D)
+// a capture begun while playing inside a sounding note, which live holds
+// and the replay, starting inside the note, never starts (to be marked not
+// as heard). Gone with capture-start-state: what each track played where a
+// replay starts was listed as a launch at frame 0, so the replay could not
+// hold (A) a loop clip a seek back carried before its anchor, which live
+// plays by its phase, or (B) a crossfade running where playing begins
+// (carried from an earlier epoch, a switch at a play start from a clip the
+// stop kept, a capture at a switch's own frame: seed 9); a render now
+// begins as a relocation (engine.md §1.4.2, "Phase"). (G, an epoch a loop
+// change began while playing inside a note, where the in-callback executor
+// held the note on, is gone with round 215 F-B1: every executor starts an
+// epoch afresh.) `offset`: the start's frame from the epoch's first,
+// `start` its song sample. Returns "D" or nothing.
 // The frames left of a note of tr_3's clip `clip` (anchored at `anchor`)
 // sounding just before song sample `at`, its fade included; 0 if none (120
 // BPM, 24000 samples a beat; four-beat clips).
@@ -547,12 +541,9 @@ std::int64_t cFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch
 const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
                     std::int64_t offset, std::int64_t start, bool capture,
                     std::int64_t* frames = nullptr) {
-    std::map<model::Id, const LaunchLogEntry*> carried, newest;
+    std::map<model::Id, const LaunchLogEntry*> newest;
     for (const LaunchLogEntry& e : log)
-        if (e.epoch < epoch) carried[e.track] = &e;
-    newest = carried;
-    for (const LaunchLogEntry& e : log)
-        if (e.epoch == epoch && e.runningFrame <= offset) newest[e.track] = &e;
+        if (e.epoch < epoch || (e.epoch == epoch && e.runningFrame <= offset)) newest[e.track] = &e;
     // The first class found, and the most frames from the start any of them
     // covers (round 209 F3: compared after those).
     const char* f = nullptr;
@@ -567,18 +558,6 @@ const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
         if (track == id("tr_3") && e->action == LaunchLogEntry::Action::Clip && capture &&
             offset > 0 && noteSounding(e->clip, e->anchorSample, start))
             hit("D", noteLeft(e->clip, e->anchorSample, start));
-        const bool fading = e->anchorSample <= start && start < e->anchorSample + kFade;
-        const std::int64_t toFaded = e->anchorSample + kFade - start;  // B: until faded
-        if (e->epoch < epoch) {
-            if (fading) hit("B", toFaded);
-        } else if (capture && e->runningFrame == 0 && fading) {
-            // (A capture inside the crossfade of a switch at its epoch's
-            // start, from a clip the stop kept; round 209: seed 20, one
-            // begun 32 frames in.)
-            const auto it = carried.find(track);
-            if (it != carried.end() && it->second->action == LaunchLogEntry::Action::Clip)
-                hit("B", toFaded);
-        }
     }
     if (frames) *frames = covered;
     return f;
@@ -970,16 +949,16 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
                 });
             }
             const std::int64_t sample = std::int64_t(pick(12 * 128)) * 375;
-            note("seek" + std::to_string(sample) + ", run1");
+            // The launch after a cycle, before any (fault E), or inside the
+            // cycle that takes the seek (the in-callback executor's hook;
+            // round 216 F-C1: the anticipative one launches before it). With
+            // a late leave held, after a cycle (it stays unsettled through
+            // it: the hook): before one, the renderer thread's leave races
+            // the launch, and the frames it renders before settling (never
+            // as heard) differ from run to run.
+            const auto picked = pick(3);
+            const auto timing = b.lateLeave ? 0 : picked;
             each([&](Sequence& q) { q.seek(sample); });
-            // A cycle: the late leave stays unsettled through it (the hook).
-            // (A launch before the in-callback executor's next cycle once took
-            // the old position's anchor, fault E: test_launch_unheard.)
-            run(1);
-            if (pick(2) == 0) {
-                note("service");
-                each([](Sequence& q) { q.service(); });
-            }
             std::vector<Engine::LaunchRequest> requests;
             if (const auto scene = pick(3); scene < 2) {
                 for (int t = 0; t < 3; ++t) {
@@ -992,19 +971,55 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
                 requests.push_back(request(kTracks[t], kClips[t][pick(2)]));
             }
             const auto q = pick(2) == 0 ? model::LaunchQuantize::Bar : model::LaunchQuantize::None;
+            const bool serviced = pick(2) == 0;
+            note("seek" + std::to_string(sample) +
+                 (timing == 0   ? ", run1"
+                  : timing == 1 ? ""
+                                : ", the launch inside the cycle") +
+                 (serviced ? ", service" : ""));
+            std::optional<Result<Engine::LaunchPlaced>> pa, pb;
+            if (timing == 0) {
+                run(1);
+                if (serviced) each([](Sequence& q2) { q2.service(); });
+                pa = a.tryLaunch(requests, q);
+                pb = b.tryLaunch(requests, q);
+            } else if (timing == 1) {
+                if (serviced) each([](Sequence& q2) { q2.service(); });
+                pa = a.tryLaunch(requests, q);
+                pb = b.tryLaunch(requests, q);
+            } else {
+                if (serviced) each([](Sequence& q2) { q2.service(); });
+                struct Inside {
+                    Sequence* q;
+                    const std::vector<Engine::LaunchRequest>* requests;
+                    model::LaunchQuantize quantize;
+                    std::optional<Result<Engine::LaunchPlaced>>* placed;
+                };
+                Inside inside{&a, &requests, q, &pa};
+                EngineTestAccess::afterEpochTaken(
+                    a.engine,
+                    [](void* c) {
+                        [[maybe_unused]] const rt::ScopedRtsanDisabler off;  // the test's thread
+                        auto& in = *static_cast<Inside*>(c);
+                        if (!*in.placed) *in.placed = in.q->tryLaunch(*in.requests, in.quantize);
+                    },
+                    &inside);
+                pb = b.tryLaunch(requests, q);
+                run(1);
+                EngineTestAccess::afterEpochTaken(a.engine, nullptr, nullptr);
+                REQUIRE(pa.has_value());
+            }
             note("launch while stopped " + std::to_string(requests.size()) + " q" +
                  std::to_string(int(q)) + ", play");
-            const auto pa = a.tryLaunch(requests, q);
-            const auto pb = b.tryLaunch(requests, q);
-            a.launched(requests, pa);
-            b.launched(requests, pb);
+            a.launched(requests, *pa);
+            b.launched(requests, *pb);
             each([](Sequence& q2) { q2.play(); });
             const std::int64_t n = 50 + std::int64_t(pick(350));
             note("run" + std::to_string(n));
             run(n);
             each([](Sequence& q2) { q2.service(); });
             for (Sequence* q2 : both) {
-                const auto& placed = q2 == &a ? pa : pb;
+                const auto& placed = q2 == &a ? *pa : *pb;
                 if (!placed) continue;
                 INFO(q2->where());
                 const auto log = q2->engine.launchLog();
@@ -1213,6 +1228,80 @@ TEST_CASE(
                 peak = std::max(peak,
                                 double(std::fabs(out[std::size_t(i) + q->engine.outputLatency()])));
             CHECK(peak > 0.01);
+        }
+        CHECK(compareExecutors(a, b) >= 2);
+        each([](Sequence& q) { q.engine.stop(); });
+    }
+}
+
+TEST_CASE(
+    "a play start inside a crossfade, carried from before the stop or a switch there from a clip "
+    "the stop kept, sounds as its replay and its capture's (fault B)" *
+    doctest::description("rt")) {
+    // cl_1, the modulated cl_3 and cl_6 launched on the bar (96000). Either
+    // (`switchAt`) paused 96 frames into their crossfade and played again
+    // (live ends the crossfade at the relocation: the replay, beginning in
+    // them, once faded them in from silence); or paused once faded, with
+    // cl_2, cl_4 and cl_5 launched while stopped and played (the switch at
+    // the play start fades from what the stop kept: a capture beginning
+    // there once listed the kept clips' entries and faded from silence;
+    // seed 9, one at the switch's own frame). A capture switched on while
+    // stopped begins at the play start; each executor's epoch and capture
+    // equal their replays, and the two executors each other.
+    for (const bool switchAt : {false, true}) {
+        INFO(std::string(switchAt ? "a switch at the play start from what the stop kept"
+                                  : "a play start inside a carried crossfade"));
+        Project p;
+        project(p, false);
+        const model::Session s = p.app->head();
+        Sequence a(s, p.app->projectDir(), kInCallback, 1),
+            b(s, p.app->projectDir(), EngineOptions{.workers = 0}, 1);
+        const auto each = [&](auto&& f) {
+            f(a);
+            f(b);
+        };
+        each([](Sequence& q) {
+            q.play();
+            q.run(20);
+            q.engine.service();
+            q.settle();
+        });
+        for (Sequence* q : {&a, &b}) {
+            std::vector<Engine::LaunchRequest> r{request("tr_1", "cl_1"), request("tr_2", "cl_3"),
+                                                 request("tr_3", "cl_6")};
+            REQUIRE(q->engine.launch(r, model::LaunchQuantize::Bar));
+        }
+        each([&](Sequence& q) {
+            q.run((switchAt ? 3200 : 3003) - q.done);  // 96 frames into the crossfade, or past it
+            q.pause();
+            q.run(3);
+            q.engine.service();
+            q.captureOn();
+        });
+        if (switchAt)
+            for (Sequence* q : {&a, &b}) {
+                std::vector<Engine::LaunchRequest> r{
+                    request("tr_1", "cl_2"), request("tr_2", "cl_4"), request("tr_3", "cl_5")};
+                REQUIRE(q->engine.launch(r, model::LaunchQuantize::None));
+            }
+        each([](Sequence& q) {
+            q.play();
+            q.run(900);
+            q.engine.service();
+            q.settle();
+            q.captureOff();
+            q.pause();
+            q.run(5);
+            q.engine.service();
+        });
+        for (Sequence* q : {&a, &b}) {
+            INFO(std::string(q->anticipative ? "anticipative" : "in-callback"));
+            REQUIRE(q->segments.size() >= 2);
+            CHECK(q->segments.back().playStart);
+            const Counts n = judge(*q, s, p.app->projectDir());
+            CHECK(n.comparedEpochs >= 2);
+            CHECK(n.comparedCaptures == 1);
+            CHECK(n.faults.empty());
         }
         CHECK(compareExecutors(a, b) >= 2);
         each([](Sequence& q) { q.engine.stop(); });
