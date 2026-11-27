@@ -795,7 +795,11 @@ the same.*
     takes the song there; from then on it plays by its phase wherever the
     song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
-    a performance replays exactly from its log.
+    a performance replays exactly from its log. A render (a replay) that
+    begins in a clip anchored after its start, one a seek back carried
+    there, plays it by its phase from its first frame with no crossfade,
+    as the relocation did live (it once left it silent up to the anchor;
+    fault A).
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
   was left's sounding notes at the switch sample. An audio clip laid one
   item per period (`clipLaysAsOneItem` false) that fades out reads on in

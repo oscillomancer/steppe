@@ -1407,19 +1407,38 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                      ++nextSwitch) {
                     const Switch& sw = switches[nextSwitch];
                     detail::Node& node = p.nodes[sw.node];
-                    if (sw.feed >= 0)
-                        detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
-                                                sw.action.kind, sw.clip, sw.action.anchorSample,
-                                                sw.action.anchorBeat);
-                    else if (sw.enter)
+                    // A clip it begins in, anchored after its start, is one a
+                    // seek back carried there (live never applies a launch
+                    // before its anchor otherwise): live relocated it, so it
+                    // plays by its phase there (engine.md §1.4.2, "Phase").
+                    // (Its running frame 0, on the node's timeline; as a
+                    // relocation does: by its phase, no crossfade.)
+                    const bool carriedBack = sw.at <= node.timelineShift &&
+                                             sw.action.anchorSample > 0 &&
+                                             sw.action.kind == detail::LaunchState::Kind::Clip;
+                    if (sw.feed >= 0) {
+                        auto& feed = node.rack->notes[static_cast<std::size_t>(sw.feed)];
+                        detail::applyFeedLaunch(feed, sw.action.kind, sw.clip,
+                                                sw.action.anchorSample, sw.action.anchorBeat);
+                        if (carriedBack) {
+                            feed.launch.unanchored = true;
+                            feed.launchFresh = false;
+                        }
+                    } else if (sw.enter)
                         detail::preenter(node, sw.action);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else if (sw.warm)  // its running frame, a launchWarm later, unshifted
                         detail::prewarm(node, sw.action,
                                         sw.at + node.launchWarm - node.timelineShift);
-                    else
+                    else {
                         detail::applyLaunch(node, sw.action);
+                        if (carriedBack) {
+                            node.launch.unanchored = true;
+                            node.launch.fadeFrom = -2;
+                            node.launchFresh = false;
+                        }
+                    }
                 }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
