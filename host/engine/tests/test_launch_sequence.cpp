@@ -611,8 +611,7 @@ std::int64_t sameUpTo(std::vector<LaunchLogEntry> a, std::vector<LaunchLogEntry>
 }
 
 struct Counts {
-    int epochs = 0, comparedEpochs = 0, captures = 0, comparedCaptures = 0, markedCaptures = 0,
-        faultE = 0;
+    int epochs = 0, comparedEpochs = 0, captures = 0, comparedCaptures = 0, markedCaptures = 0;
     std::map<std::string, int> faults;
 };
 
@@ -682,18 +681,12 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
             continue;
         }
         // Located by its start, at or after where it was switched on (one
-        // placed at a later service begins there). (E, found in round 207:
-        // in-callback, one switched on while stopped keeps where it was
-        // switched on across a seek while stopped, and spans the jump; and
-        // one switched on at a play start before the callback has played
-        // the epoch starts where the stop was, before the seeks while
-        // stopped (round 209, seed 4); counted, not compared, until
-        // capture-start-state.)
+        // placed at a later service begins there). (In-callback, one
+        // switched on while stopped once kept its start across a seek while
+        // stopped, and one switched on at a play start before the first
+        // cycle began where the play before the stop ended: fault E, found
+        // in rounds 207 and 209, seeds 3 and 4.)
         const auto located = locate(g, c.capture.startSample, c.offset);
-        if (!located && (c.stopped || c.offset == 0) && !q.anticipative) {
-            ++n.faultE;
-            continue;
-        }
         // (F5, round 209: anticipative, with a live input, one switched on
         // while playing after a relocation starts at its stream frame, not
         // its song position; counted, not compared, until
@@ -705,21 +698,6 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         CHECK(located.has_value());
         if (!located) continue;
         const std::int64_t offset = *located;
-        // (E too: in-callback, a capture whose start lists a launch the log
-        // places later in its epoch, one made at a play start before the
-        // callback had played it; round 209, seed 3.)
-        if (!q.anticipative) {
-            bool early = false;
-            for (const LaunchLogEntry& at : c.capture.launches)
-                if (at.runningFrame == 0)
-                    for (const LaunchLogEntry& le : log)
-                        early = early || (le.epoch == g.epoch && le.track == at.track &&
-                                          le.clip == at.clip && le.runningFrame > offset);
-            if (early) {
-                ++n.faultE;
-                continue;
-            }
-        }
         std::int64_t covered = 0;
         const char* f = faultAt(log, g.epoch, offset, c.capture.startSample, true, g.continuous,
                                 !q.anticipative, g.held, &covered);
@@ -991,10 +969,9 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             const std::int64_t sample = std::int64_t(pick(12 * 128)) * 375;
             note("seek" + std::to_string(sample) + ", run1");
             each([&](Sequence& q) { q.seek(sample); });
-            // A cycle: the in-callback executor sees the seek before the
-            // launch (one made before it does takes the old position's
-            // anchor: fault E, the start state branch's). The late leave
-            // stays unsettled through it (the hook).
+            // A cycle: the late leave stays unsettled through it (the hook).
+            // (A launch before the in-callback executor's next cycle once took
+            // the old position's anchor, fault E: test_launch_unheard.)
             run(1);
             if (pick(2) == 0) {
                 note("service");
@@ -1102,8 +1079,8 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
                         << " launches logged; not compared (faults): " << [&] {
                                std::string f;
                                for (const auto& [k, v] : n.faults)
-                                   f += k + " " + std::to_string(v) + ", ";
-                               return f + "E " + std::to_string(n.faultE);
+                                   f += (f.empty() ? "" : ", ") + k + " " + std::to_string(v);
+                               return f.empty() ? std::string("none") : f;
                            }());
     }
     return {describe(b.engine.launchLog()), b.backend.capture().channels[0]};

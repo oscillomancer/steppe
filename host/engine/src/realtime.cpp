@@ -1154,6 +1154,21 @@ std::int64_t Engine::anticipativePosition(std::uint64_t epoch) const {
     return playedPosition(epoch, epochStart_.load());
 }
 
+std::int64_t Engine::callbackPosition(std::uint64_t epoch) const {
+    // As anticipativePosition, for the callback's executor: until its next
+    // cycle takes `epoch` (it publishes rtPosEpoch_ there, stopped or
+    // playing), the seek's sample when a seek opened an epoch it has not
+    // taken, else where it is (a pause or a loop change resumes there). A
+    // launch or capture placed while stopped, right after a seek, then
+    // begins where the transport goes, not where it was (fault E, found by
+    // the launch sequence test; 31-37 of 40 in-callback on a threaded
+    // device, PROBE211 J).
+    const auto taken = rtPosEpoch_.load(std::memory_order_acquire);
+    if (taken < epoch && seekEpoch_.load(std::memory_order_acquire) > taken)
+        return seekSample_.load();
+    return reportedPos_.load();
+}
+
 std::int64_t Engine::playedStream(std::uint64_t epoch) const {
     const auto stream = rtStream_.load();  // consumption/renderer-arm handshake
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? stream : 0;
@@ -1170,7 +1185,7 @@ TransportState Engine::transport() const {
         t.sample = static_cast<std::int64_t>(std::llround(sample));
         t.seconds = sample / config_.sampleRate;
     } else {
-        t.sample = options_.anticipative ? anticipativePosition(epoch) : reportedPos_.load();
+        t.sample = options_.anticipative ? anticipativePosition(epoch) : callbackPosition(epoch);
         const auto* prepared = latestPlan_.load(std::memory_order_acquire);
         if (prepared && prepared->rateSeekSequence != 0 &&
             prepared->preparedRateBoundary.epoch == epoch)
@@ -2228,6 +2243,11 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         rtEpoch_ = xport.epoch;
         rateEpochStart_ = double(pos_);
         rtStream_.store(0, std::memory_order_relaxed);
+        // Its position with it: stopped, nothing else stores it, so a play
+        // start's launch clock (launchClock) read the last position played
+        // before the stop, and a capture switched on before the first cycle
+        // began there (fault E, seed 4).
+        rtPos_.store(pos_, std::memory_order_relaxed);
         rtPosEpoch_.store(rtEpoch_, std::memory_order_release);
     }
     if (plan) {

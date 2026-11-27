@@ -449,11 +449,8 @@ instructions are in `docs/guides/installing.md`.
       carried from before the stop or from a clip the stop kept (the
       replay fades from silence), (D) inside a sounding MIDI note while
       playing (to be marked: an exact replay needs pre-roll from the
-      note's start with every instrument's state, the open pre-roll item),
-      or (E, in-callback) after being switched on while stopped and a seek
-      while stopped (it keeps the old start and spans the jump), or at a
-      play start before the callback has played the epoch (it starts where
-      the stop was, before the seeks while stopped); (F5, anticipative,
+      note's start with every instrument's state, the open pre-roll item);
+      (F5, anticipative,
       with a live input) a capture switched on while playing after a
       relocation starts at its stream frame, not its song position. Also
       open: (G) on a loop change while playing, or a pause and play with

@@ -893,7 +893,12 @@ the same.*
   `launch.commit` is refused meanwhile (`launch.capture.ending`). A
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins
-  again where the transport goes. A capture armed while a launched clip's
+  again where the transport goes. In either executor that is where it
+  goes even before the executor's next cycle has taken the relocation,
+  and a launch placed meanwhile (stopped, or at a play start before the
+  first cycle) is anchored from there too (the in-callback executor once
+  used where it last was, fault E: `Engine::callbackPosition`, and its
+  launch clock's position is stored with the epoch it takes). A capture armed while a launched clip's
   MIDI note sounds commits that note struck again, at any rate: the
   committed piece starts at the capture's start, inside the note, and the
   arrangement strikes a note held into an item's start at that start, so

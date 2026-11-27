@@ -1179,6 +1179,8 @@ class Engine {
     // The anticipative executors' position in `epoch`, also before the
     // renderer has relocated for it: then what relocate() will take.
     std::int64_t anticipativePosition(std::uint64_t epoch) const;
+    // The callback's executor's, also before its next cycle has taken it.
+    std::int64_t callbackPosition(std::uint64_t epoch) const;
     // Frames the callback has played in `epoch` (0 before its first).
     // The epoch with its seek target and loop, read under xportSeq_: the
     // audio thread gives up after `tries` (a write in progress) and keeps

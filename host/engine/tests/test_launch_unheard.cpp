@@ -1206,10 +1206,6 @@ TEST_CASE(
                 e.engine.pause();
                 e.engine.seek(0.0);  // the stop's return to the play start
                 e.engine.seek(0.0);  // and the journey's seek to beat 0
-                // (In-callback, a launch made before the callback has seen a
-                // stopped seek takes the old position's anchor: fault E, fixed
-                // on the capture start state branch. Here it sees it first.)
-                if (!ahead) e.run(e.done + 1);
                 if (service == Before) e.engine.service();
                 REQUIRE(e.engine.captureLaunches(true));
                 const auto r = request("tr_1", "cl_1");
@@ -1252,6 +1248,73 @@ TEST_CASE(
                 e.engine.stop();
             }
         }
+    }
+}
+
+TEST_CASE(
+    "a launch or capture made at a play start before the first cycle begins where the transport "
+    "is, after a seek while stopped, in both executors (fault E)" *
+    doctest::description("rt")) {
+    // Played to 2 s, paused, a seek to 5 s that each executor has taken
+    // while stopped (the callback's cycles ran), then play and, before the
+    // first cycle plays, a capture switched on and cl_1 launched
+    // unquantized: both begin at 5 s, or after it where the anticipative
+    // executor places them later. (In-callback they began where it last
+    // played, 2 s: its launch clock read the position it stores only while
+    // playing; the sequence test's seeds 3 and 4.)
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    constexpr std::int64_t kTo = 48000 * 5;
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 12);
+        e.engine.play();
+        e.run(3000);  // 2 s
+        e.engine.service();
+        e.engine.pause();
+        e.run(e.done + 5);
+        e.engine.seek(double(kTo) / 48000);
+        e.run(e.done + 5);
+        e.engine.service();
+        e.engine.play();
+        REQUIRE(e.engine.captureLaunches(true));
+        const auto r = request("tr_1", "cl_1");
+        auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        // (The anticipative clock waits for the renderer's first block of
+        // the epoch: launch.later, then placed after a cycle.)
+        for (int again = 0; ahead && !placed && placed.error().code == "launch.later" && again < 8;
+             ++again) {
+            e.run(e.done + 1);
+            placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        }
+        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+        CHECK(placed->anchorSample >= kTo);
+        CHECK(placed->anchorSample < kTo + 48000);
+        e.run(e.done + 400);
+        e.engine.service();
+        e.run(e.done + 2000);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        // (The anticipative one is placed at the service after the
+        // renderer's first block, and begins where that service hears.)
+        if (ahead)
+            CHECK((capture->startSample >= kTo && capture->startSample < kTo + 48000));
+        else
+            CHECK(capture->startSample == kTo);
+        const auto log = e.engine.launchLog();
+        INFO("log:" << describe(log));
+        int cl1 = 0;
+        for (const LaunchLogEntry& le : log)
+            if (le.clip == id("cl_1")) {
+                ++cl1;
+                CHECK(le.anchorSample == placed->anchorSample);
+            }
+        CHECK(cl1 == 1);
+        CHECK(e.node() == "clip cl_1");
+        e.engine.stop();
     }
 }
 
