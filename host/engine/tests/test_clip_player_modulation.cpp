@@ -338,10 +338,12 @@ namespace {
 // the block after its clip chain's entry (one grid interval before the
 // switch), before the switch's block; it plays again 300 cycles later and
 // the launch, not heard, is placed again (ADR-0097, revision 2026-11-26).
+// With `seekTo` (song samples) it seeks there instead, playing on.
 struct StoppedEntry {
     std::vector<float> out;
     std::uint32_t latency = 0;
     std::int64_t paused = 0, resumed = 0;  // cycles
+    std::int64_t from = 0;                 // the song sample it went on from
     std::vector<LaunchLogEntry> log;
     std::uint64_t epochBefore = 0, misses = 0, errors = 0;
     // tr_1's node holds the chain's entry just before the stop, and after
@@ -354,7 +356,7 @@ bool holdsEntry(const Engine& engine) {
     return false;
 }
 StoppedEntry stoppedAtEntry(const model::Session& s, const fs::path& dir,
-                            const EngineOptions& options) {
+                            const EngineOptions& options, std::int64_t seekTo = -1) {
     constexpr std::uint32_t kBlock = 32;
     const std::int64_t frames = 48000 * 6;
     InstancePool pool = makePool();
@@ -387,11 +389,20 @@ StoppedEntry stoppedAtEntry(const model::Session& s, const fs::path& dir,
     run(out.paused);
     out.entryBefore = holdsEntry(engine);
     out.epochBefore = EngineTestAccess::epoch(engine);
-    engine.pause();
-    run(done + 300);
-    out.entryAfter = holdsEntry(engine);
-    engine.play();
-    out.resumed = done;
+    if (seekTo >= 0) {
+        engine.seek(double(seekTo) / 48000);
+        out.resumed = done;
+        out.from = seekTo;
+        run(done + 1);
+        out.entryAfter = holdsEntry(engine);
+    } else {
+        engine.pause();
+        run(done + 300);
+        out.entryAfter = holdsEntry(engine);
+        engine.play();
+        out.resumed = done;
+        out.from = out.paused * kBlock;
+    }
     run(frames / kBlock);
     out.misses = engine.anticipationMisses();
     out.latency = engine.outputLatency();
@@ -426,8 +437,9 @@ TEST_CASE(
     // cl_1 (constant 0.5 through a gain, routed) launched on an off-grid
     // bar; the transport paused after the chain's entry, before its switch.
     // The switch was not heard, so the launch is taken back with its entry
-    // (the undo record carries the entry's state) and placed again at the
-    // next bar after play: nothing of the first launch is left coming in.
+    // (the undo record carries the entry's state) and placed again while
+    // stopped, so it applies at the play start (unquantized, as any launch
+    // placed while stopped): nothing of the first launch is left coming in.
     // With the route disabled the output equals the same run with no route
     // (the entry moves nothing), in both executors, and the two executors
     // agree; with it enabled, the resumed epoch plays as its log replays.
@@ -493,4 +505,43 @@ TEST_CASE(
     INFO(differences(withOut[1], latency[1], reference, whole));
     CHECK(maxDiff(withOut[1], latency[1], reference, whole) == 0.0);
     CHECK(logs[1] == logs[0]);
+}
+
+TEST_CASE(
+    "a seek between a modulated clip chain's entry and its switch takes the entry back, heard "
+    "through a chain counted from reset (round 208)" *
+    doctest::description("rt")) {
+    // As the stop test, but a seek while playing (to song sample 24000, on
+    // the grid): playing goes on, so an entry left on the node would keep
+    // the chain entered, not reset, until the launch placed again enters
+    // it; a memoryless gain cannot show that, so cl_1's chain also holds a
+    // tremolo counted from reset. The epoch after the seek plays as its log
+    // replays, on both executors (round 208: without the record's entry the
+    // in-callback epoch differed in 95883 of 96000 frames).
+    Project p;
+    modulators(p);
+    offGrid(p);
+    halfClip(p, "sc_1", -0.25);  // cl_1, mr_1
+    (void)takeFx(p, "cl_1", "com.suppleaudio.test.tremolo");
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        const StoppedEntry live = stoppedAtEntry(
+            s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 24000);
+        CHECK(live.errors == 0);
+        CHECK(live.misses == 0);
+        CHECK_FALSE(live.entryAfter);
+        std::vector<LaunchLogEntry> resumed;
+        for (const LaunchLogEntry& e : live.log)
+            if (e.epoch > live.epochBefore) resumed.push_back(e);
+        INFO(describe(live.log));
+        REQUIRE(resumed.size() == 1);
+        const std::size_t n = 96000;
+        const auto offline = mixFrom(p, s, double(live.from) / 48000, n, resumed);
+        const std::size_t at = live.latency + std::size_t(live.resumed * 32);
+        CHECK(std::any_of(offline.begin(), offline.end(), [](float v) { return v != 0.0f; }));
+        INFO("the epoch after the seek against its log's replay: " << differences(live.out, at,
+                                                                                  offline, n));
+        CHECK(maxDiff(live.out, at, offline, n) == 0.0);
+    }
 }
