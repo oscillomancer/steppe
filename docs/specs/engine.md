@@ -534,6 +534,33 @@ until it is released.
   the same frame: the sum of its routes' signal × depth × the parameter's
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
+  - **A run's first frame** (an offline render's first block, a locate: a
+    seek or a play start), on the grid or not, also sends every modulated
+    parameter, the memo made stale there. Its sum there is its routes'
+    values at that frame, which a locate starts afresh: the rack restarts
+    its Mod Outs at 0, held up to their first grid point, and the route's
+    delay is cleared. So the frames up to the first grid point hold what an
+    offline render from there holds, never what the plug-in was sent
+    before the locate, which a plug-in may keep across its reset (up to 31
+    frames once differed after a seek off the grid; round 208 F2). A loop
+    wrap sends every modulated parameter at its first frame too, but it
+    starts nothing afresh: the rack keeps its modules' state and the
+    routes' delays carry on (rack.md §6), so it resends the sums carried
+    over the wrap, which a plug-in already holds, and what follows is the
+    loop going on, not an offline render from the loop start (which
+    differs there up to the first grid point; round 210 F2). A
+    handoff between executors and a plan's adoption continue the run on
+    the grid: a route an edit adds while playing first sends at the next
+    grid point, as does a stage that first processes or first has a route
+    after its run's first block (it once sent at the first frame of the
+    block the plan arrived in; round 210 F1), and an input chain that
+    first runs then, its track armed while playing (round 212 F1). A
+    node's take chains start a run with its own chains, and one that does
+    not run in a block (its clip not playing, its item not yet reached)
+    consumes the run's start, so it first sends on the grid: an item's
+    chain, entered one grid interval before its onset (M5, F1), is sent
+    the grid point before the onset, live and offline alike (review round
+    213 at the take-fx merge).
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6): a stage's slots are matched by instance and CLAP id. A
     parameter that the new plan no longer modulates is sent one 0 at its
@@ -551,9 +578,9 @@ until it is released.
     reset (a seek, a play start), a changed instance, and a patch or state
     applied to the instance: `host::Instance::modulationEpoch()` counts
     `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
-    keeps counting `reset()` alone). The next grid point then sends the
-    current sum of every modulated parameter and 0 to every other parameter
-    the memo lists, and drops those. A stage that does not process this
+    keeps counting `reset()` alone). The run's first frame or the next
+    grid point then sends the current sum of every modulated parameter and
+    0 to every other parameter the memo lists, and drops those. A stage that does not process this
     block (a compensated bypass, not owned, not processing) is sent nothing
     and its memo goes stale.
   - The route's delay runs every block at the target node, and a locate
@@ -666,7 +693,9 @@ until it is released.
   which the one-interval lookahead above delivers early, and the offset at
   each frame is linear between the interval's start and end. A rack the
   other executor still owns holds the end. The interpolation is carried by
-  target across plan swaps and starts at 0 after a locate, with the delays.
+  target across plan swaps and starts at 0 after a locate, with the delays,
+  in either executor's locate (the in-callback seek once kept both up to
+  the first grid point; round 208 F2).
   The base (automation, else the fader's value) plus the offset is clamped
   per sample to the target's range (volume up to 12 dB, a level at −inf
   stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
@@ -675,9 +704,9 @@ until it is released.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a
-function of the stage's absolute position, a reset makes the memo stale so
-the first grid point after it sends every modulated parameter, and racks
-restart their modules at every locate (rack.md §6).
+function of the stage's absolute position, a locate makes the memo stale
+and its first frame sends every modulated parameter, and racks restart
+their modules at every locate (rack.md §6).
 
 ### 1.4.2 Clip launcher (ADR-0097)
 
@@ -894,8 +923,32 @@ the same.*
     out, the renderer applies and takes back nothing until the verdicts are
     in (`settleLeave`); what it renders meanwhile may still hold an unheard
     switch, so a capture in the epoch it went on in that began before it
-    settled is not as heard (`launch_unsettled`, round 203 F2), and so is
-    one running across the leave, pending or placed. A relocation while
+    settled, over frames it rendered so, is not as heard
+    (`launch_unsettled`, round 203 F2; marked as those frames are rendered,
+    round 209), and so is one running across the leave, pending or placed.
+    It never renders past a launch of the epoch it goes on in that it has
+    not switched (round 209): before such a launch's first frame on its
+    targets (early halves included) it holds, and the callback's next
+    cycle, which publishes the end it waits for, wakes it to settle and
+    switch the launch at its frame. At a play start the callback is
+    waiting for its pre-roll meanwhile, so the start is one period later
+    and nothing is missed: a launch placed while stopped sounds from the
+    play start on both executors, is logged there, and a capture from
+    there is as heard. Should a hold outlast what the renderer has rendered
+    ahead while playing, the callback plays silence for the frames it
+    lacks and counts an anticipation miss (`engine.status`), the stream
+    does not move past what was rendered, and a capture over it is not as
+    heard (`dropout`); the launch still switches at its frame. A launch
+    placed at a play start (`LaunchSlot::playStart`) is never missed and
+    placed again a bar later; a path that misses one all the same counts
+    it (`launchPlayStartMissed_`, by path: publishing, an executor passing
+    it undecided, or an executor passing it committed so that it is voided
+    and placed again, the path the journey's launch took before the hold)
+    and marks the capture. A
+    record whose slot has since been reused is never taken back: a slot is
+    free again only once its launch is known heard (round 209: with the
+    leave's end unknown after more epochs than the ring holds, such a heard
+    switch was taken back and the node played what the log did not). A relocation while
     such a leave is still pending leaves that epoch too (it applied
     nothing there) and moves the late span on to the epoch it goes on in
     (round 205 F3). A record applied as a relocation in a later epoch is
@@ -904,11 +957,18 @@ the same.*
     launch the callback switched meanwhile (a Notes feed's target) is
     switched on the renderer's targets once the leave settles, at its next
     block if still in that epoch, else at its first block after it, playing
-    by its phase as a relocation does, and `launch.state` lists it as
-    queued until then (an applied launch heard by the callback, or of an
-    ended epoch, that an executor has not switched). The renderer passing
-    such a launch's frame marks the late span whether or not anything was
-    applied ahead (round 207).
+    by its phase as a relocation does. The renderer passing such a launch's
+    frame marks the late span whether or not anything was applied ahead
+    (round 207). Since the hold (round 209) no path passes such a launch:
+    the renderer holds before a launch it has targets of, and the callback,
+    playing only what was rendered, cannot switch it first; the renderer's
+    pass for an all-live plan has no targets of its own. A path that passes
+    one all the same is counted (`launchPassedPending_`, by path: passed by
+    the renderer, or switched late after the callback) and marks the
+    capture (round 214). For the same reason `launch.state` lists no applied
+    launch as queued while an executor has yet to switch it (round 207 did):
+    none is heard before the renderer switches it, and one on the callback's
+    targets alone plays at once.
   - **A slot's lifetime** (round 205): a launch takes a free slot, or one
     whose launch every executor is done with and whose switch is known
     heard: in its epoch once the callback has played past its key, after
@@ -2356,6 +2416,10 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
+  A render restarts the rack modules it takes from its pool and ends their
+  notes, as a locate does, so renders that share a pool each play as from
+  a fresh one (they once kept a Mod Out's last value from the render
+  before up to its first grid point).
 - **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
   render gives each bridged one a call deadline of its own,
   `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;

@@ -575,6 +575,8 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
         slot->anchorSample.store(placed->anchorSample, std::memory_order_relaxed);
         slot->songFrame.store(placed->songFrame, std::memory_order_relaxed);
         slot->anchorBeat.store(placed->anchorBeat, std::memory_order_relaxed);
+        slot->playStart.store(!wantPlaying_.load(std::memory_order_acquire),
+                              std::memory_order_relaxed);
         launchesQueued_.fetch_add(1);
         const std::uint64_t pending = next(slot->state.load(), LaunchSlot::kPending);
         slot->state.store(pending);  // sequentially consistent: before the horizons below
@@ -593,6 +595,7 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
             missed = false;
         } else if (slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kMissed))) {
             launchesQueued_.fetch_sub(1);
+            if (slot->playStart.load(std::memory_order_relaxed)) playStartMissed(0);
         }
     }
     wakeRenderer();
@@ -632,17 +635,12 @@ std::vector<Engine::LaunchPending> Engine::launchesPending() const {
         // its hearing ended, to be taken back (ADR-0097, revision
         // 2026-11-26: launch.state says such a launch is queued).
         const auto st = status(s.state.load(std::memory_order_acquire));
-        // (Or applied, heard by the callback or in an ended epoch, and still
-        // waiting for an executor to switch its targets: a renderer whose
-        // leave is held late has not switched them yet; round 207.)
-        const std::uint8_t need = s.required.load(std::memory_order_relaxed);
-        const std::uint64_t slotEpoch = s.epoch.load(std::memory_order_relaxed);
-        const std::uint64_t now = epoch_.load(std::memory_order_acquire);
-        const bool behind =
-            st == LaunchSlot::kApplied && (s.done.load(std::memory_order_acquire) & need) != need &&
-            (slotEpoch < now || (slotEpoch == now && playedStream(now) > s.key.load()));
+        // (An applied launch an executor has yet to switch is not listed: the
+        // renderer holds before a launch it has targets of, and the callback
+        // plays only what it rendered (round 209), so none is heard first;
+        // one on the callback's targets alone plays at once. Round 214.)
         if (st != LaunchSlot::kPending && st != LaunchSlot::kCommitted &&
-            st != LaunchSlot::kMissed && st != LaunchSlot::kVoided && !unheardApplied(s) && !behind)
+            st != LaunchSlot::kMissed && st != LaunchSlot::kVoided && !unheardApplied(s))
             continue;
         if (replaced(s)) continue;  // not placed again (round 207 F1)
         LaunchPending p;
@@ -711,14 +709,18 @@ void Engine::takeBackNodes(detail::Plan& p, int liveClass, std::uint64_t epoch,
         for (std::size_t i = 0; i < n.launchUndoCount; ++i) {
             detail::LaunchUndo& u = n.launchUndos[i];
             if (u.epoch != epoch) continue;
-            // (A slot reused since was spent heard (launch's lifetime
-            // rule): its key decides as its verdict did.)
+            // A slot reused since was spent heard (a launch's lifetime rule:
+            // its slot is free again only once its switch is known heard), so
+            // its record stays, whatever the end says (round 209: an end
+            // unknown after more epochs than the ring holds took back a
+            // heard switch, and the node played what the log did not).
             const LaunchSlot* slot = u.slot >= 0 && std::size_t(u.slot) < launchSlots_->size()
                                          ? &(*launchSlots_)[std::size_t(u.slot)]
                                          : nullptr;
-            if (u.relocated || !slot ||
-                (slot->state.load(std::memory_order_acquire) >> 3) != u.generation)
+            if (u.relocated || !slot)
                 u.undo = u.key >= end;
+            else if ((slot->state.load(std::memory_order_acquire) >> 3) != u.generation)
+                u.undo = false;
             else
                 u.undo = !slotHeard(*slot, &p, end);
         }
@@ -787,13 +789,64 @@ bool Engine::settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SU
         launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
     }
     launchLeavePending_ = UINT64_MAX;
+    launchLeaveUndos_ = false;
     launchLeftEpoch_[0] = left;
     launchLeftEnd_[0] = *end;
     leaveLaunchEpoch(1, &p, left, *end);
     takeBackNodes(p, liveClass, left, *end);
     markLeft(1, left, left + 1);
     launchLateEnd_.store(stream, std::memory_order_release);
+    // (No locate here: takeBackLaunches relocates each node it restores, and
+    // a renderer settling before it rendered anything since its locate, as
+    // at a play start it held for, has nothing else to clear; round 211 F2.)
     return true;
+}
+
+void Engine::passedPending(int path) SUPPLE_RT {
+    launchPassedPending_[std::size_t(path)].fetch_add(1, std::memory_order_relaxed);
+    launchUnsettled_.fetch_add(1, std::memory_order_relaxed);  // the capture is not as heard
+    notifyMain();
+}
+
+void Engine::playStartMissed(int path) SUPPLE_RT {
+    launchPlayStartMissed_[std::size_t(path)].fetch_add(1, std::memory_order_relaxed);
+    launchUnsettled_.fetch_add(1, std::memory_order_relaxed);  // the capture is not as heard
+    notifyMain();
+}
+
+bool Engine::launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
+                               std::int64_t end) SUPPLE_RT {
+    if (launchLeavePending_ == UINT64_MAX || settleLeave(p, 0, stream)) return false;
+    if (launchesQueued_.load() == 0) return false;
+    for (const LaunchSlot& slot : *launchSlots_) {
+        const std::uint64_t was = status(slot.state.load());
+        if ((was != LaunchSlot::kPending && was != LaunchSlot::kCommitted &&
+             was != LaunchSlot::kApplied) ||
+            slot.epoch.load(std::memory_order_relaxed) != epoch ||
+            (slot.done.load(std::memory_order_acquire) & 1) != 0)
+            continue;
+        const model::Id track{model::Kind::Track, static_cast<std::uint32_t>(
+                                                      slot.track.load(std::memory_order_relaxed))};
+        const model::Id clip{model::Kind::Clip,
+                             static_cast<std::uint32_t>(slot.clip.load(std::memory_order_relaxed))};
+        const auto kind = launchKind(
+            static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed)));
+        const std::int64_t target = slot.target.load(std::memory_order_relaxed);
+        bool held = false;
+        // Its first frame on this executor's targets, its early halves
+        // included (as launchesAt finds it).
+        forEachTarget(p, 0, track, [&](detail::Node& n, detail::NotesFeed* feed) {
+            const int player =
+                kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
+            const std::int64_t at = target + n.timelineShift;
+            const std::int64_t first =
+                std::min(earlyFrame(at, feed ? 0 : detail::launchEarly(n, kind, player)),
+                         earlyFrame(at, feed ? 0 : n.launchLead));
+            if (first < end) held = true;
+        });
+        if (held) return true;
+    }
+    return false;
 }
 
 void Engine::launchDone(LaunchSlot& slot, std::uint8_t mine) SUPPLE_RT {
@@ -817,25 +870,46 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     // The renderer's leave of an epoch the callback had not left (its wait
     // timed out) waits for the callback's end: until then nothing applies
     // and nothing is taken back (round 201 F2), and such a block does not
-    // count as run (what it passed it did not switch: round 207).
+    // count as run (what it passed it did not switch: round 207). Since
+    // round 209 the renderer holds before the first frame of any launch of
+    // its epoch it has targets of and has not switched (launchHeldByLeave),
+    // and the callback, playing only what was rendered, cannot apply one
+    // before it; a passed launch is counted (launchPassedPending_) and marks
+    // the capture (round 214).
     if (renderer && launchLeavePending_ != UINT64_MAX && !settleLeave(p, liveClass, stream)) {
-        // Passing a launch of this epoch it has not switched: these frames
-        // lack it (switched once settled, late), so a capture over them is
-        // not as heard (round 207; one with nothing applied ahead to take
-        // back was not marked).
-        if (launchesQueued_.load() != 0 &&
-            launchLateEpoch_.load(std::memory_order_relaxed) != epoch)
+        // Rendering with switches the listener may not have heard still in
+        // place: these frames are not as heard (round 209: marked here, as
+        // they are rendered, not at the relocation).
+        if (launchLeaveUndos_ && launchLateEpoch_.load(std::memory_order_relaxed) != epoch) {
+            launchLateEnd_.store(INT64_MAX, std::memory_order_release);
+            launchLateEpoch_.store(epoch, std::memory_order_release);
+            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
+            notifyMain();
+        }
+        // Passing a launch of this epoch it has not switched, on a target of
+        // its own: these frames lack it (switched once settled, late), so a
+        // capture over them is not as heard (round 207). Unreachable since
+        // the hold (round 209): counted should a path reach it (round 214).
+        if (launchesQueued_.load() != 0 && launchPassedEpoch_ != epoch)
             for (const LaunchSlot& slot : *launchSlots_) {
                 const std::uint64_t was = status(slot.state.load());
                 if ((was != LaunchSlot::kCommitted && was != LaunchSlot::kApplied) ||
                     slot.epoch.load(std::memory_order_relaxed) != epoch ||
-                    (slot.done.load(std::memory_order_acquire) & mine) == mine ||
-                    slot.target.load(std::memory_order_relaxed) >= stream + k)
+                    (slot.done.load(std::memory_order_acquire) & mine) == mine)
                     continue;
+                const model::Id track{
+                    model::Kind::Track,
+                    static_cast<std::uint32_t>(slot.track.load(std::memory_order_relaxed))};
+                const std::int64_t target = slot.target.load(std::memory_order_relaxed);
+                bool passing = false;
+                forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed*) {
+                    if (target + n.timelineShift < stream + k) passing = true;
+                });
+                if (!passing) continue;
+                launchPassedEpoch_ = epoch;
                 launchLateEnd_.store(INT64_MAX, std::memory_order_release);
                 launchLateEpoch_.store(epoch, std::memory_order_release);
-                launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
-                notifyMain();
+                passedPending(0);
                 break;
             }
         return k;
@@ -1023,10 +1097,12 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         // late until the callback's end is known): switched now, at this
         // block, as a relocation switches (playing by its phase from here,
         // as the other executor's targets do), so no target of it is left
-        // behind (round 207).
+        // behind (round 207). Unreachable since the hold (round 209):
+        // counted, and the capture marked (round 214).
         if (was == LaunchSlot::kApplied && allPassed && !due) {
             apply([&](std::int64_t at) { return at < stream; }, true);
             launchDone(slot, mine);
+            passedPending(1);
             continue;
         }
         if (was == LaunchSlot::kPending) {
@@ -1034,6 +1110,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             if ((passed || due) &&
                 slot.state.compare_exchange_strong(st, with(st, LaunchSlot::kMissed))) {
                 launchesQueued_.fetch_sub(1, std::memory_order_acq_rel);
+                if (slot.playStart.load(std::memory_order_relaxed)) playStartMissed(1);
                 notifyMain();
             }
             if (!passed && !due) soonest = std::min(soonest, first);
@@ -1049,6 +1126,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             if (passed || lacking) {
                 if (slot.state.compare_exchange_strong(st, with(st, LaunchSlot::kVoided))) {
                     launchesQueued_.fetch_sub(1, std::memory_order_acq_rel);
+                    if (passed && slot.playStart.load(std::memory_order_relaxed))
+                        playStartMissed(2);
                     notifyMain();
                 }
                 continue;

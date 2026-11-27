@@ -877,6 +877,312 @@ double ratio(const std::vector<float>& a, const std::vector<float>& b, std::size
 
 }  // namespace
 
+namespace {
+
+// B's gain follows the beat phase at `bpm` (a plug-in target: its offset is a
+// PARAM_MOD the plug-in keeps until the next one). With `send`, the level of
+// a second rack's send to a buss follows it too (a rack target, a mixer
+// target: linear between grid points, delivered one interval early, so the
+// plan has 32 frames of latency).
+model::Session locateScene(double bpm, bool send) {
+    const Emit emit("beat_phase", 0.5);
+    model::EditTxn t(emit.s, 2);
+    for (const auto& point : emit.s.tempo)
+        t.modify<model::TempoPointObj>(point.id, [&](auto& value) { value.bpm = bpm; });
+    if (send) {
+        model::Track buss;
+        buss.type = model::StripType::Buss;
+        buss.parent = kMaster;
+        const Id verb = t.create(buss);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(verb); });
+        // A second rack whose Out (1.0 while playing) is sent to the buss: a
+        // rack cannot modulate its own send.
+        const Id second = t.create(model::Rack{emit.a, ""});
+        const Id transport = addModule(t, second, "com.suppleaudio.rack.transport");
+        const Id out = addModule(t, second, model::kOutModule);
+        cable(t, transport, "playing", out, "l");
+        model::Route route;
+        route.from.module = out;
+        route.to.track = verb;
+        const Id sendId = t.create(route);
+        modulate(t, emit.modOut, sendId, "volume", -9.0);
+    }
+    return commit(t);
+}
+
+// The reviewer's four positions (round 208 F2: 16, 31, 0 and 1 frames past
+// the 32-frame grid), then every offset 0..31 from a grid point.
+std::vector<std::int64_t> locateTargets() {
+    std::vector<std::int64_t> to = {145360, 145375, 145376, 145377};
+    for (std::int64_t k = 0; k < std::int64_t{d::kAutomationStep}; ++k) to.push_back(96000 + k);
+    return to;
+}
+
+// Plays `s` live in each executor at `block`: from 0 for a while, then from
+// each of `to` in turn for a segment, reached by a seek while playing or
+// (`stopped`) by a pause, a seek and a play. Each segment equals the offline
+// render of the same range at the same block size, bit for bit: what the
+// plug-ins were sent before the locate does not outlast it. With latency a
+// grid point falls in the locate's pre-roll and resends before the first
+// frame, so only a scene without latency guards the run's first-frame send.
+void checkLocates(const model::Session& s, std::uint32_t block, bool stopped,
+                  std::uint32_t latency) {
+    constexpr std::int64_t kSeg = 2048;
+    const std::vector<std::int64_t> to = locateTargets();
+    std::vector<std::vector<float>> offline;
+    auto pool = makePool();  // one for every render (each restarts its racks)
+    for (const std::int64_t x : to) {
+        auto r = renderOffline(s, pool,
+                               {.startSeconds = double(x) / 48000.0,
+                                .endSeconds = double(x + kSeg) / 48000.0,
+                                .blockSize = block});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        offline.push_back(r->audio.channels[0]);
+    }
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        const std::string how = stopped ? "pause, seek, play" : "seek while playing";
+        INFO("block " << block << ", anticipative " << options.anticipative << ", " << how);
+        const std::int64_t cycles = (kSeg + block - 1) / block + 2;  // a segment
+        constexpr std::int64_t kStopped = 3;  // cycles paused before and after the seek
+        const std::int64_t each = cycles + (stopped ? 2 * kStopped : 0);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual,
+             .captureFrames = std::int64_t(block) * (cycles + each * std::int64_t(to.size()))});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s));
+        REQUIRE(engine.awaitPlan());
+        std::int64_t done = 0;
+        auto run = [&](std::int64_t n) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, n, block);
+            else
+                backend.run(n);
+            done += n;
+        };
+        engine.play();
+        run(cycles);  // the plug-in has been sent the beat phase from 0
+        const std::size_t L = engine.outputLatency();
+        CHECK(L == latency);
+        for (std::size_t k = 0; k < to.size(); ++k) {
+            INFO("to " << to[k] << " (" << to[k] % std::int64_t{d::kAutomationStep}
+                       << " past the grid)");
+            if (stopped) {
+                engine.pause();
+                run(kStopped);
+                engine.seek(double(to[k]) / 48000.0);
+                run(kStopped);
+                engine.play();
+            } else {
+                engine.seek(double(to[k]) / 48000.0);
+            }
+            const std::size_t at = std::size_t(block) * std::size_t(done) + L;
+            run(cycles);
+            REQUIRE(engine.awaitTransport());
+            REQUIRE(engine.transport().sample == to[k] + std::int64_t(block) * cycles);
+            CHECK(maxDiff(backend.capture().channels[0], at, offline[k], std::size_t(kSeg) - L) ==
+                  0.0);
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(engine.anticipationMisses() == 0);
+    }
+}
+
+}  // namespace
+
+TEST_CASE(
+    "modulation: a plug-in's offset from a locate off the grid, in both executors, plays as "
+    "offline at every tempo and block size" *
+    doctest::description("rt")) {
+    // With no latency no grid point falls in the locate's pre-roll: the
+    // first frames up to the grid hold what the plug-in is sent at the run's
+    // first frame (they once held what it was sent before the seek, up to 31
+    // frames, while the offline render's fresh instance had none).
+    for (const double bpm : {113.0, 120.0, 97.3}) {
+        INFO("bpm " << bpm);
+        const model::Session s = locateScene(bpm, false);
+        for (const std::uint32_t block : {37u, 128u, 512u})
+            for (const bool stopped : {false, true}) checkLocates(s, block, stopped, 0);
+    }
+}
+
+TEST_CASE(
+    "modulation: a rack target from a locate, in both executors, plays as offline at every "
+    "tempo and block size" *
+    doctest::description("rt")) {
+    // The send's level is a mixer target: a locate starts its interpolation
+    // and its route's delay afresh, in the in-callback executor's seek as in
+    // the renderer's (they once kept the values from before the seek up to
+    // the first grid point).
+    for (const double bpm : {113.0, 120.0, 97.3}) {
+        INFO("bpm " << bpm);
+        const model::Session s = locateScene(bpm, true);
+        for (const std::uint32_t block : {37u, 128u, 512u})
+            for (const bool stopped : {false, true}) checkLocates(s, block, stopped, 32);
+    }
+}
+
+TEST_CASE(
+    "modulation: a route an edit adds while playing first moves its plug-in on the grid, in "
+    "both executors" *
+    doctest::description("rt")) {
+    // An adoption continues the run: the new route's first PARAM_MOD is at
+    // the next grid point, not at the first frame of the block the plan
+    // arrives in (which depends on where the callback's blocks fall). Once
+    // a stage with no route kept a run's start until a route came.
+    const Emit plain("beat_phase", std::nullopt);
+    model::EditTxn t1(plain.s, 2);
+    modulate(t1, plain.modOut, plain.gain, "gain", 0.5);
+    const model::Session routed = commit(t1);  // the chain's gain gets a route
+    model::EditTxn t2(plain.s, 2);
+    model::FxInstance fx;
+    fx.plugin.id = kGain;
+    fx.patch =
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":0}})").value();
+    const Id added = t2.create(fx);
+    t2.modify<model::Track>(plain.b, [&](model::Track& tr) { tr.chain.push_back(added); });
+    modulate(t2, plain.modOut, added, "gain", 0.5);
+    const model::Session withFx = commit(t2);  // a new FX at 0 dB and its route
+    for (const auto* edited : {&routed, &withFx})
+        for (const std::uint32_t block : {37u, 100u, 128u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                const std::string what = edited == &routed ? "a route" : "an FX and its route";
+                INFO(what << ", block " << block << ", anticipative " << options.anticipative);
+                const std::int64_t cycles = 4000 / block + 3;
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                      .captureFrames = std::int64_t(block) * cycles * 4});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+                REQUIRE(engine.load(plain.s));
+                REQUIRE(engine.awaitPlan());
+                auto run = [&](std::int64_t n) {
+                    if (options.anticipative)
+                        runAheadOnState(engine, backend, n, block);
+                    else
+                        backend.run(n);
+                };
+                engine.play();
+                run(cycles);
+                REQUIRE(engine.load(*edited));
+                run(3 * cycles);  // the renderer adopts it a few blocks ahead
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                const std::size_t L = engine.outputLatency();
+                const auto& got = backend.capture().channels[0];
+                const float level = got[L + 1000];  // unmodulated, before the edit
+                std::size_t moved = 0;
+                for (std::size_t f = L + 1000; f < got.size() && !moved; ++f)
+                    if (got[f] != level) moved = f;
+                INFO("first moved at " << (moved ? moved - L : 0));
+                CHECK(moved >= L + std::size_t(block) * std::size_t(cycles));  // after the edit
+                if (moved) CHECK((moved - L) % d::kAutomationStep == 0);
+            }
+}
+
+TEST_CASE(
+    "modulation: arming a track while playing first moves its input chain's plug-in on the "
+    "grid, after a play start or a seek, in both executors" *
+    doctest::description("rt")) {
+    // B hears the rack's Out (1.0 while playing) and, armed with it as its
+    // input, through its input chain's gain (-6 dB, modulated by +12 dB
+    // while playing). Unarmed, the input chain does not run; it once kept
+    // the run's start the play or the seek gave it, and the plan that arms
+    // the track sent the gain's offset at its first frame, off the grid.
+    Emit e("playing", std::nullopt);
+    model::EditTxn t(e.s, 2);
+    t.modify<model::Track>(e.b, [&](model::Track& tr) {
+        tr.chain.clear();
+        tr.inputChain.push_back(e.gain);
+    });
+    modulate(t, e.modOut, e.gain, "gain", 0.5);
+    const model::Session unarmed = commit(t);
+    model::EditTxn t2(unarmed, 3);
+    t2.modify<model::Track>(e.b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t2);
+    for (const bool seek : {false, true})
+        for (const std::uint32_t block : {37u, 100u, 128u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                const std::string when = seek ? "after a seek" : "after the play start";
+                INFO(when << ", block " << block << ", anticipative " << options.anticipative);
+                const std::int64_t cycles = 4000 / block + 3;
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                      .captureFrames = std::int64_t(block) * cycles * 6});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+                REQUIRE(engine.load(unarmed));
+                REQUIRE(engine.awaitPlan());
+                auto run = [&](std::int64_t n) {
+                    if (options.anticipative)
+                        runAheadOnState(engine, backend, n, block);
+                    else
+                        backend.run(n);
+                };
+                engine.play();
+                run(cycles);
+                if (seek) {
+                    engine.seek(40013.0 / 48000.0);  // 13 frames past the grid
+                    run(cycles);
+                }
+                REQUIRE(engine.load(armed));
+                run(3 * cycles);  // the renderer adopts it a few blocks ahead
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                const std::size_t L = engine.outputLatency();
+                const auto& got = backend.capture().channels[0];
+                const std::size_t from = L + std::size_t(block) * std::size_t(cycles) *
+                                                 (seek ? 2u : 1u);  // the arm's edit
+                const float input = got[from - 1];  // unarmed: the rack's Out, past no gain
+                REQUIRE(input == doctest::Approx(1.0));
+                const float plain = input * 0.501187f;  // armed, unmodulated: -6 dB
+                std::size_t heard = 0, moved = 0;       // armed; modulated
+                for (std::size_t f = from; f < got.size() && !moved; ++f) {
+                    if (!heard && got[f] != input) heard = f;
+                    if (heard && std::abs(got[f] - plain) > 1e-4f) moved = f;
+                }
+                REQUIRE(heard);
+                REQUIRE(moved);
+                // The timeline position a captured frame plays (the grid's).
+                const std::int64_t seekFrame = std::int64_t(block) * cycles;
+                auto at = [&](std::size_t f) {
+                    const auto played = std::int64_t(f - L);
+                    return seek ? 40013 + played - seekFrame : played;
+                };
+                INFO("armed at " << at(heard) << ", first moved at " << at(moved));
+                CHECK(got[moved] > 3.9f);  // +12 dB: the modulated gain
+                CHECK(at(moved) % std::int64_t{d::kAutomationStep} == 0);
+            }
+}
+
+TEST_CASE("modulation: renders that share a pool play as renders from fresh pools" *
+          doctest::description("rt")) {
+    // A pool's rack modules outlive a render. Each render restarts the ones
+    // it takes, so a Mod Out does not hold the last render's value up to its
+    // first grid point (each range starts off the grid, where it shows).
+    const model::Session s = locateScene(120.0, false);
+    const std::int64_t starts[] = {145375, 96001, 145375, 30011, 96001};
+    auto shared = makePool();
+    for (const std::uint32_t block : {37u, 128u})
+        for (const std::int64_t x : starts) {
+            INFO("block " << block << ", from " << x);
+            const OfflineSettings settings{.startSeconds = double(x) / 48000.0,
+                                           .endSeconds = double(x + 2048) / 48000.0,
+                                           .blockSize = block};
+            auto fresh = makePool();
+            auto a = renderOffline(s, fresh, settings);
+            auto b = renderOffline(s, shared, settings);
+            REQUIRE_MESSAGE(a, (a ? std::string() : a.error().toString()));
+            REQUIRE_MESSAGE(b, (b ? std::string() : b.error().toString()));
+            CHECK(b->audio.channels[0] == a->audio.channels[0]);
+        }
+}
+
 TEST_CASE("modulation: a track's volume moves by signal x depth in dB, clamped to its range" *
           doctest::description("rt")) {
     const Emit emit("playing", std::nullopt);

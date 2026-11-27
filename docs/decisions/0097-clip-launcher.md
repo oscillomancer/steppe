@@ -1424,6 +1424,32 @@ callback had switched off the renderer's targets for good while judging it heard
 longer counts as run, the launch is switched once the leave settles, `launch.state` calls it queued
 until then, and the late span is marked whenever the renderer passes such a launch.
 
+Round 209 (same date; found by the GUI journey probe under load): a launch made while stopped that
+starts the transport (`launch.scene`, answered started at beat 0) was logged a bar late, the first bar
+silent. The stop and seeks relocated the renderer before the callback's next cycle, its leave stayed
+pending, and it rendered the play start with nothing applied, passed the launch undecided, missed it,
+and service placed it at the next bar. Decided: a renderer whose leave is pending holds before any
+launch of its current epoch it has not switched, until the callback's next cycle settles the leave;
+the late span is marked only over frames it renders before settling. A hold that outlasts the
+renderer's lead while playing takes the existing fallback (silence for the frames the callback lacks,
+an anticipation miss counted, the capture not as heard), never a missed launch. Missing a launch
+placed at a play start is unreachable by design; a path that does so all the same is counted and
+marks the capture. Tracing a difference the sequence test found only on the new path showed an older
+fault the hold's timing exposed: a renderer leave settling with its end unknown (more epochs than the
+ring holds) took back a switch whose slot had since been reused, though reuse means it was heard;
+such a record now stays.
+
+Round 211 (2026-11-27): the play-start misses are counted on the path the journey's launch took, a
+committed launch passed and voided, besides the two the hold makes unreachable. A settle needs no
+locate of its own (the take-back relocates each node it restores). With the hold, round 207's
+handling of a launch the renderer passed while its leave was pending can no longer be reached and is
+kept as a fallback.
+
+Round 214 (same date): no fallback is left uncounted. A launch the renderer passes while its leave is
+pending, or switches late after the callback, is counted and marks the capture (expected 0, asserted
+by the tests); `launch.state` no longer lists an applied launch an executor has yet to switch, since
+under the hold none is heard first.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

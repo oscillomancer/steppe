@@ -1964,7 +1964,48 @@ clap_process_status CLAP_ABI noteGenProcess(const clap_plugin_t* p, const clap_p
     return CLAP_PROCESS_CONTINUE;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 23; }
+// --- tremolo (state counted from reset) -------------------------------------------
+// An audio effect with no parameters and no latency whose output depends on
+// the frames it has processed since activation or reset: the input times
+// 0.75 + 0.25 sin(2 pi frames / 9600). Unlike a memoryless gain or a
+// filter, it shows whether a chain was reset at a relocation even while its
+// input was silent (review round 208).
+const clap_plugin_descriptor_t* tremoloDescriptor() {
+    static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
+    static const clap_plugin_descriptor_t d = {
+        CLAP_VERSION_INIT, "com.suppleaudio.test.tremolo", "Tremolo", "Supple Audio", "", "", "",
+        "0.1.0",           "a tremolo counted from reset", features};
+    return &d;
+}
+struct Tremolo {
+    clap_plugin_t plugin{};
+    const clap_host_t* host = nullptr;
+    uint64_t frames = 0;
+};
+Tremolo* Tr(const clap_plugin_t* p) { return static_cast<Tremolo*>(p->plugin_data); }
+uint32_t CLAP_ABI tremoloPortCount(const clap_plugin_t*, bool) { return 1; }
+const clap_plugin_audio_ports_t kTremoloPorts = {tremoloPortCount, gainPortGet};
+const void* CLAP_ABI tremoloExt(const clap_plugin_t*, const char* id) {
+    return !std::strcmp(id, CLAP_EXT_AUDIO_PORTS) ? &kTremoloPorts : nullptr;
+}
+bool CLAP_ABI tremoloActivate(const clap_plugin_t* p, double, uint32_t, uint32_t) {
+    Tr(p)->frames = 0;
+    return true;
+}
+void CLAP_ABI tremoloReset(const clap_plugin_t* p) { Tr(p)->frames = 0; }
+clap_process_status CLAP_ABI tremoloProcess(const clap_plugin_t* pl, const clap_process_t* pr) {
+    Tremolo* t = Tr(pl);
+    for (uint32_t i = 0; i < pr->frames_count; ++i, ++t->frames) {
+        const double gain = 0.75 + 0.25 * std::sin(2.0 * M_PI * double(t->frames) / 9600.0);
+        for (uint32_t c = 0; c < 2; ++c) {
+            const float x = pr->audio_inputs_count > 0 ? pr->audio_inputs[0].data32[c][i] : 0.0f;
+            pr->audio_outputs[0].data32[c][i] = static_cast<float>(double(x) * gain);
+        }
+    }
+    return CLAP_PROCESS_CONTINUE;
+}
+
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 24; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1989,10 +2030,17 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 20 ? fixedGainDescriptor()
            : i == 21 ? namingGainDescriptor(true)
            : i == 22 ? namingGainDescriptor(false)
+           : i == 23 ? tremoloDescriptor()
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
                                             const char* id) {
+    if (!std::strcmp(id, tremoloDescriptor()->id)) {
+        const clap_plugin_t* plugin =
+            make<Tremolo>(host, tremoloDescriptor(), tremoloActivate, tremoloProcess, tremoloExt);
+        const_cast<clap_plugin_t*>(plugin)->reset = tremoloReset;
+        return plugin;
+    }
     if (!std::strcmp(id, fixedGainDescriptor()->id)) {
         const auto* plugin =
             make<Gain>(host, fixedGainDescriptor(), gainActivate, gainProcess, gainExt);

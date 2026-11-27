@@ -436,8 +436,11 @@ instructions are in `docs/guides/installing.md`.
       never runs out (round 205); a track's newest launch wins over any it
       replaced, taken back or not, and taken-back launches settle in one
       service (round 207); a renderer leave held late no longer loses a
-      launch the callback switched meanwhile (round 207); the GUI's
-      as-heard line words `launch_unsettled` (gui.md §4.8). Open,
+      launch the callback switched meanwhile (round 207), and holds before
+      a launch of its epoch instead of rendering past it, so a launch made
+      while stopped that starts the transport sounds from the play start
+      under load too (round 209); the GUI's as-heard line words
+      `launch_unsettled` (gui.md §4.8). Open,
       found by the seeded sequence test (rounds 205 and 207; ruled for
       branch capture-start-state): a capture is as heard but its replay
       differs when it begins (A) where a loop clip carried from before
@@ -448,14 +451,20 @@ instructions are in `docs/guides/installing.md`.
       playing (to be marked: an exact replay needs pre-roll from the
       note's start with every instrument's state, the open pre-roll item),
       or (E, in-callback) after being switched on while stopped and a seek
-      while stopped (it keeps the old start and spans the jump). Also open:
-      (G) on a loop change while playing, or a pause and play with no
-      block between, the in-callback executor's instruments sound on
+      while stopped (it keeps the old start and spans the jump), or at a
+      play start before the callback has played the epoch (it starts where
+      the stop was, before the seeks while stopped); (F5, anticipative,
+      with a live input) a capture switched on while playing after a
+      relocation starts at its stream frame, not its song position. Also
+      open: (G) on a loop change while playing, or a pause and play with
+      no block between, the in-callback executor's instruments sound on
       (a held MIDI note) where the anticipative executor and the replay
       start silent; (H) in-callback, a live Notes feed's gate holds its
-      value from before a pause for the first block after the play; the
-      executors' last 64 frames before a seek differed once (the channel
-      shift; not yet traced).
+      value from before a pause after the play, for the first block or
+      until a note sounding there ends. The sequence test compares each
+      epoch and capture after the frames its class covers. Not yet traced:
+      the executors' last 64 frames before a seek differed once (the
+      channel shift).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
@@ -1010,12 +1019,20 @@ instructions are in `docs/guides/installing.md`.
   but the tests' memoryless gain cannot prove the early entry after a wrap
   by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
-  pressed within 32 more frames of its boundary takes the next. Open
-  (found by the launch sequence test at the F6 merge): playing from a song
-  position off the 32-frame grid (a seek, a pause and play there), a
-  modulated take chain's frames up to the next grid point differ between
-  live and the offline replay (1 frame from 145375, 16 from 145360), so a
-  render or capture from there is not exact while saying as heard. A route
+  pressed within 32 more frames of its boundary takes the next. A take
+  chain's run starts with its track's (a seek, a pause and play, a loop
+  wrap: every offset sent at the first frame), so from a song position off
+  the 32-frame grid it plays as the offline render from there; one that
+  does not run then keeps to the grid when it first does. Open: a capture
+  switched on while playing, or replayed from inside a run it does not
+  restart (a loop change, a pause and play with no block between),
+  restarts the rack's Mod Outs at 0 in its offline replay, where live
+  keeps their history, so a modulated chain's frames up to the next grid
+  point differ while the capture says as heard (the launch sequence
+  test's class C); and an FX moved from another track inside a plan an
+  adoption brings after a locate (a new stage, the same instance) plays
+  the value it was sent before for up to 19 frames, to the next grid
+  point (review round 213). A route
   into a take that does not play is idle (`modulation.list` says `inert:
   "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same
@@ -1059,8 +1076,10 @@ instructions are in `docs/guides/installing.md`.
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
-  executors, bridged, at seeks and over loop wraps. Removing a route's
-  source or target removes it with a `modulation.removed` warning. A
+  executors, bridged, at seeks and over loop wraps (a seek or a pause off
+  the 32-frame grid included: a run's first frame sends every offset).
+  Removing a route's source or target removes it with a
+  `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
   one of them is edited (`modulation.latency`). `modulation.telemetry`
   (and `EngineApp::modulationOffsets()`) reads each route's live target

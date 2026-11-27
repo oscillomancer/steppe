@@ -398,6 +398,11 @@ def performance(j, ids):
     ended = j.exec("launch.capture", {"on": False}, "Stop capturing.")
     assert not ended["on"] and ended["from"] == 0.0 and ended["to"] >= switch + 4.0, ended
     assert not j.state_result()["capturing"]
+    # Captured from the play start the Verse launch began, with nothing else in it: as heard
+    # (round 209: under load the Verse was once missed at the play start and placed a bar later).
+    planned = j.exec("render.dry-run", {"performance": "captured"},
+                     "What rendering the capture would do.")
+    assert planned["as_heard"], planned
     # Back to the arrangement while the transport runs: a launch given while it is stopped
     # would stay queued. The capture has ended, so this is not kept.
     j.exec("launch.arrangement", {}, "Everything back to the arrangement.")

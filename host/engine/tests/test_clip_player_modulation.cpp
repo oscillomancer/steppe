@@ -338,10 +338,12 @@ namespace {
 // the block after its clip chain's entry (one grid interval before the
 // switch), before the switch's block; it plays again 300 cycles later and
 // the launch, not heard, is placed again (ADR-0097, revision 2026-11-26).
+// With `seekTo` (song samples) it seeks there instead, playing on.
 struct StoppedEntry {
     std::vector<float> out;
     std::uint32_t latency = 0;
     std::int64_t paused = 0, resumed = 0;  // cycles
+    std::int64_t from = 0;                 // the song sample it went on from
     std::vector<LaunchLogEntry> log;
     std::uint64_t epochBefore = 0, misses = 0, errors = 0;
     // tr_1's node holds the chain's entry just before the stop, and after
@@ -354,7 +356,7 @@ bool holdsEntry(const Engine& engine) {
     return false;
 }
 StoppedEntry stoppedAtEntry(const model::Session& s, const fs::path& dir,
-                            const EngineOptions& options) {
+                            const EngineOptions& options, std::int64_t seekTo = -1) {
     constexpr std::uint32_t kBlock = 32;
     const std::int64_t frames = 48000 * 6;
     InstancePool pool = makePool();
@@ -387,11 +389,20 @@ StoppedEntry stoppedAtEntry(const model::Session& s, const fs::path& dir,
     run(out.paused);
     out.entryBefore = holdsEntry(engine);
     out.epochBefore = EngineTestAccess::epoch(engine);
-    engine.pause();
-    run(done + 300);
-    out.entryAfter = holdsEntry(engine);
-    engine.play();
-    out.resumed = done;
+    if (seekTo >= 0) {
+        engine.seek(double(seekTo) / 48000);
+        out.resumed = done;
+        out.from = seekTo;
+        run(done + 1);
+        out.entryAfter = holdsEntry(engine);
+    } else {
+        engine.pause();
+        run(done + 300);
+        out.entryAfter = holdsEntry(engine);
+        engine.play();
+        out.resumed = done;
+        out.from = out.paused * kBlock;
+    }
     run(frames / kBlock);
     out.misses = engine.anticipationMisses();
     out.latency = engine.outputLatency();
@@ -426,8 +437,9 @@ TEST_CASE(
     // cl_1 (constant 0.5 through a gain, routed) launched on an off-grid
     // bar; the transport paused after the chain's entry, before its switch.
     // The switch was not heard, so the launch is taken back with its entry
-    // (the undo record carries the entry's state) and placed again at the
-    // next bar after play: nothing of the first launch is left coming in.
+    // (the undo record carries the entry's state) and placed again while
+    // stopped, so it applies at the play start (unquantized, as any launch
+    // placed while stopped): nothing of the first launch is left coming in.
     // With the route disabled the output equals the same run with no route
     // (the entry moves nothing), in both executors, and the two executors
     // agree; with it enabled, the resumed epoch plays as its log replays.
@@ -493,4 +505,318 @@ TEST_CASE(
     INFO(differences(withOut[1], latency[1], reference, whole));
     CHECK(maxDiff(withOut[1], latency[1], reference, whole) == 0.0);
     CHECK(logs[1] == logs[0]);
+}
+
+TEST_CASE(
+    "a seek between a modulated clip chain's entry and its switch takes the entry back, heard "
+    "through a chain counted from reset (round 208)" *
+    doctest::description("rt")) {
+    // As the stop test, but a seek while playing (to song sample 24000, on
+    // the grid): playing goes on, so an entry left on the node would keep
+    // the chain entered, not reset, until the launch placed again enters
+    // it; a memoryless gain cannot show that, so cl_1's chain also holds a
+    // tremolo counted from reset. The epoch after the seek plays as its log
+    // replays, on both executors (round 208: without the record's entry the
+    // in-callback epoch differed in 95883 of 96000 frames).
+    Project p;
+    modulators(p);
+    offGrid(p);
+    halfClip(p, "sc_1", -0.25);  // cl_1, mr_1
+    (void)takeFx(p, "cl_1", "com.suppleaudio.test.tremolo");
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        const StoppedEntry live = stoppedAtEntry(
+            s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 24000);
+        CHECK(live.errors == 0);
+        CHECK(live.misses == 0);
+        CHECK_FALSE(live.entryAfter);
+        std::vector<LaunchLogEntry> resumed;
+        for (const LaunchLogEntry& e : live.log)
+            if (e.epoch > live.epochBefore) resumed.push_back(e);
+        INFO(describe(live.log));
+        REQUIRE(resumed.size() == 1);
+        const std::size_t n = 96000;
+        const auto offline = mixFrom(p, s, double(live.from) / 48000, n, resumed);
+        const std::size_t at = live.latency + std::size_t(live.resumed * 32);
+        CHECK(std::any_of(offline.begin(), offline.end(), [](float v) { return v != 0.0f; }));
+        INFO("the epoch after the seek against its log's replay: " << differences(live.out, at,
+                                                                                  offline, n));
+        CHECK(maxDiff(live.out, at, offline, n) == 0.0);
+    }
+}
+
+namespace {
+
+// tr_1 holds an item at `bar` (a constant 0.5, six seconds) whose take runs
+// through the gain fixture at -6 dB, routed -0.25 from Transport's playing.
+std::string itemChain(Project& p, int bar) {
+    modulators(p);
+    audio::AudioData half;
+    half.sampleRate = 48000;
+    half.channels.assign(1, std::vector<float>(48000 * 6, 0.5f));
+    const fs::path file = p.root / "item-half.wav";
+    REQUIRE(audio::writeWav(file, half));
+    auto item = j(R"({"track": "tr_1"})");
+    item["bar"] = bar;
+    item["audio_file"] = file.string();
+    const auto added = p.runArgs("item.add", item);
+    json::Value fx = json::Value::object();
+    fx["take"] = added.find("take")->asString();
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    const std::string gain = p.runArgs("fx.add", fx)["fx"].asString();
+    json::Value level = json::Value::object();
+    level["fx"] = gain;
+    level["values"] = j(R"({"gain": -6})");
+    p.runArgs("fx.param.set", level);
+    return route(p, gain, -0.25);
+}
+
+}  // namespace
+
+TEST_CASE(
+    "an item's modulated take chain from a locate off the grid plays as offline, after a seek "
+    "while playing or a pause, seek and play, in both executors (take-fx merge)" *
+    doctest::description("rt")) {
+    // A locate starts a run for the take chains too (restartModulation):
+    // the take FX is sent its routes' sums at the run's first frame, as an
+    // offline render from there does (review round 213: without, PROBE208 C
+    // differed in 24 of 66 cases, up to 31 frames).
+    Project p;
+    (void)itemChain(p, 1);
+    const model::Session s = p.app->head();
+    const std::vector<std::int64_t> to = {145360, 145375, 145376, 145377, 96011, 96031};
+    constexpr std::int64_t kSeg = 2048;
+    for (const std::uint32_t block : {37u, 128u}) {
+        std::vector<std::vector<float>> offline;
+        auto pool = makePool();
+        for (const std::int64_t x : to) {
+            OfflineSettings settings;
+            settings.startSeconds = double(x) / 48000.0;
+            settings.endSeconds = double(x + kSeg) / 48000.0;
+            settings.blockSize = block;
+            settings.projectDir = p.app->projectDir();
+            auto r = renderOffline(s, pool, settings);
+            REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+            offline.push_back(r->audio.channels[0]);
+        }
+        for (const bool stopped : {false, true})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("block " << block << ", anticipative " << options.anticipative << ", "
+                              << (stopped ? "pause, seek, play" : "seek while playing"));
+                const std::int64_t cycles = (kSeg + block - 1) / block + 2;
+                constexpr std::int64_t kStopped = 3;
+                const std::int64_t each = cycles + (stopped ? 2 * kStopped : 0);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                      .captureFrames = std::int64_t(block) *
+                                                       (cycles + each * std::int64_t(to.size()))});
+                Engine engine(rtPool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+                REQUIRE(engine.load(s, p.app->projectDir()));
+                REQUIRE(engine.awaitPlan());
+                std::int64_t done = 0;
+                const auto run = [&](std::int64_t n) {
+                    if (options.anticipative)
+                        runAheadOnState(engine, backend, n, block);
+                    else
+                        backend.run(n);
+                    done += n;
+                };
+                engine.play();
+                run(cycles);
+                const std::size_t latency = engine.outputLatency();
+                for (std::size_t k = 0; k < to.size(); ++k) {
+                    INFO("to " << to[k] << " (" << to[k] % 32 << " past the grid)");
+                    if (stopped) {
+                        engine.pause();
+                        run(kStopped);
+                        engine.seek(double(to[k]) / 48000.0);
+                        run(kStopped);
+                        engine.play();
+                    } else {
+                        engine.seek(double(to[k]) / 48000.0);
+                    }
+                    const std::size_t at = std::size_t(block) * std::size_t(done) + latency;
+                    run(cycles);
+                    const auto& out = backend.capture().channels[0];
+                    INFO(differences(out, at, offline[k], std::size_t(kSeg) - latency));
+                    CHECK(maxDiff(out, at, offline[k], std::size_t(kSeg) - latency) == 0.0);
+                }
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(engine.anticipationMisses() == 0);
+            }
+    }
+}
+
+namespace {
+// Whether every take chain stage on tr_1 has consumed its run's start.
+bool takeRunStartsConsumed(const Engine& engine) {
+    for (const detail::Node& n : EngineTestAccess::latestPlan(engine).nodes)
+        if (n.id == id("tr_1"))
+            for (const detail::TakeChain& tc : n.takeChains)
+                for (const detail::Stage& st : tc.chain)
+                    if (st.modRunStart) return false;
+    return true;
+}
+}  // namespace
+
+TEST_CASE(
+    "an item's modulated take chain entered while playing is sent its routes on the grid before "
+    "its onset and plays as offline; a take chain that does not run consumes a run's start "
+    "(take-fx merge)" *
+    doctest::description("rt")) {
+    // At 113 BPM the item on bar 3 starts off the grid (song sample 203894).
+    // Its chain is entered one grid interval before its onset (ADR-0096 M5,
+    // F1), so the grid point before the onset is in a block it runs and the
+    // onset is routed, live and offline alike, in both executors. Before
+    // the onset, the item's chain and the idle clip cl_1's chain do not run:
+    // each consumes the run's start a play start or a seek gives it
+    // (skipModulation), so a chain that first runs in a plan an adoption
+    // brings keeps to the grid (review round 213: no test reached the take
+    // chains' skips). The flags are read in-callback, on this thread.
+    Project p;
+    offGrid(p);
+    (void)itemChain(p, 3);
+    halfClip(p, "sc_1", -0.25);  // cl_1, idle: never launched
+    const model::Session s = p.app->head();
+    const double routed = 0.5 * gainAt(-0.25);
+    constexpr std::uint32_t kB = 16;
+    const std::int64_t frames = 48000 * 6;
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = double(frames) / 48000.0;
+    settings.blockSize = kB;
+    settings.projectDir = p.app->projectDir();
+    auto offline = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(offline, (offline ? std::string() : offline.error().toString()));
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kB}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        REQUIRE(engine.awaitPlan());
+        engine.play();
+        const auto run = [&](std::int64_t n) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, n, kB);
+            else
+                backend.run(n);
+        };
+        run(100);
+        if (!options.anticipative) CHECK(takeRunStartsConsumed(engine));
+        const std::int64_t cycles = frames / kB - 256;
+        run(cycles - 100);
+        const std::size_t latency = engine.outputLatency();
+        const auto& out = backend.capture().channels[0];
+        std::size_t entry = latency;
+        while (entry < out.size() && out[entry] == 0.0f) ++entry;
+        REQUIRE(entry < out.size());
+        INFO("entry at song " << entry - latency);
+        CHECK((entry - latency) % 32 != 0);  // the item starts off the grid
+        CHECK(std::fabs(double(out[entry]) - routed) < 1e-6);
+        const std::size_t n = std::size_t(cycles * kB) - latency - 4096;
+        INFO(differences(out, latency, offline->audio.channels[0], n));
+        CHECK(maxDiff(out, latency, offline->audio.channels[0], n) == 0.0);
+        if (!options.anticipative) {
+            // A seek while playing to before the item: consumed again.
+            engine.seek(1.0);
+            run(1);
+            CHECK(takeRunStartsConsumed(engine));
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+    }
+}
+
+TEST_CASE(
+    "a modulated clip chain that starts again at a play start is sent its routes at its first "
+    "frame, as offline, in both executors (take-fx merge)" *
+    doctest::description("rt")) {
+    // cl_1 playing through its routed gain from off the grid; a pause there;
+    // then a play, with or without tr_1 returned to the arrangement while
+    // stopped (its chain then fades out from the play start). A play start
+    // is a run's start for the clip chains too (restartModulation, review
+    // round 213): the epoch from it plays as its log replays from that
+    // song sample. Without, the chain keeps what it was sent before the
+    // pause (red in all four cases).
+    Project p;
+    modulators(p);
+    halfClip(p, "sc_1", -0.25);  // cl_1
+    const model::Session s = p.app->head();
+    constexpr std::uint32_t kB = 32;
+    for (const bool toArrangement : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative << ", "
+                                 << (toArrangement ? "to the arrangement" : "cl_1 on"));
+            const std::int64_t frames = 48000 * 4;
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kB}));
+            REQUIRE(engine.load(s, p.app->projectDir()));
+            std::int64_t done = 0;
+            const auto run = [&](std::int64_t n) {
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, n, kB);
+                else
+                    backend.run(n);
+                done += n;
+                engine.service();
+            };
+            // From off the grid (31 past it), so the pause and the play
+            // start are too.
+            engine.seek(double(24031) / 48000.0);
+            engine.play();
+            run(20);
+            const Engine::LaunchRequest r = request("tr_1", "cl_1");
+            REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::None));
+            run(400);
+            engine.pause();
+            run(20);
+            const std::uint64_t before = EngineTestAccess::epoch(engine);
+            REQUIRE(engine.awaitTransport());
+            const std::int64_t song = engine.transport().sample;
+            REQUIRE(song % 32 == 31);
+            if (toArrangement) {
+                const Engine::LaunchRequest back = backTo("tr_1");
+                REQUIRE(engine.launch(std::span(&back, 1), model::LaunchQuantize::None));
+            }
+            engine.play();
+            const std::int64_t from = done;
+            run(200);
+            // cl_1 carried in, then the return (logged while stopped, at the
+            // play start's song sample), both at the replay's frame 0.
+            const auto& log = engine.launchLog();
+            REQUIRE(!log.empty());
+            REQUIRE(log.front().action == LaunchLogEntry::Action::Clip);
+            std::vector<LaunchLogEntry> resumed{log.front()};
+            if (toArrangement) {
+                REQUIRE(log.size() == 2);
+                CHECK(log[1].action == LaunchLogEntry::Action::Arrangement);
+                CHECK(log[1].anchorSample == song);
+                resumed.push_back(log[1]);
+            }
+            CHECK(log.size() == resumed.size());
+            for (LaunchLogEntry& e : resumed) {
+                e.runningFrame = 0;
+                e.epoch = before + 1;
+            }
+            const std::uint32_t latency = engine.outputLatency();
+            engine.stop();
+            const std::size_t n = 4096;
+            const auto offline = mixFrom(p, s, double(song) / 48000, n, resumed);
+            const auto& out = backend.capture().channels[0];
+            const std::size_t at = latency + std::size_t(from * kB);
+            INFO(describe(engine.launchLog()));
+            INFO(describe(resumed));
+            INFO(differences(out, at, offline, n));
+            CHECK(maxDiff(out, at, offline, n) == 0.0);
+        }
 }

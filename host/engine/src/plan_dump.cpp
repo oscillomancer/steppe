@@ -216,17 +216,18 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
                                   busHeld, busControllers, instance, fx, lanes, laneModRoutes,
-                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch, bypass,
-                                  instrument, autoBypassOnSilence, sleeping, processed,
-                                  inputLatency, rateLive, callbackBypass, wet, appliedWet,
-                                  rampFromWet, rampToWet, wetRampLeft, preserveDryOnLocate, latency,
-                                  dry, out, dryBuf, keyed, keyChannels, key, inPin, outPin, keyPins,
-                                  pinned, chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr,
-                                  auxWritten, blockEvents, voices, pendingVoices, noteSources,
-                                  noteSourceIndex, sourceIds, nextNoteId, releases, voiceDropped,
-                                  modDeferred, outStorage, outEvents, blocks, openGesture,
-                                  openGestures, pdcIgnore, parallel, group, groupEnd, before, align,
-                                  groupIn, groupOut, os, osFilters, osIn, osOut, osKey, osPad] = st;
+                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch,
+                                  modRunStart, bypass, instrument, autoBypassOnSilence, sleeping,
+                                  processed, inputLatency, rateLive, callbackBypass, wet,
+                                  appliedWet, rampFromWet, rampToWet, wetRampLeft,
+                                  preserveDryOnLocate, latency, dry, out, dryBuf, keyed,
+                                  keyChannels, key, inPin, outPin, keyPins, pinned, chanDelay,
+                                  pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten, blockEvents,
+                                  voices, pendingVoices, noteSources, noteSourceIndex, sourceIds,
+                                  nextNoteId, releases, voiceDropped, modDeferred, outStorage,
+                                  outEvents, blocks, openGesture, openGestures, pdcIgnore, parallel,
+                                  group, groupEnd, before, align, groupIn, groupOut, os, osFilters,
+                                  osIn, osOut, osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -266,6 +267,7 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     }
     d.put(a, "modRoutes", st.modRoutes);
     d.put(a, "modEvents", static_cast<std::uint64_t>(st.modEvents));
+    d.put(a, "modRunStart", st.modRunStart);
     d.put(a, "bypass", st.bypass);
     d.put(a, "instrument", st.instrument);
     d.put(a, "autoBypassOnSilence", st.autoBypassOnSilence);
