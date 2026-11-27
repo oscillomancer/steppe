@@ -713,12 +713,17 @@ struct Stage {
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.
     // `modHeard` and `modEpoch`: the instance and its modulationEpoch() the
-    // memo was last checked against; a change marks it stale.
+    // memo was last checked against; a change marks it stale. `modRunStart`:
+    // a run starts at the next block it processes (a plan's first block, a
+    // locate, a loop wrap), which sends every slot at its first frame
+    // whatever the grid, so what follows a locate off the grid is the
+    // offline render's from there.
     std::vector<ModParam> mods;
     std::vector<std::uint32_t> modRoutes;
     std::size_t modEvents = 0;
     const host::Instance* modHeard = nullptr;
     std::uint32_t modEpoch = 0;
+    bool modRunStart = true;
     bool bypass = false, instrument = false;
     bool autoBypassOnSilence = false, sleeping = false, processed = false;
     std::int64_t inputLatency = 0;  // stage input's timeline shift, also corrects output events

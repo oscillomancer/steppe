@@ -984,8 +984,10 @@ instructions are in `docs/guides/installing.md`.
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
-  executors, bridged, at seeks and over loop wraps. Removing a route's
-  source or target removes it with a `modulation.removed` warning. A
+  executors, bridged, at seeks and over loop wraps (a seek or a pause off
+  the 32-frame grid included: a run's first frame sends every offset).
+  Removing a route's source or target removes it with a
+  `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
   one of them is edited (`modulation.latency`). `modulation.telemetry`
   (and `EngineApp::modulationOffsets()`) reads each route's live target

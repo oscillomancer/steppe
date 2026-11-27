@@ -468,7 +468,8 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             m.count = static_cast<std::uint32_t>(st->modRoutes.size()) - m.first;
             st->mods.push_back(m);
         }
-        // A routed parameter's grid, and one 0 for each of the others.
+        // A routed parameter's grid and a run's first frame, and one 0 for
+        // each of the others.
         st->modEvents = perParam * now.size() + (all.size() - now.size());
     }
     // Each lane's routes, in modEdges order (M4).
@@ -2637,7 +2638,9 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 
 // Modulation (ADR-0096), after the stage's automation: at each point of the
 // absolute kAutomationStep grid, one PARAM_MOD per slot whose routes' sum
-// differs from the memo, or for every slot while the memo is stale. A slot
+// differs from the memo, or for every slot while the memo is stale; and at
+// a run's first frame (Stage::modRunStart: a plan's first block, a locate, a
+// loop wrap), on the grid or not, where the memo is stale. A slot
 // with no route this plan is sent one 0 if the memo lists it, then leaves
 // it. Only a stage that will process is sent anything; otherwise the memo
 // goes stale, as it does when the instance or its modulationEpoch() moves.
@@ -2666,8 +2669,12 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
     const auto phase =
         ((pos % kAutomationStep + origin % kAutomationStep) % kAutomationStep + kAutomationStep) %
         kAutomationStep;
-    for (auto g = static_cast<std::uint32_t>((kAutomationStep - phase) % kAutomationStep); g < n;
-         g += kAutomationStep)
+    const auto grid = static_cast<std::uint32_t>((kAutomationStep - phase) % kAutomationStep);
+    // A run's first frame, then the grid: the plug-in does not keep what it
+    // was sent before the locate up to the first grid point (n > 0).
+    const std::uint32_t first = st.modRunStart ? 0 : grid;
+    st.modRunStart = false;
+    for (std::uint32_t g = first; g < n; g = g < grid ? grid : g + kAutomationStep)
         for (ModParam& m : st.mods) {
             if (!m.count && (!m.listed || (!m.stale && m.sent == 0.0))) {
                 m.listed = false;  // nothing owed
@@ -4313,6 +4320,17 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 // the plug-in starts afresh unless a swap just carried it (their notes are
 // their modules', which locateRack and the module restart look after). A
 // loop wrap (wrapTo) keeps it.
+// A run starts (ADR-0096): the next block a modulated stage processes sends
+// every slot at its first frame. Not on a handoff or an adoption, which
+// continue in place as the grid does.
+void restartModulation(Node& n) SUPPLE_RT {
+    for (auto* chain : {&n.inputChain, &n.chain})
+        for (Stage& st : *chain) {
+            st.modRunStart = true;
+            for (ModParam& m : st.mods) m.stale = true;
+        }
+}
+
 void locateRackStages(Node& n) SUPPLE_RT {
     for (Stage& st : n.rackStages) {
         if (!st.preserveDryOnLocate) clearStageDelays(st);
@@ -4356,6 +4374,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
         a->cursor = 0;
     n.vcas.reset();
     locateRackStages(n);
+    if (restartConsole) restartModulation(n);
     for (Stage& st : n.chain) {
         if (restartConsole && !n.releaseHeld) {
             st.voices.clear();
@@ -4446,6 +4465,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
             a->cursor = 0;
         n.vcas.reset();
         locateRackStages(n);
+        if (restartConsole) restartModulation(n);
         for (Stage& st : n.chain) {
             if (restartConsole && !n.releaseHeld) {
                 st.voices.clear();
@@ -4515,6 +4535,7 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
                 ln.curve.cursor = 0;
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // the loop start's value
             }
+        restartModulation(n);  // and its modulation's, as after a seek there
         for (std::size_t ei : n.in)
             if (!p.edges[ei].encode && !p.edges[ei].rackSend)  // the rack's (ADR-0075)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,
@@ -4751,6 +4772,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         auto carryMemo = [&to](Stage& st, const Stage& os) {
             st.modHeard = os.modHeard;
             st.modEpoch = os.modEpoch;
+            st.modRunStart = os.modRunStart;
             for (ModParam& m : st.mods)
                 for (const ModParam& om : os.mods)
                     if (om.clapId == m.clapId) {

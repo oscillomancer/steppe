@@ -993,6 +993,22 @@ void checkLocates(const model::Session& s, std::uint32_t block, bool stopped,
 }  // namespace
 
 TEST_CASE(
+    "modulation: a plug-in's offset from a locate off the grid, in both executors, plays as "
+    "offline at every tempo and block size" *
+    doctest::description("rt")) {
+    // With no latency no grid point falls in the locate's pre-roll: the
+    // first frames up to the grid hold what the plug-in is sent at the run's
+    // first frame (they once held what it was sent before the seek, up to 31
+    // frames, while the offline render's fresh instance had none).
+    for (const double bpm : {113.0, 120.0, 97.3}) {
+        INFO("bpm " << bpm);
+        const model::Session s = locateScene(bpm, false);
+        for (const std::uint32_t block : {37u, 128u, 512u})
+            for (const bool stopped : {false, true}) checkLocates(s, block, stopped, 0);
+    }
+}
+
+TEST_CASE(
     "modulation: a rack target from a locate, in both executors, plays as offline at every "
     "tempo and block size" *
     doctest::description("rt")) {
