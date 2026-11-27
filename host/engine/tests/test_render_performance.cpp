@@ -898,3 +898,89 @@ TEST_CASE("each render.* command declares every code its sources answer (round 1
     INFO("undeclared:\n" << list);
     CHECK(undeclared.empty());
 }
+
+namespace {
+// tr_1 (fadingClips) before its fader, rendered from song sample `start`,
+// replaying `log`: an offline render, as a performance's or a capture's.
+std::vector<float> tr1From(Project& p, std::int64_t start, std::size_t frames,
+                           std::vector<LaunchLogEntry> log) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.startSeconds = double(start) / 48000;
+    settings.endSeconds = settings.startSeconds + double(frames) / 48000 + 0.05;
+    settings.blockSize = 64;
+    settings.projectDir = p.app->projectDir();
+    settings.track = id("tr_1");
+    settings.tap = model::Tap::PreFader;
+    settings.launches = std::move(log);
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    REQUIRE(r->audio.channels[0].size() >= frames);
+    return r->audio.channels[0];
+}
+LaunchLogEntry tr1Clip(const char* clip, std::int64_t anchor, std::int64_t frame = 0) {
+    LaunchLogEntry e;
+    e.track = id("tr_1");
+    e.action = LaunchLogEntry::Action::Clip;
+    e.clip = id(clip);
+    e.anchorSample = anchor;
+    e.anchorBeat = double(anchor) / 24000;  // 120 BPM
+    e.runningFrame = frame;
+    return e;
+}
+// The first frame in [from, to) where `out` is not `expected(i)`, or -1.
+template <class F>
+std::int64_t firstWrong(const std::vector<float>& out, std::int64_t from, std::int64_t to,
+                        F&& expected) {
+    for (std::int64_t i = from; i < to; ++i)
+        if (out[std::size_t(i)] != expected(i)) return i;
+    return -1;
+}
+}  // namespace
+
+TEST_CASE(
+    "a render begins as a relocation: a track's first entry anchored off its start plays by its "
+    "phase with no crossfade; one anchored at it crossfades (faults A and B; round 218)" *
+    doctest::description("rt")) {
+    // fadingClips: tr_1's ramps, each frame its source position; cl_2 a
+    // 48000-frame loop, cl_3 a one-shot here. A render from 100000.
+    Project p;
+    fadingClips(p);
+    p.run("clip.set", R"({"clip": "cl_3", "mode": "once"})");
+    constexpr std::int64_t kStart = 100000, kN = 120000;
+    const auto loopAt = [](std::int64_t anchor) {
+        return [anchor](std::int64_t i) {
+            return rampAt(((kStart + i - anchor) % 48000 + 48000) % 48000);
+        };
+    };
+    SUBCASE("a loop clip anchored after the start (a seek back carried it): by its phase") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart + 30000)});
+        CHECK(firstWrong(out, 0, kN, loopAt(kStart + 30000)) == -1);
+    }
+    SUBCASE("a loop clip anchored inside its crossfade before the start: by its phase, faded") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart - 100)});
+        CHECK(firstWrong(out, 0, kN, loopAt(kStart - 100)) == -1);
+    }
+    SUBCASE("a one-shot anchored after the start: silent until its anchor, no crossfade there") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_3", kStart + 30000)});
+        CHECK(firstWrong(out, 0, 30000, [](std::int64_t) { return 0.f; }) == -1);
+        CHECK(firstWrong(out, 30000, 30000 + 48000,
+                         [](std::int64_t i) { return rampAt(i - 30000); }) == -1);
+        CHECK(firstWrong(out, 30000 + 48000, kN, [](std::int64_t) { return 0.f; }) == -1);
+    }
+    SUBCASE("a launch anchored at the start crossfades in, as live launches there") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart)});
+        CHECK(out[0] < rampAt(0));
+        CHECK(out[200] < rampAt(200));
+        CHECK(firstWrong(out, 240, kN, loopAt(kStart)) == -1);
+    }
+    SUBCASE("a switch at the first frame after a carried entry crossfades from it") {
+        const auto out =
+            tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart - 5000), tr1Clip("cl_3", kStart)});
+        // Both at frame 120, half way: cl_2 at its phase 5120, cl_3 at 120.
+        CHECK(out[120] != rampAt(5120));
+        CHECK(out[120] != rampAt(120));
+        CHECK(out[120] > 0.f);
+        CHECK(firstWrong(out, 240, 48000, [](std::int64_t i) { return rampAt(i); }) == -1);
+    }
+}

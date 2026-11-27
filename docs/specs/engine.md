@@ -800,7 +800,9 @@ the same.*
     when anchored before or after the render's start, is what was carried
     there and plays by its phase from that frame with no crossfade, as the
     relocation did live (a loop clip a seek back carried before its anchor
-    too: fault A; one carried inside a crossfade: fault B). An entry
+    too: fault A; one carried inside a crossfade: fault B). A one-shot
+    anchored after the start stays silent until its anchor and takes no
+    crossfade there (it once took a false 240-frame one). An entry
     anchored at the start is a launch there and crossfades from what came
     before it, the track's carried entry or, with none, the arrangement.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
