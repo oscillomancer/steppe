@@ -1411,6 +1411,19 @@ the launch reads the acks first and settles the slot's entries as heard as it ta
 slot is voided and placed again, never reused. A seeded sequence test of launches, stops, seeks,
 services and captures on both executors holds these invariants (test_launch_sequence.cpp).
 
+Review round 207 (same date) found several unheard launches on one track, before the service that
+voided them, put back into the track's first waiting slot: a stale launch played before the user's
+newer one, leftovers drained one per service restarting their clip, and with no service slots piled up
+to `launch.queue`. Decided: after a take-back a track holds exactly what the in-callback executor would.
+The newest launch made on a track wins; one it replaced is dropped, not placed again; one placed again
+returns to its own slot, so all settle in one service; a launch takes back and voids what was judged
+unheard before choosing a slot. The sequence test, widened (both executors in lockstep, compared with
+each other; newest-wins; loops, scenes, stops, MIDI and a Notes feed, plan swaps, captures ended by
+relocations; reproducible from its seed), then found a renderer leave held late leaving a launch the
+callback had switched off the renderer's targets for good while judging it heard: such a block no
+longer counts as run, the launch is switched once the leave settles, `launch.state` calls it queued
+until then, and the late span is marked whenever the renderer passes such a launch.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

@@ -433,14 +433,29 @@ instructions are in `docs/guides/installing.md`.
       epochs without a service); a launch's verdict is made once, so a
       heard launch stays heard however many epochs follow (round 203),
       and a slot is free again once its launch is heard, so a long play
-      never runs out (round 205); the GUI's as-heard line words
-      `launch_unsettled` (gui.md §4.8). Known gaps, found by the seeded
-      sequence test (round 205) and not yet decided: a capture is as
-      heard but its replay differs when it begins (A) after a seek back
-      before the anchor of a loop clip that plays on (live plays it by its
-      phase, the replay is silent until the anchor), or (B) inside a
-      switch's 5 ms crossfade, including the crossfade of launches placed
-      at the play start (the replay fades in from silence).
+      never runs out (round 205); a track's newest launch wins over any it
+      replaced, taken back or not, and taken-back launches settle in one
+      service (round 207); a renderer leave held late no longer loses a
+      launch the callback switched meanwhile (round 207); the GUI's
+      as-heard line words `launch_unsettled` (gui.md §4.8). Open,
+      found by the seeded sequence test (rounds 205 and 207; ruled for
+      branch capture-start-state): a capture is as heard but its replay
+      differs when it begins (A) where a loop clip carried from before
+      plays before its anchor (after a seek back; live plays it by its
+      phase, the replay is silent), (B) at a play start inside a crossfade
+      carried from before the stop or from a clip the stop kept (the
+      replay fades from silence), (D) inside a sounding MIDI note while
+      playing (to be marked: an exact replay needs pre-roll from the
+      note's start with every instrument's state, the open pre-roll item),
+      or (E, in-callback) after being switched on while stopped and a seek
+      while stopped (it keeps the old start and spans the jump). Also open:
+      (G) on a loop change while playing, or a pause and play with no
+      block between, the in-callback executor's instruments sound on
+      (a held MIDI note) where the anticipative executor and the replay
+      start silent; (H) in-callback, a live Notes feed's gate holds its
+      value from before a pause for the first block after the play; the
+      executors' last 64 frames before a seek differed once (the channel
+      shift; not yet traced).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
