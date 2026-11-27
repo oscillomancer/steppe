@@ -41,22 +41,22 @@ bound to that parameter's automation lane (§"Targets", Step M4).
 - **Recording.** A write mode records what the plug-in reports minus the
   route's current offset, clamped to the range.
 
-*Amended 2026-11-26 (review rounds 208 F2 and 210):* a plug-in target is
-also sent every modulated parameter at a run's first frame (an offline
-render's first block, a locate), on the grid or not, the memo made stale
-there, and at a loop wrap's first frame; an adoption keeps to the grid,
-so a route an edit adds while playing first sends at the next grid
-point. Both executors' locates clear the routes' delays and the mixer
-targets' interpolation. "At the first grid point" in §"Alignment and
-delivery" reads "at the run's first frame" for a plug-in target. The
-frames before a run's first grid point hold the routes' values there
-(each Mod Out restarts at 0 and holds it to its first grid point), as an
-offline render from there does. A wrap restarts nothing (the rack keeps
-its modules' state and the routes' delays carry on), so it resends the
-sums carried over it: the loop goes on, unlike a render from the loop
-start. Before, a plug-in kept across a seek what it was sent before it,
-up to 31 frames, and the in-callback seek kept a mixer target's
-interpolation.
+*Amended 2026-11-26 (review rounds 208 F2, 210 and 212):* a plug-in
+target is also sent every modulated parameter at a run's first frame (an
+offline render's first block, a locate), on the grid or not, the memo
+made stale there, and at a loop wrap's first frame; an adoption keeps to
+the grid, so a route an edit adds while playing first sends at the next
+grid point, as does an input chain whose track is armed while playing.
+Both executors' locates clear the routes' delays and the mixer targets'
+interpolation. "At the first grid point" in §"Alignment and delivery"
+reads "at the run's first frame" for a plug-in target. The frames before
+a run's first grid point hold the routes' values there (each Mod Out
+restarts at 0 and holds it to its first grid point), as an offline
+render from there does. A wrap restarts nothing (the rack keeps its
+modules' state and the routes' delays carry on), so it resends the sums
+carried over it: the loop goes on, unlike a render from the loop start.
+Before, a plug-in kept across a seek what it was sent before it, up to
+31 frames, and the in-callback seek kept a mixer target's interpolation.
 
 ## Context
 

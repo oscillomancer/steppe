@@ -351,7 +351,8 @@ until it is released.
     the grid: a route an edit adds while playing first sends at the next
     grid point, as does a stage that first processes or first has a route
     after its run's first block (it once sent at the first frame of the
-    block the plan arrived in; round 210 F1).
+    block the plan arrived in; round 210 F1), and an input chain that
+    first runs then, its track armed while playing (round 212 F1).
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6): a stage's slots are matched by instance and CLAP id. A
     parameter that the new plan no longer modulates is sent one 0 at its

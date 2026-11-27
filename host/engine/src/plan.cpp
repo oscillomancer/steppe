@@ -2651,7 +2651,8 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
                    const void* self) SUPPLE_RT {
     // A run's start is this block's whatever is sent: a stage with no route
     // yet, or not processing, leaves it, so a route an edit adds later (an
-    // adoption) or a stage that processes later keeps to the grid.
+    // adoption) or a stage that processes later keeps to the grid. A chain
+    // that does not run leaves it too (skipModulation).
     const bool runStart = st.modRunStart;
     st.modRunStart = false;
     if (st.mods.empty()) return;
@@ -2720,6 +2721,14 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
 }
 
 namespace {
+
+// A chain that does not run this block (an input chain while its track is
+// not armed with an input, a take's chain while its clip is not playing)
+// consumes a run's start as modulateStage does, so when it first runs, in
+// a plan an adoption brings (an arm while playing), it keeps to the grid.
+void skipModulation(std::vector<Stage>& chain) SUPPLE_RT {
+    for (Stage& st : chain) st.modRunStart = false;
+}
 
 // One stage of a chain, in place on `sum` (the track's or a take's). False on
 // a plugin error.
@@ -3418,6 +3427,7 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
     const ClipChainInput in =
         transport.playing ? clipChainInput(node, tc.player) : ClipChainInput{};
     if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, clock0))) {
+        skipModulation(tc.chain);
         tc.active = false;
         tc.inputPlayer = -1;
         tc.inputAnchor = INT64_MIN;
@@ -3561,6 +3571,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         !(loop && loop->active() && tc.aheadLoop == std::pair{loop->start, loop->end}))
         locateTake(node, tc, pos, false, false);
     if (!transport.playing || !intersects) {
+        skipModulation(tc.chain);
         tc.active = false;
         return true;
     }
@@ -3771,6 +3782,8 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             leaveGroup(node.inputChain, st, node.inputBuf, n);
         }
         if (rackFx) node.sum.copyFrom(node.inputBuf, n);
+    } else {
+        skipModulation(node.inputChain);
     }
     if (hearInput && !node.monitorInputs.empty() && p.deviceIn) {
         const float* l = inputFx ? node.inputBuf.l.data() : deviceChannel(node.monitorInputs, 0);

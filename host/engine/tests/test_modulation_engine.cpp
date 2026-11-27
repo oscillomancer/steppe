@@ -1082,6 +1082,82 @@ TEST_CASE(
             }
 }
 
+TEST_CASE(
+    "modulation: arming a track while playing first moves its input chain's plug-in on the "
+    "grid, after a play start or a seek, in both executors" *
+    doctest::description("rt")) {
+    // B hears the rack's Out (1.0 while playing) and, armed with it as its
+    // input, through its input chain's gain (-6 dB, modulated by +12 dB
+    // while playing). Unarmed, the input chain does not run; it once kept
+    // the run's start the play or the seek gave it, and the plan that arms
+    // the track sent the gain's offset at its first frame, off the grid.
+    Emit e("playing", std::nullopt);
+    model::EditTxn t(e.s, 2);
+    t.modify<model::Track>(e.b, [&](model::Track& tr) {
+        tr.chain.clear();
+        tr.inputChain.push_back(e.gain);
+    });
+    modulate(t, e.modOut, e.gain, "gain", 0.5);
+    const model::Session unarmed = commit(t);
+    model::EditTxn t2(unarmed, 3);
+    t2.modify<model::Track>(e.b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t2);
+    for (const bool seek : {false, true})
+        for (const std::uint32_t block : {37u, 100u, 128u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                const std::string when = seek ? "after a seek" : "after the play start";
+                INFO(when << ", block " << block << ", anticipative " << options.anticipative);
+                const std::int64_t cycles = 4000 / block + 3;
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                      .captureFrames = std::int64_t(block) * cycles * 6});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+                REQUIRE(engine.load(unarmed));
+                REQUIRE(engine.awaitPlan());
+                auto run = [&](std::int64_t n) {
+                    if (options.anticipative)
+                        runAheadOnState(engine, backend, n, block);
+                    else
+                        backend.run(n);
+                };
+                engine.play();
+                run(cycles);
+                if (seek) {
+                    engine.seek(40013.0 / 48000.0);  // 13 frames past the grid
+                    run(cycles);
+                }
+                REQUIRE(engine.load(armed));
+                run(3 * cycles);  // the renderer adopts it a few blocks ahead
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                const std::size_t L = engine.outputLatency();
+                const auto& got = backend.capture().channels[0];
+                const std::size_t from = L + std::size_t(block) * std::size_t(cycles) *
+                                                 (seek ? 2u : 1u);  // the arm's edit
+                const float input = got[from - 1];  // unarmed: the rack's Out, past no gain
+                REQUIRE(input == doctest::Approx(1.0));
+                const float plain = input * 0.501187f;  // armed, unmodulated: -6 dB
+                std::size_t heard = 0, moved = 0;       // armed; modulated
+                for (std::size_t f = from; f < got.size() && !moved; ++f) {
+                    if (!heard && got[f] != input) heard = f;
+                    if (heard && std::abs(got[f] - plain) > 1e-4f) moved = f;
+                }
+                REQUIRE(heard);
+                REQUIRE(moved);
+                // The timeline position a captured frame plays (the grid's).
+                const std::int64_t seekFrame = std::int64_t(block) * cycles;
+                auto at = [&](std::size_t f) {
+                    const auto played = std::int64_t(f - L);
+                    return seek ? 40013 + played - seekFrame : played;
+                };
+                INFO("armed at " << at(heard) << ", first moved at " << at(moved));
+                CHECK(got[moved] > 3.9f);  // +12 dB: the modulated gain
+                CHECK(at(moved) % std::int64_t{d::kAutomationStep} == 0);
+            }
+}
+
 TEST_CASE("modulation: renders that share a pool play as renders from fresh pools" *
           doctest::description("rt")) {
     // A pool's rack modules outlive a render. Each render restarts the ones

@@ -718,8 +718,8 @@ struct Stage {
     // offline render's first block: startModulationRun), which sends every
     // slot at its first frame whatever the grid, so what follows a locate
     // off the grid is the offline render's from there. A plan's adoption
-    // and a handoff do not set it, and the block consumes it whether or
-    // not it sends.
+    // and a handoff do not set it, and the next block consumes it whether
+    // or not the stage's chain runs or sends.
     std::vector<ModParam> mods;
     std::vector<std::uint32_t> modRoutes;
     std::size_t modEvents = 0;
