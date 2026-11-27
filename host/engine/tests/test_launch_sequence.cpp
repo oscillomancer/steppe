@@ -538,6 +538,30 @@ std::int64_t hFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch
         frames = std::max(frames, noteLeft(carried->clip, carried->anchorSample, start));
     return frames;
 }
+// C (found at the take-fx merge; modulation-first-frame fixed it at run
+// starts): a replay that begins mid-run (a capture switched on while
+// playing, an epoch a loop change or a pause and play with no block
+// between continues) restarts the rack's Mod Outs at 0 and holds that to
+// the first grid point, as an offline render from there does, where live
+// keeps their history; with cl_3's modulated take chain sounding, or
+// fading out under a switch at or before the start (seed 6 epoch 102: a
+// return to the arrangement while paused, then the play), the frames up to
+// the next grid point differ. The frames it covers.
+std::int64_t cFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
+                     std::int64_t offset, std::int64_t start) {
+    const LaunchLogEntry *tr2 = nullptr, *before = nullptr;
+    for (const LaunchLogEntry& e : log)
+        if (e.track == id("tr_2") &&
+            (e.epoch < epoch || (e.epoch == epoch && e.runningFrame <= offset)))
+            before = tr2, tr2 = &e;
+    const auto cl3 = [&](const LaunchLogEntry* e) {
+        return e && e->action == LaunchLogEntry::Action::Clip && e->clip == id("cl_3") &&
+               e->anchorSample <= start;
+    };
+    const bool fading = tr2 && tr2->anchorSample <= start && start < tr2->anchorSample + kFade;
+    if (!cl3(tr2) && !(fading && cl3(before))) return 0;
+    return (32 - start % 32) % 32;
+}
 const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
                     std::int64_t offset, std::int64_t start, bool capture, bool continuous,
                     bool inCallback, std::int64_t held = 0, std::int64_t* frames = nullptr) {
@@ -664,12 +688,8 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
             covered = std::max(covered, hFrames(log, g.epoch, g.song));
             ++n.faults["H"];
         }
-        // (C, found at the take-fx merge; a fault on main in all modulation,
-        // branch modulation-first-frame: from a start off the 32-frame grid,
-        // cl_3's modulated take chain differs live and offline up to the
-        // next grid point, live keeping what it sent before the relocation.)
-        if (const std::int64_t toGrid = (32 - g.song % 32) % 32; toGrid > covered) {
-            covered = toGrid;
+        if (const std::int64_t c = g.continuous ? cFrames(log, g.epoch, 0, g.song) : 0; c > 0) {
+            covered = std::max(covered, c);
             ++n.faults["C"];
         }
         if (covered >= length) continue;
@@ -759,9 +779,11 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
             covered = std::max(covered, hFrames(log, g.epoch, c.capture.startSample));
             ++n.faults["H"];
         }
-        // (C, as for an epoch: from the next grid point.)
-        if (const std::int64_t toGrid = (32 - c.capture.startSample % 32) % 32; toGrid > covered) {
-            covered = toGrid;
+        if (const std::int64_t cf = offset > 0 || g.continuous
+                                        ? cFrames(log, g.epoch, offset, c.capture.startSample)
+                                        : 0;
+            cf > 0) {
+            covered = std::max(covered, cf);
             ++n.faults["C"];
         }
         const std::int64_t length = c.capture.frames - 2048;
@@ -814,6 +836,7 @@ int compareExecutors(Sequence& a, Sequence& b) {
             !f || f[0] != 'G')
             skip = 0;  // (G: the in-callback executor's held note, compared after it)
         if (a.liveFeed && g.playStart) skip = std::max(skip, hFrames(logA, g.epoch, g.song));
+        if (g.continuous) skip = std::max(skip, cFrames(logA, g.epoch, 0, g.song));  // C
         if (length <= skip) continue;
         const std::vector<float> slice(
             outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + skip)),

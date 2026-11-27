@@ -1019,12 +1019,20 @@ instructions are in `docs/guides/installing.md`.
   but the tests' memoryless gain cannot prove the early entry after a wrap
   by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
   unquantized launch applies up to 32 frames later, and a quantized one
-  pressed within 32 more frames of its boundary takes the next. Open
-  (found by the launch sequence test at the F6 merge): playing from a song
-  position off the 32-frame grid (a seek, a pause and play there), a
-  modulated take chain's frames up to the next grid point differ between
-  live and the offline replay (1 frame from 145375, 16 from 145360), so a
-  render or capture from there is not exact while saying as heard. A route
+  pressed within 32 more frames of its boundary takes the next. A take
+  chain's run starts with its track's (a seek, a pause and play, a loop
+  wrap: every offset sent at the first frame), so from a song position off
+  the 32-frame grid it plays as the offline render from there; one that
+  does not run then keeps to the grid when it first does. Open: a capture
+  switched on while playing, or replayed from inside a run it does not
+  restart (a loop change, a pause and play with no block between),
+  restarts the rack's Mod Outs at 0 in its offline replay, where live
+  keeps their history, so a modulated chain's frames up to the next grid
+  point differ while the capture says as heard (the launch sequence
+  test's class C); and an FX moved from another track inside a plan an
+  adoption brings after a locate (a new stage, the same instance) plays
+  the value it was sent before for up to 19 frames, to the next grid
+  point (review round 213). A route
   into a take that does not play is idle (`modulation.list` says `inert:
   "take"`). Copies keep their routes: every
   command that copies a take copies the routes into its FX in the same
@@ -1068,8 +1076,10 @@ instructions are in `docs/guides/installing.md`.
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
-  executors, bridged, at seeks and over loop wraps. Removing a route's
-  source or target removes it with a `modulation.removed` warning. A
+  executors, bridged, at seeks and over loop wraps (a seek or a pause off
+  the 32-frame grid included: a run's first frame sends every offset).
+  Removing a route's source or target removes it with a
+  `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
   one of them is edited (`modulation.latency`). `modulation.telemetry`
   (and `EngineApp::modulationOffsets()`) reads each route's live target

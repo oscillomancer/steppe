@@ -480,7 +480,8 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             m.count = static_cast<std::uint32_t>(st->modRoutes.size()) - m.first;
             st->mods.push_back(m);
         }
-        // A routed parameter's grid, and one 0 for each of the others.
+        // A routed parameter's grid and a run's first frame, and one 0 for
+        // each of the others.
         st->modEvents = perParam * now.size() + (all.size() - now.size());
     }
     // Each lane's routes, in modEdges order (M4).
@@ -2687,7 +2688,10 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 
 // Modulation (ADR-0096), after the stage's automation: at each point of the
 // absolute kAutomationStep grid, one PARAM_MOD per slot whose routes' sum
-// differs from the memo, or for every slot while the memo is stale. A slot
+// differs from the memo, or for every slot while the memo is stale; and at
+// a run's first frame (Stage::modRunStart: a restarting locate, a loop
+// wrap, an offline render's first block), on the grid or not, where the
+// memo is stale. An adoption or a handoff keeps to the grid. A slot
 // with no route this plan is sent one 0 if the memo lists it, then leaves
 // it. Only a stage that will process is sent anything; otherwise the memo
 // goes stale, as it does when the instance or its modulationEpoch() moves.
@@ -2695,6 +2699,12 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 // nothing this block (its Mod Outs hold).
 void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
                    const void* self) SUPPLE_RT {
+    // A run's start is this block's whatever is sent: a stage with no route
+    // yet, or not processing, leaves it, so a route an edit adds later (an
+    // adoption) or a stage that processes later keeps to the grid. A chain
+    // that does not run leaves it too (skipModulation).
+    const bool runStart = st.modRunStart;
+    st.modRunStart = false;
     if (st.mods.empty()) return;
     const host::Instance* in = st.instance;
     if (in != st.modHeard || (in && in->modulationEpoch() != st.modEpoch)) {
@@ -2716,8 +2726,11 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
     const auto phase =
         ((pos % kAutomationStep + origin % kAutomationStep) % kAutomationStep + kAutomationStep) %
         kAutomationStep;
-    for (auto g = static_cast<std::uint32_t>((kAutomationStep - phase) % kAutomationStep); g < n;
-         g += kAutomationStep)
+    const auto grid = static_cast<std::uint32_t>((kAutomationStep - phase) % kAutomationStep);
+    // A run's first frame, then the grid: the plug-in does not keep what it
+    // was sent before the locate up to the first grid point (n > 0).
+    const std::uint32_t first = runStart ? 0 : grid;
+    for (std::uint32_t g = first; g < n; g = g < grid ? grid : g + kAutomationStep)
         for (ModParam& m : st.mods) {
             if (!m.count && (!m.listed || (!m.stale && m.sent == 0.0))) {
                 m.listed = false;  // nothing owed
@@ -2758,6 +2771,14 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
 }
 
 namespace {
+
+// A chain that does not run this block (an input chain while its track is
+// not armed with an input, a take's chain while its clip is not playing)
+// consumes a run's start as modulateStage does, so when it first runs, in
+// a plan an adoption brings (an arm while playing), it keeps to the grid.
+void skipModulation(std::vector<Stage>& chain) SUPPLE_RT {
+    for (Stage& st : chain) st.modRunStart = false;
+}
 
 // One stage of a chain, in place on `sum` (the track's or a take's). False on
 // a plugin error.
@@ -3462,6 +3483,7 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
     const bool entered = transport.playing && !in.on && node.launchEntryValid &&
                          entry.kind == LaunchState::Kind::Clip && entry.player == tc.player;
     if (!transport.playing || (!in.on && !entered && !clipChainHeard(node, tc.player, clock0))) {
+        skipModulation(tc.chain);
         tc.active = false;
         tc.inputPlayer = -1;
         tc.inputAnchor = INT64_MIN;
@@ -3613,6 +3635,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         !(loop && loop->active() && tc.aheadLoop == std::pair{loop->start, loop->end}))
         locateTake(node, tc, pos, false, false);
     if (!transport.playing || !intersects) {
+        skipModulation(tc.chain);
         tc.active = false;
         return true;
     }
@@ -3826,6 +3849,8 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             leaveGroup(node.inputChain, st, node.inputBuf, n);
         }
         if (rackFx) node.sum.copyFrom(node.inputBuf, n);
+    } else {
+        skipModulation(node.inputChain);
     }
     if (hearInput && !node.monitorInputs.empty() && p.deviceIn) {
         const float* l = inputFx ? node.inputBuf.l.data() : deviceChannel(node.monitorInputs, 0);
@@ -4380,6 +4405,24 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 // the plug-in starts afresh unless a swap just carried it (their notes are
 // their modules', which locateRack and the module restart look after). A
 // loop wrap (wrapTo) keeps it.
+// A run starts (ADR-0096): the node's next block sends every modulated
+// slot at its first frame. Not on a handoff or an adoption, which continue
+// in place as the grid does.
+void restartModulation(Node& n) SUPPLE_RT {
+    const auto restart = [](std::vector<Stage>& chain) {
+        for (Stage& st : chain) {
+            st.modRunStart = true;
+            for (ModParam& m : st.mods) m.stale = true;
+        }
+    };
+    restart(n.inputChain);
+    restart(n.chain);
+    // Its take chains too (ADR-0096 M5; review round 213 at the take-fx
+    // merge: a seek while playing, or a pause, seek and play, sent a take
+    // FX nothing up to the next grid point).
+    for (TakeChain& tc : n.takeChains) restart(tc.chain);
+}
+
 void locateRackStages(Node& n) SUPPLE_RT {
     for (Stage& st : n.rackStages) {
         if (!st.preserveDryOnLocate) clearStageDelays(st);
@@ -4387,6 +4430,10 @@ void locateRackStages(Node& n) SUPPLE_RT {
     }
 }
 }  // namespace
+
+void startModulationRun(Plan& p) SUPPLE_RT {
+    for (Node& n : p.nodes) restartModulation(n);
+}
 
 void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
@@ -4423,6 +4470,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
         a->cursor = 0;
     n.vcas.reset();
     locateRackStages(n);
+    if (restartConsole) restartModulation(n);
     for (Stage& st : n.chain) {
         if (restartConsole && !n.releaseHeld) {
             st.voices.clear();
@@ -4518,6 +4566,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
             a->cursor = 0;
         n.vcas.reset();
         locateRackStages(n);
+        if (restartConsole) restartModulation(n);
         for (Stage& st : n.chain) {
             if (restartConsole && !n.releaseHeld) {
                 st.voices.clear();
@@ -4530,6 +4579,21 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // resend at once
                 if (restartConsole) ln.gesture = ln.latched = false;     // as locateNode
             }
+        }
+    }
+    // Modulation delays and the mixer targets' interpolation, as locateNode
+    // does: the in-callback executor's seek comes here, and kept them before
+    // (a mixer target after a seek played from the value before it up to the
+    // first grid point, where the offline render from there starts from 0).
+    for (Node& n : p.nodes) {
+        for (std::size_t mi : n.modIn) {
+            ModEdge& me = p.modEdges[mi];
+            if (restartConsole || !me.preserveDelayOnLocate) me.delay.clear();
+            me.preserveDelayOnLocate = false;
+        }
+        for (Node::MixMod& mm : n.mixMods) {
+            if (restartConsole || !mm.preserveOnLocate) mm.prev = mm.next = 0.0;
+            mm.preserveOnLocate = false;
         }
     }
     for (Edge& e : p.edges) {
@@ -4572,6 +4636,9 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
                 ln.curve.cursor = 0;
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // the loop start's value
             }
+        // Modulation sends at the wrap's first frame too: the sums carried
+        // over it (the rack keeps its modules, the routes their delays).
+        restartModulation(n);
         for (std::size_t ei : n.in)
             if (!p.edges[ei].encode && !p.edges[ei].rackSend)  // the rack's (ADR-0075)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,
@@ -4808,6 +4875,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         auto carryMemo = [&to](Stage& st, const Stage& os) {
             st.modHeard = os.modHeard;
             st.modEpoch = os.modEpoch;
+            st.modRunStart = os.modRunStart;
             for (ModParam& m : st.mods)
                 for (const ModParam& om : os.mods)
                     if (om.clapId == m.clapId) {
