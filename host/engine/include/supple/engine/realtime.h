@@ -1373,6 +1373,10 @@ class Engine {
         // verdict (as `done`'s bits): it is voided and placed again only
         // after all of them.
         std::atomic<std::uint8_t> left{0};
+        // Placed while stopped, for the play start (round 209): never missed
+        // there; a path that misses it anyway is counted and marks the
+        // capture (launchPlayStartMissed_).
+        std::atomic<bool> playStart{false};
         std::atomic<double> anchorBeat{0};
         // Main thread only: what to re-place after a miss or a new epoch.
         LaunchRequest request;
@@ -1479,10 +1483,39 @@ class Engine {
     // timed out), whose hearing end it waits for before it applies or takes
     // back anything (round 201 F2); UINT64_MAX: none.
     std::uint64_t launchLeavePending_ = UINT64_MAX;
+    // Renderer-private: the pending leave left switch records behind, so
+    // what it renders before settling is marked (round 209).
+    bool launchLeaveUndos_ = false;
     // The renderer's pending leave settled once the callback's end for it is
     // known: its unheard slots done, its nodes taken back. False while
     // still unknown.
     bool settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SUPPLE_RT;
+    // Whether the renderer holds before rendering [stream, end) of `epoch`
+    // (round 209): its leave still pending and a launch of the epoch it has
+    // not switched has a frame there. It waits for the callback's next
+    // cycle, which records the end it needs and wakes it, instead of
+    // rendering past the launch without it (a launch placed at a play start
+    // was missed, and placed again a bar later).
+    bool launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
+                           std::int64_t end) SUPPLE_RT;
+    std::atomic<bool> rendererLaunchHeld_{false};  // holding so (awaitRendered: as full)
+    // A launch placed at a play start that was missed all the same, by the
+    // path that missed it: [0] publishing (a horizon past it), [1] an
+    // executor passing it undecided, [2] an executor passing it committed,
+    // so it is voided and placed again (the path the journey's launch took
+    // before round 209; round 211 F1). Expected 0.
+    std::array<std::atomic<std::uint64_t>, 3> launchPlayStartMissed_{};
+    void playStartMissed(int path) SUPPLE_RT;
+    // A launch of the renderer's epoch passed while its leave was pending,
+    // by path: [0] the renderer rendering past its frame on a target of its
+    // own, [1] a launch the callback applied first, switched late on the
+    // renderer's targets. Unreachable since round 209 (the renderer holds
+    // before such a launch, and the callback plays only what it rendered);
+    // a path that reaches one is counted and marks the capture (round 214).
+    // Expected 0.
+    std::array<std::atomic<std::uint64_t>, 2> launchPassedPending_{};
+    void passedPending(int path) SUPPLE_RT;
+    std::uint64_t launchPassedEpoch_ = UINT64_MAX;  // renderer-private: counted once an epoch
     // Counted where a verdict came late or had to be taken as unheard (a
     // renderer that went on before the callback left the epoch, an end
     // reused before it was read): a capture over it is not as heard

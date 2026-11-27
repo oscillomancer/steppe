@@ -99,6 +99,17 @@ struct EngineTestAccess {
             n += !e.slotReusable(s, s.state.load(), current, plan);
         return n;
     }
+    // Whether a launch on track `track` (its id's number) is applied, and
+    // the callback has not yet played to its key.
+    static bool appliedAhead(const Engine& e, std::uint32_t track) {
+        const std::uint64_t current = e.epoch_.load();
+        const detail::Plan* plan = e.latestPlan_.load();
+        for (const Engine::LaunchSlot& s : *e.launchSlots_)
+            if ((s.state.load() & 7) == Engine::LaunchSlot::kApplied && s.track.load() == track &&
+                s.epoch.load() == current && e.slotKey(s, plan) >= e.playedStream(current))
+                return true;
+        return false;
+    }
     // The slots whose switch is still ahead: waiting to apply, or applied in
     // the running epoch at or past what the callback has played.
     static std::size_t slotsAhead(const Engine& e) {
@@ -253,7 +264,32 @@ struct EngineTestAccess {
     // The renderer's launch acks dropped as by a full ring (ADR-0097, dated
     // 2026-11-26: judged once their switch is known to be heard).
     static void dropRendererAcks(Engine& e, bool on) { e.dropRendererAcksForTests_.store(on); }
-    static void rendererLeaveLate(Engine& e, bool on) { e.rendererLeaveLateForTests_.store(on); }
+    // Released, the renderer is woken: a hold on the leave (round 209) is
+    // looked at again at once, not at its safety timeout.
+    static void rendererLeaveLate(Engine& e, bool on) {
+        e.rendererLeaveLateForTests_.store(on);
+        if (!on) {
+            e.rendererLaunchHeld_.store(false);
+            e.wakeRenderer();
+        }
+    }
+    static bool rendererLaunchHeld(const Engine& e) { return e.rendererLaunchHeld_.load(); }
+    // What the listener has played of the current epoch.
+    static std::int64_t playedStream(const Engine& e) { return e.playedStream(e.epoch_.load()); }
+    // Launches placed at a play start that were missed all the same, on
+    // every path (round 209, round 211 F1).
+    // Launches of the renderer's epoch passed while its leave was pending,
+    // on every path (round 214).
+    static std::uint64_t passedPending(const Engine& e) {
+        std::uint64_t n = 0;
+        for (const auto& c : e.launchPassedPending_) n += c.load();
+        return n;
+    }
+    static std::uint64_t playStartMissed(const Engine& e) {
+        std::uint64_t n = 0;
+        for (const auto& c : e.launchPlayStartMissed_) n += c.load();
+        return n;
+    }
     // A track's channel's shift in the latest plan (its launches' switch
     // frame is their target plus it).
     static std::int64_t launchShift(const Engine& e, model::Id track) {

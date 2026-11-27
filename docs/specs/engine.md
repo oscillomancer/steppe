@@ -894,8 +894,32 @@ the same.*
     out, the renderer applies and takes back nothing until the verdicts are
     in (`settleLeave`); what it renders meanwhile may still hold an unheard
     switch, so a capture in the epoch it went on in that began before it
-    settled is not as heard (`launch_unsettled`, round 203 F2), and so is
-    one running across the leave, pending or placed. A relocation while
+    settled, over frames it rendered so, is not as heard
+    (`launch_unsettled`, round 203 F2; marked as those frames are rendered,
+    round 209), and so is one running across the leave, pending or placed.
+    It never renders past a launch of the epoch it goes on in that it has
+    not switched (round 209): before such a launch's first frame on its
+    targets (early halves included) it holds, and the callback's next
+    cycle, which publishes the end it waits for, wakes it to settle and
+    switch the launch at its frame. At a play start the callback is
+    waiting for its pre-roll meanwhile, so the start is one period later
+    and nothing is missed: a launch placed while stopped sounds from the
+    play start on both executors, is logged there, and a capture from
+    there is as heard. Should a hold outlast what the renderer has rendered
+    ahead while playing, the callback plays silence for the frames it
+    lacks and counts an anticipation miss (`engine.status`), the stream
+    does not move past what was rendered, and a capture over it is not as
+    heard (`dropout`); the launch still switches at its frame. A launch
+    placed at a play start (`LaunchSlot::playStart`) is never missed and
+    placed again a bar later; a path that misses one all the same counts
+    it (`launchPlayStartMissed_`, by path: publishing, an executor passing
+    it undecided, or an executor passing it committed so that it is voided
+    and placed again, the path the journey's launch took before the hold)
+    and marks the capture. A
+    record whose slot has since been reused is never taken back: a slot is
+    free again only once its launch is known heard (round 209: with the
+    leave's end unknown after more epochs than the ring holds, such a heard
+    switch was taken back and the node played what the log did not). A relocation while
     such a leave is still pending leaves that epoch too (it applied
     nothing there) and moves the late span on to the epoch it goes on in
     (round 205 F3). A record applied as a relocation in a later epoch is
@@ -904,11 +928,18 @@ the same.*
     launch the callback switched meanwhile (a Notes feed's target) is
     switched on the renderer's targets once the leave settles, at its next
     block if still in that epoch, else at its first block after it, playing
-    by its phase as a relocation does, and `launch.state` lists it as
-    queued until then (an applied launch heard by the callback, or of an
-    ended epoch, that an executor has not switched). The renderer passing
-    such a launch's frame marks the late span whether or not anything was
-    applied ahead (round 207).
+    by its phase as a relocation does. The renderer passing such a launch's
+    frame marks the late span whether or not anything was applied ahead
+    (round 207). Since the hold (round 209) no path passes such a launch:
+    the renderer holds before a launch it has targets of, and the callback,
+    playing only what was rendered, cannot switch it first; the renderer's
+    pass for an all-live plan has no targets of its own. A path that passes
+    one all the same is counted (`launchPassedPending_`, by path: passed by
+    the renderer, or switched late after the callback) and marks the
+    capture (round 214). For the same reason `launch.state` lists no applied
+    launch as queued while an executor has yet to switch it (round 207 did):
+    none is heard before the renderer switches it, and one on the callback's
+    targets alone plays at once.
   - **A slot's lifetime** (round 205): a launch takes a free slot, or one
     whose launch every executor is done with and whose switch is known
     heard: in its epoch once the callback has played past its key, after

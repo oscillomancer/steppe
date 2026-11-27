@@ -1298,7 +1298,8 @@ bool Engine::awaitRendered(std::int64_t frames, double timeoutSeconds) {
             goal = std::min(goal, holdFrom_.load(std::memory_order_acquire) - played);
             // A renderer waiting for room has rendered all it can hold.
             if (renderedStream_.load(std::memory_order_acquire) - played >= goal ||
-                rendererWakeAt_.load() != INT64_MAX)
+                rendererWakeAt_.load() != INT64_MAX ||
+                rendererLaunchHeld_.load(std::memory_order_acquire))  // held (round 209)
                 return true;
         }
         if (std::chrono::steady_clock::now() > deadline) return false;
@@ -2786,12 +2787,10 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         // Still waiting for an earlier leave's verdicts: it applied nothing
         // since, so its records are that epoch's (settled first). It left
         // this one too, having applied nothing there (round 205 F3); the
-        // late span moves on to the epoch it goes on in.
+        // late span moves on to the epoch it goes on in, once it renders
+        // there before the leave settles (launchesAt; round 209).
         markLeft(1, previous, epoch);
-        launchLateEnd_.store(INT64_MAX, std::memory_order_release);
-        launchLateEpoch_.store(epoch, std::memory_order_release);
-        launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
-        notifyMain();
+        launchLeaveUndos_ = true;  // marked as before, whatever it left behind
     } else if (leftEnd) {
         launchLeftEpoch_[0] = previous;
         launchLeftEnd_[0] = *leftEnd;
@@ -2800,19 +2799,17 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         markLeft(1, previous, epoch);
     } else {
         launchLeavePending_ = previous;
-        // What it renders meanwhile may still hold a switch that was not
-        // heard: a capture over it, or over those frames, is not as heard.
-        if (undos) {
-            launchLateEnd_.store(INT64_MAX, std::memory_order_release);
-            launchLateEpoch_.store(epoch, std::memory_order_release);
-            launchUnsettled_.fetch_add(1, std::memory_order_relaxed);
-            notifyMain();
-        }
+        // What it renders before the leave settles may still hold a switch
+        // that was not heard: a capture over those frames is not as heard
+        // (marked as it renders them, launchesAt: a leave that settles first,
+        // as at a play start the renderer holds for, renders none; round 209).
+        launchLeaveUndos_ = undos;
     }
     if (plan_) {
         detail::locateClass(*plan_, pos_, false);
         resetOwned(processing_, plan_);
     }
+    rendererLaunchHeld_.store(false, std::memory_order_release);  // re-decided from here
     epochStartLocal_ = pos_;
     epochStart_.store(pos_);
     streamLocal_ = 0;
@@ -2969,6 +2966,11 @@ void Engine::rendererLoop(std::uint64_t seen) {
         const auto event = rendererEvent_.load(std::memory_order_acquire);
         if (rendererQuit_.load(std::memory_order_acquire)) break;
         rendererWakeAt_.store(INT64_MAX);
+        // Held only while its leave is pending and it waits below: a wake
+        // (awaitRendered's) leaves it held until it renders or relocates,
+        // and a settled leave (a stop, a relocation) ends it (round 211).
+        if (launchLeavePending_ == UINT64_MAX)
+            rendererLaunchHeld_.store(false, std::memory_order_release);
         if (playing_ && plan_ && plan_->split && !plan_->feedsCallback()) {
             // Everything is live: nothing to render. Stay one render-ahead
             // span past what the callback played, so that a plan giving the
@@ -3109,6 +3111,20 @@ void Engine::rendererLoop(std::uint64_t seen) {
                                            rendererSafetyTimeout()));
             continue;
         }
+        // Its leave of the epoch before still waits for the callback's end
+        // and a launch of this epoch it has not switched falls in the next
+        // block: it waits for the callback's next cycle, which records that
+        // end and wakes it (round 209). Should the wait outlast what it has
+        // rendered ahead while playing, the callback plays silence for the
+        // frames it lacks and counts an anticipation miss (the capture is
+        // not as heard); the launch still switches at its frame.
+        if (launchHeldByLeave(*plan_, seen, streamLocal_, streamLocal_ + block)) {
+            rendererLaunchHeld_.store(true, std::memory_order_release);
+            rt::waitUntil(rendererEvent_, event,
+                          std::chrono::steady_clock::now() + rendererSafetyTimeout());
+            continue;
+        }
+        rendererLaunchHeld_.store(false, std::memory_order_release);
         auto renderFrames = block;
         if (queuedRate && plan != plan_ && plan->handEpoch == seen && plan->rateSeekSequence == 0 &&
             plan->handAt > streamLocal_)
