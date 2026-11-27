@@ -2,9 +2,20 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 #include <cstddef>
 #include <filesystem>
-#include <memory>
 #include <string>
 #include <thread>
 
@@ -15,12 +26,26 @@ using namespace supple::engine;
 
 namespace {
 // Writes the first byte of each page of memory nothing has touched yet, so
-// each write faults on the calling thread.
+// each write faults on the calling thread. The pages come from the system, not
+// the allocator: after earlier tests in the same process free large blocks,
+// new[] hands back heap pages that were touched before and nothing faults.
 constexpr std::size_t kPages = 256, kStride = 4096;
 void touchFresh() {
-    std::unique_ptr<char[]> fresh(new char[kPages * kStride]);
-    auto* bytes = reinterpret_cast<volatile char*>(fresh.get());
-    for (std::size_t i = 0; i < kPages * kStride; i += kStride) bytes[i] = 1;
+    constexpr std::size_t kSize = kPages * kStride;
+#if defined(_WIN32)
+    void* fresh = VirtualAlloc(nullptr, kSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!fresh) return;  // the fault count then fails the test
+#else
+    void* fresh = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fresh == MAP_FAILED) return;  // the fault count then fails the test
+#endif
+    auto* bytes = static_cast<volatile char*>(fresh);
+    for (std::size_t i = 0; i < kSize; i += kStride) bytes[i] = 1;
+#if defined(_WIN32)
+    VirtualFree(fresh, 0, MEM_RELEASE);
+#else
+    munmap(fresh, kSize);
+#endif
 }
 }  // namespace
 
