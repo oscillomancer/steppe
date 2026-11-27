@@ -278,6 +278,13 @@ struct EngineTestAccess {
     static std::int64_t playedStream(const Engine& e) { return e.playedStream(e.epoch_.load()); }
     // Launches placed at a play start that were missed all the same, on
     // every path (round 209, round 211 F1).
+    // Launches of the renderer's epoch passed while its leave was pending,
+    // on every path (round 214).
+    static std::uint64_t passedPending(const Engine& e) {
+        std::uint64_t n = 0;
+        for (const auto& c : e.launchPassedPending_) n += c.load();
+        return n;
+    }
     static std::uint64_t playStartMissed(const Engine& e) {
         std::uint64_t n = 0;
         for (const auto& c : e.launchPlayStartMissed_) n += c.load();

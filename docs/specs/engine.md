@@ -726,15 +726,18 @@ the same.*
     launch the callback switched meanwhile (a Notes feed's target) is
     switched on the renderer's targets once the leave settles, at its next
     block if still in that epoch, else at its first block after it, playing
-    by its phase as a relocation does, and `launch.state` lists it as
-    queued until then (an applied launch heard by the callback, or of an
-    ended epoch, that an executor has not switched). The renderer passing
-    such a launch's frame marks the late span whether or not anything was
-    applied ahead (round 207). Since the hold (round 209) no path passes
-    such a launch while playing: the renderer holds before it, and the
-    callback, playing only what was rendered, cannot switch it first; the
-    renderer's pass for an all-live plan has no targets of its own. These
-    rules are kept as the fallback should one (round 211).
+    by its phase as a relocation does. The renderer passing such a launch's
+    frame marks the late span whether or not anything was applied ahead
+    (round 207). Since the hold (round 209) no path passes such a launch:
+    the renderer holds before a launch it has targets of, and the callback,
+    playing only what was rendered, cannot switch it first; the renderer's
+    pass for an all-live plan has no targets of its own. A path that passes
+    one all the same is counted (`launchPassedPending_`, by path: passed by
+    the renderer, or switched late after the callback) and marks the
+    capture (round 214). For the same reason `launch.state` lists no applied
+    launch as queued while an executor has yet to switch it (round 207 did):
+    none is heard before the renderer switches it, and one on the callback's
+    targets alone plays at once.
   - **A slot's lifetime** (round 205): a launch takes a free slot, or one
     whose launch every executor is done with and whose switch is known
     heard: in its epoch once the callback has played past its key, after

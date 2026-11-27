@@ -1506,6 +1506,16 @@ class Engine {
     // before round 209; round 211 F1). Expected 0.
     std::array<std::atomic<std::uint64_t>, 3> launchPlayStartMissed_{};
     void playStartMissed(int path) SUPPLE_RT;
+    // A launch of the renderer's epoch passed while its leave was pending,
+    // by path: [0] the renderer rendering past its frame on a target of its
+    // own, [1] a launch the callback applied first, switched late on the
+    // renderer's targets. Unreachable since round 209 (the renderer holds
+    // before such a launch, and the callback plays only what it rendered);
+    // a path that reaches one is counted and marks the capture (round 214).
+    // Expected 0.
+    std::array<std::atomic<std::uint64_t>, 2> launchPassedPending_{};
+    void passedPending(int path) SUPPLE_RT;
+    std::uint64_t launchPassedEpoch_ = UINT64_MAX;  // renderer-private: counted once an epoch
     // Counted where a verdict came late or had to be taken as unheard (a
     // renderer that went on before the callback left the epoch, an end
     // reused before it was read): a capture over it is not as heard

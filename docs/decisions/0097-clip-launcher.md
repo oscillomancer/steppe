@@ -1445,6 +1445,11 @@ locate of its own (the take-back relocates each node it restores). With the hold
 handling of a launch the renderer passed while its leave was pending can no longer be reached and is
 kept as a fallback.
 
+Round 214 (same date): no fallback is left uncounted. A launch the renderer passes while its leave is
+pending, or switches late after the callback, is counted and marks the capture (expected 0, asserted
+by the tests); `launch.state` no longer lists an applied launch an executor has yet to switch, since
+under the hold none is heard first.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

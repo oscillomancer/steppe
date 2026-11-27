@@ -1089,6 +1089,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
         if (q.anticipative) CHECK(q.engine.anticipationMisses() == 0);
         // A launch placed at a play start is never missed there (round 209).
         CHECK(EngineTestAccess::playStartMissed(q.engine) == 0);
+        CHECK(EngineTestAccess::passedPending(q.engine) == 0);
     });
     const int executors = compareExecutors(a, b);
     for (Sequence* q : both) {
@@ -1231,6 +1232,7 @@ TEST_CASE(
         CHECK(q.node("tr_3") == "clip cl_5");
         CHECK(EngineTestAccess::slotsHeld(q.engine) == 0);
         CHECK(EngineTestAccess::playStartMissed(q.engine) == 0);
+        CHECK(EngineTestAccess::passedPending(q.engine) == 0);
         // cl_5 logged once, at the play start (the capture's first frame).
         const auto log = q.engine.launchLog();
         INFO("log:" << describe(log));
@@ -1306,5 +1308,6 @@ TEST_CASE(
     CHECK(found);
     CHECK(q.node("tr_3") == "clip cl_5");
     CHECK(EngineTestAccess::playStartMissed(q.engine) == 0);
+    CHECK(EngineTestAccess::passedPending(q.engine) == 0);
     q.engine.stop();
 }

@@ -1237,6 +1237,7 @@ TEST_CASE(
                 CHECK_FALSE(capture->facts.dropout);
                 CHECK(e.engine.anticipationMisses() == 0);
                 CHECK(EngineTestAccess::playStartMissed(e.engine) == 0);
+                CHECK(EngineTestAccess::passedPending(e.engine) == 0);
                 const auto log = e.engine.launchLog();
                 INFO("log:" << describe(log));
                 int cl1 = 0;
