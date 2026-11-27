@@ -2809,6 +2809,7 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         detail::locateClass(*plan_, pos_, false);
         resetOwned(processing_, plan_);
     }
+    rendererLaunchHeld_.store(false, std::memory_order_release);  // re-decided from here
     epochStartLocal_ = pos_;
     epochStart_.store(pos_);
     streamLocal_ = 0;
@@ -2965,9 +2966,11 @@ void Engine::rendererLoop(std::uint64_t seen) {
         const auto event = rendererEvent_.load(std::memory_order_acquire);
         if (rendererQuit_.load(std::memory_order_acquire)) break;
         rendererWakeAt_.store(INT64_MAX);
-        // Held only while in the hold's wait below: a pass leaving it by
-        // another way (a relocation, a stop, no room) is not held (round 211).
-        rendererLaunchHeld_.store(false, std::memory_order_release);
+        // Held only while its leave is pending and it waits below: a wake
+        // (awaitRendered's) leaves it held until it renders or relocates,
+        // and a settled leave (a stop, a relocation) ends it (round 211).
+        if (launchLeavePending_ == UINT64_MAX)
+            rendererLaunchHeld_.store(false, std::memory_order_release);
         if (playing_ && plan_ && plan_->split && !plan_->feedsCallback()) {
             // Everything is live: nothing to render. Stay one render-ahead
             // span past what the callback played, so that a plan giving the
@@ -3121,6 +3124,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
                           std::chrono::steady_clock::now() + rendererSafetyTimeout());
             continue;
         }
+        rendererLaunchHeld_.store(false, std::memory_order_release);
         auto renderFrames = block;
         if (queuedRate && plan != plan_ && plan->handEpoch == seen && plan->rateSeekSequence == 0 &&
             plan->handAt > streamLocal_)
