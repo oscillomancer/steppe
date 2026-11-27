@@ -192,6 +192,9 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
             const Engine::CaptureFacts& f = c->capture.facts;
             auto& why = out.notHeardBecause;
             if (!f.fromPlayStart) why.push_back("began_mid_run");
+            // (Always after began_mid_run: it says why that replay misses
+            // what was heard, a note held over its start.)
+            if (f.beganInNote) why.push_back("began_in_note");
             if (f.edited) why.push_back("edited_during");
             if (f.rateChanged) why.push_back("playrate_changed");
             if (f.liveInput) why.push_back("live_input");

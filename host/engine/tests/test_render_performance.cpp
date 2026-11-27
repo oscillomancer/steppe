@@ -377,7 +377,8 @@ json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
 TEST_CASE("a removal undone before the executors took it is not a return (round 172 K1)") {
     // The executor went from the plan with cl_1 to the one with it again:
     // it never returned tr_1, and acked nothing. launch.state says cl_1,
-    // and a later capture with no edit of its own lacks only a play start.
+    // and a later capture with no edit of its own lacks only a play start
+    // (and begins inside a note).
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 5);
@@ -389,13 +390,15 @@ TEST_CASE("a removal undone before the executors took it is not a return (round 
     CHECK(EngineTestAccess::launchReturns(*p.app->engine()).empty());
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why == R"(["began_mid_run"])");
+    // (And began_in_note: it begins inside cl_1's E3, beat 0.8 of bar 2.)
+    CHECK(why == R"(["began_mid_run","began_in_note"])");
 }
 
 TEST_CASE("a removal the executors took, then its undo, is a return (round 174)") {
     // The executor returned tr_1 at the removal's next block; the undo brings
     // cl_1 back to the plan, not to the track: launch.state says the
-    // arrangement, and a capture after both lacks only a play start.
+    // arrangement, and a capture after both lacks only a play start (and
+    // begins inside a note).
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 4);
@@ -410,7 +413,8 @@ TEST_CASE("a removal the executors took, then its undo, is a return (round 174)"
     CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock) - 64);  // tr_1's timeline
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why == R"(["began_mid_run"])");
+    // (And began_in_note: it begins inside the arrangement's A3, bar 2.)
+    CHECK(why == R"(["began_mid_run","began_in_note"])");
 }
 
 TEST_CASE("a plug-in that failed before the capture leaves it not as heard (round 174 U1)") {
@@ -982,5 +986,67 @@ TEST_CASE(
         CHECK(out[120] != rampAt(120));
         CHECK(out[120] > 0.f);
         CHECK(firstWrong(out, 240, 48000, [](std::int64_t i) { return rampAt(i); }) == -1);
+    }
+}
+
+TEST_CASE("a capture begun while playing inside a sounding note says began_in_note (fault D)") {
+    // twoTracks: tr_1's sine plays the arrangement's whole notes over bars
+    // 1-3 (to 288000) and cl_1 (C3:e E3:e G3:q r:h, a bar). Live holds a
+    // note sounding where a capture switched on while playing begins; its
+    // replay, starting inside the note, never starts it: not as heard for
+    // that too (after began_mid_run). From a play start live starts
+    // afresh: no note sounds on, nothing to say.
+    const auto reasons = [](Project& p) {
+        json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+        INFO("starts at " << dry["performance"]["start"].asInt());
+        std::vector<std::string> out;
+        if (const json::Value* why = dry.find("not_heard_because"))
+            for (const json::Value& r : why->asArray()) out.push_back(r.asString());
+        return out;
+    };
+    using Reasons = std::vector<std::string>;
+    SUBCASE("inside an arrangement note, and past the last one") {
+        for (const std::int64_t at : {48000, 300032}) {
+            INFO("switched on at " << at);
+            Project p;
+            twoTracks(p);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(at + 9600);
+            const Reasons expected =
+                at < 288000 ? Reasons{"began_mid_run", "began_in_note"} : Reasons{"began_mid_run"};
+            CHECK(reasons(p) == expected);
+        }
+    }
+    SUBCASE("inside a note of the clip the track plays, and in its rest over the arrangement") {
+        // cl_1 from bar 2 (96000): its G3 over beats 1-2 (120000-144000);
+        // over beats 2-4 a rest, where the arrangement's A3 would sound.
+        for (const std::int64_t at : {132000, 168000}) {
+            INFO("switched on at " << at);
+            Project p;
+            twoTracks(p);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * kBlock);
+            p.run("launch.clip", R"({"clip": "cl_1"})");
+            live.until(at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(at + 4800);
+            const Reasons expected =
+                at < 144000 ? Reasons{"began_mid_run", "began_in_note"} : Reasons{"began_mid_run"};
+            CHECK(reasons(p) == expected);
+        }
+    }
+    SUBCASE("from a play start inside an arrangement note: as heard") {
+        Project p;
+        twoTracks(p);
+        AppLive live(p, kInCallback, kBlock, 48000 * 9);
+        p.run("transport.seek", R"({"seconds": 1})");
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(9600);
+        CHECK(reasons(p).empty());
     }
 }

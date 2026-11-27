@@ -440,13 +440,16 @@ instructions are in `docs/guides/installing.md`.
       a launch of its epoch instead of rendering past it, so a launch made
       while stopped that starts the transport sounds from the play start
       under load too (round 209); the GUI's
-      as-heard line does not word `launch_unsettled` yet (gui-lead). Open,
+      as-heard line does not word `launch_unsettled` or `began_in_note`
+      yet (gui-lead). A capture begun while playing inside a note a
+      clip or the arrangement is sounding says `began_in_note` (after
+      `began_mid_run`): live holds the note, its replay never starts it.
+      Pre-roll, open: an exact replay of a capture begun while playing
+      needs every instrument's and effect's state from before its start;
+      without it the replay also misses a note's release tail and
+      effects' tails sounding there (marked only `began_mid_run`). Open,
       found by the seeded sequence test (rounds 205 and 207; ruled for
-      branch capture-start-state): a capture is as heard but its replay
-      differs when it begins (D) inside a sounding MIDI note while
-      playing (to be marked: an exact replay needs pre-roll from the
-      note's start with every instrument's state, the open pre-roll item);
-      (F5, anticipative,
+      branch capture-start-state): (F5, anticipative,
       with a live input) a capture switched on while playing after a
       relocation starts at its stream frame, not its song position. Both
       executors start every transport epoch afresh, as its replay does (a

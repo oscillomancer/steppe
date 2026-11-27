@@ -929,11 +929,15 @@ class Engine {
     // (engine.md §3.1): recorded while it runs, fixed when it ends.
     struct CaptureFacts {
         bool fromPlayStart = false;  // it began where playing began (stream 0)
-        bool edited = false;         // the session changed apart from the playrate
-        bool rateChanged = false;    // the playrate's controls, or a sync chase's scale
-        bool liveInput = false;      // a plan monitoring live input played during it
-        bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
-        bool pluginFailed = false;   // a processing error (processErrors)
+        // Begun while playing (not from a play start) inside a sounding
+        // note, which live holds and its replay, starting inside the note,
+        // never starts: an exact replay needs pre-roll (began_in_note).
+        bool beganInNote = false;
+        bool edited = false;        // the session changed apart from the playrate
+        bool rateChanged = false;   // the playrate's controls, or a sync chase's scale
+        bool liveInput = false;     // a plan monitoring live input played during it
+        bool dropout = false;       // an anticipation miss, a late bridge cycle, an xrun
+        bool pluginFailed = false;  // a processing error (processErrors)
         // A launch ack lost to a full ring while it ran, or at any time
         // before it began: the log misses a launch that was heard.
         bool launchUnlogged = false;

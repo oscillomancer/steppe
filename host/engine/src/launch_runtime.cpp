@@ -2153,13 +2153,50 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
             before[e.track] = i;
     }
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    const std::int64_t song = capture_.startSample;  // where in the song it began
     const auto fading = [&](const LaunchLogEntry& e) {
         if (capture_.startStream == 0 || e.epoch != capture_.epoch || !plan) return false;
         for (const detail::Node& n : plan->nodes)
             if (n.id == e.track)
-                return e.anchorSample + n.launchFadeFrames + n.timelineShift > start;
+                return e.anchorSample + n.launchFadeFrames + n.timelineShift > song;
         return false;
     };
+    // Begun while playing inside a note a track's clip or arrangement was
+    // sounding (D): live holds it, its replay never starts it. (From a play
+    // start or a relocation live starts afresh: no note sounds on.)
+    if (capture_.startStream != 0 && plan) {
+        const auto sounding = [&](model::Id track, auto&& clipNote, auto&& arrangementNote) {
+            const auto it = before.find(track);
+            if (it == before.end() ||
+                launchLog_[it->second].action == LaunchLogEntry::Action::Arrangement)
+                return arrangementNote();
+            const LaunchLogEntry& e = launchLog_[it->second];
+            return e.action == LaunchLogEntry::Action::Clip && clipNote(e);
+        };
+        for (const detail::Node& n : plan->nodes) {
+            const auto clipNote = [&](const LaunchLogEntry& e) {
+                const int k = detail::playerOf(n, e.clip);
+                return k >= 0 && detail::clipNoteSounding(
+                                     *plan, n.players[static_cast<std::size_t>(k)], e.anchorSample,
+                                     e.anchorBeat, e.anchorSample > song, song);
+            };
+            if (sounding(n.id, clipNote, [&] { return detail::arrangementNoteSounding(n, song); }))
+                out.facts.beganInNote = true;
+            if (n.rack)  // a rack's Notes feeds play their source track's clips
+                for (const detail::NotesFeed& feed : n.rack->notes) {
+                    if (!feed.follows || !feed.source) continue;
+                    const auto feedNote = [&](const LaunchLogEntry& e) {
+                        const int k = detail::playerOf(feed, e.clip);
+                        return k >= 0 &&
+                               detail::clipNoteSounding(
+                                   *plan, feed.players[static_cast<std::size_t>(k)], e.anchorSample,
+                                   e.anchorBeat, e.anchorSample > song, song);
+                    };
+                    if (sounding(*feed.source, feedNote, [] { return false; }))
+                        out.facts.beganInNote = true;
+                }
+        }
+    }
     for (const auto& [track, i] : before) {
         LaunchLogEntry first = launchLog_[i];
         first.runningFrame = 0;

@@ -485,8 +485,10 @@ std::vector<float> replay(const model::Session& s, const fs::path& dir,
 
 // The known fault the sequences found (round 207, by the MIDI track): (D)
 // a capture begun while playing inside a sounding note, which live holds
-// and the replay, starting inside the note, never starts (to be marked not
-// as heard). Gone with capture-start-state: what each track played where a
+// and the replay, starting inside the note, never starts. One inside a held
+// note is marked began_in_note (judge checks it, tr3Held); what is left
+// here is a note's release tail just after its note-off, which only
+// pre-roll would replay (STATUS). Gone with capture-start-state: what each track played where a
 // replay starts was listed as a launch at frame 0, so the replay could not
 // hold (A) a loop clip a seek back carried before its anchor, which live
 // plays by its phase, or (B) a crossfade running where playing begins
@@ -513,6 +515,24 @@ std::int64_t noteLeft(model::Id clip, std::int64_t anchor, std::int64_t at) {
 // Whether such a note is sounding there.
 bool noteSounding(model::Id clip, std::int64_t anchor, std::int64_t at) {
     return noteLeft(clip, anchor, at) > 0;
+}
+// Whether such a note is held there: begun before it and not yet ended
+// (its release tail apart).
+bool noteHeld(model::Id clip, std::int64_t anchor, std::int64_t at) {
+    return noteLeft(clip, anchor, at) > kFade;
+}
+// Whether tr_3's clip holds a note where a capture begins at frame
+// `offset` of `epoch` (song sample `start`): the capture is marked
+// began_in_note (D) when it began while playing.
+bool tr3Held(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch, std::int64_t offset,
+             std::int64_t start) {
+    const LaunchLogEntry* tr3 = nullptr;
+    for (const LaunchLogEntry& e : log)
+        if (e.track == id("tr_3") &&
+            (e.epoch < epoch || (e.epoch == epoch && e.runningFrame <= offset)))
+            tr3 = &e;
+    return offset > 0 && tr3 && tr3->action == LaunchLogEntry::Action::Clip &&
+           noteHeld(tr3->clip, tr3->anchorSample, start);
 }
 // C (found at the take-fx merge): the replay of a capture switched on
 // while playing restarts the rack's Mod Outs at 0 and holds that to the
@@ -666,6 +686,12 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         }
         if (!asHeard) {
             ++n.markedCaptures;
+            // Begun while playing inside a held note: marked so (D).
+            if (const auto at = locate(g, c.capture.startSample, c.offset);
+                at && tr3Held(log, g.epoch, *at, c.capture.startSample)) {
+                CHECK(c.capture.facts.beganInNote);
+                ++n.faults["D, marked"];
+            }
             continue;
         }
         // Located by its start, at or after where it was switched on (one
@@ -687,6 +713,8 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         if (!located) continue;
         const std::int64_t offset = *located;
         std::int64_t covered = 0;
+        // (Never inside a held note: that is marked, above.)
+        CHECK_FALSE(tr3Held(log, g.epoch, offset, c.capture.startSample));
         const char* f = faultAt(log, g.epoch, offset, c.capture.startSample, true, &covered);
         if (f) ++n.faults[f];
         if (const std::int64_t cf =
