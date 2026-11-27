@@ -104,11 +104,10 @@ struct Segment {
     std::int64_t out = 0, song = 0, end = -1;
     LoopRange loop;
     bool edited = false;  // a plan swap during it
-    // The sound goes on into it: begun by a loop change while playing, or by
-    // a play with no block since the pause (the in-callback executor's
-    // voices sound on); `held`: the song sample it went on from.
+    // Begun by a loop change while playing, or by a play with no block since
+    // the pause (every executor starts it afresh, as the replay does: round
+    // 215 F-B1).
     bool continuous = false;
-    std::int64_t held = 0;
     bool playStart = false;  // begun by a play
     std::string steps;       // the steps that led to it (a failure's message)
 };
@@ -262,7 +261,7 @@ struct Sequence {
         epochCycle = done;
         quietSince = done;
         segments.push_back(
-            {EngineTestAccess::epoch(engine), done * kBlock, song, -1, loop, false, false, 0, false,
+            {EngineTestAccess::epoch(engine), done * kBlock, song, -1, loop, false, false, false,
              std::to_string(step) +
                  " after:" + trail.substr(trail.size() > 700 ? trail.size() - 700 : 0)});
         if (capturing && captureSegment < 0) captureSegment = int(segments.size()) - 1;
@@ -291,7 +290,6 @@ struct Sequence {
         segments.back().playStart = true;
         if (done == pausedAt && pausedSong >= 0) {
             segments.back().continuous = true;
-            segments.back().held = pausedSong;
         }
         unadopted = false;
     }
@@ -328,7 +326,6 @@ struct Sequence {
         if (playing) {
             begin();
             segments.back().continuous = true;
-            segments.back().held = song;
         }
         stoppedAt = done;
     }
@@ -499,12 +496,11 @@ std::vector<float> replay(const model::Session& s, const fs::path& dir,
 // while playing. Found in round 207 by the MIDI track: (D) a capture
 // begun while playing inside a sounding note, which live holds and the
 // replay, starting inside the note, never starts (to be marked not as
-// heard); (G) an epoch a loop change began while playing inside a note:
-// the in-callback executor holds the note on, the anticipative one and
-// the replay start silent. `offset`: the start's frame from the epoch's
-// first, `start` its song sample, `continuous`: begun by a loop change
-// while playing, `inCallback`: the executor. Returns "A", "B", "D", "G" or
-// nothing.
+// heard). (G, an epoch a loop change began while playing inside a note,
+// where the in-callback executor held the note on, is gone with round 215
+// F-B1: every executor starts an epoch afresh.) `offset`: the start's
+// frame from the epoch's first, `start` its song sample. Returns "A", "B",
+// "D" or nothing.
 // The frames left of a note of tr_3's clip `clip` (anchored at `anchor`)
 // sounding just before song sample `at`, its fade included; 0 if none (120
 // BPM, 24000 samples a beat; four-beat clips).
@@ -522,31 +518,15 @@ std::int64_t noteLeft(model::Id clip, std::int64_t anchor, std::int64_t at) {
 bool noteSounding(model::Id clip, std::int64_t anchor, std::int64_t at) {
     return noteLeft(clip, anchor, at) > 0;
 }
-// H (found in round 207): in-callback, the live Notes feed's gate holds its
-// value from before a pause after the play: for the first block, or, with
-// tr_3's carried clip inside a note there, until that note ends (round 209
-// F4: seed 10 epoch 601, seed 11 epoch 319). The frames it covers from the
-// play start.
-std::int64_t hFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
-                     std::int64_t start) {
-    const LaunchLogEntry* carried = nullptr;
-    for (const LaunchLogEntry& e : log)
-        if (e.epoch < epoch && e.track == id("tr_3")) carried = &e;
-    std::int64_t frames = kBlock;
-    if (carried && carried->action == LaunchLogEntry::Action::Clip &&
-        carried->anchorSample <= start)
-        frames = std::max(frames, noteLeft(carried->clip, carried->anchorSample, start));
-    return frames;
-}
-// C (found at the take-fx merge; modulation-first-frame fixed it at run
-// starts): a replay that begins mid-run (a capture switched on while
-// playing, an epoch a loop change or a pause and play with no block
-// between continues) restarts the rack's Mod Outs at 0 and holds that to
-// the first grid point, as an offline render from there does, where live
-// keeps their history; with cl_3's modulated take chain sounding, or
-// fading out under a switch at or before the start (seed 6 epoch 102: a
-// return to the arrangement while paused, then the play), the frames up to
-// the next grid point differ. The frames it covers.
+// C (found at the take-fx merge): the replay of a capture switched on
+// while playing restarts the rack's Mod Outs at 0 and holds that to the
+// first grid point, as an offline render from there does, where live keeps
+// their history (the capture says began_mid_run); with cl_3's modulated
+// take chain sounding, or fading out under a switch at or before the start
+// (seed 6), the frames up to the next grid point differ. The frames it
+// covers. (An epoch begun by a loop change or a pause and play with no
+// block between is no longer C: every executor restarts the modulation
+// there, as the replay does; round 215 F-B1.)
 std::int64_t cFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
                      std::int64_t offset, std::int64_t start) {
     const LaunchLogEntry *tr2 = nullptr, *before = nullptr;
@@ -563,8 +543,8 @@ std::int64_t cFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch
     return (32 - start % 32) % 32;
 }
 const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
-                    std::int64_t offset, std::int64_t start, bool capture, bool continuous,
-                    bool inCallback, std::int64_t held = 0, std::int64_t* frames = nullptr) {
+                    std::int64_t offset, std::int64_t start, bool capture,
+                    std::int64_t* frames = nullptr) {
     std::map<model::Id, const LaunchLogEntry*> carried, newest;
     for (const LaunchLogEntry& e : log)
         if (e.epoch < epoch) carried[e.track] = &e;
@@ -579,13 +559,6 @@ const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
         if (!f) f = c;
         covered = std::max(covered, k);
     };
-    // G: by the epoch's own start (what the in-callback executor held there),
-    // until that note ends.
-    if (continuous && inCallback)
-        for (const auto& [track, e] : carried)
-            if (track == id("tr_3") && e->action == LaunchLogEntry::Action::Clip &&
-                e->anchorSample <= held && noteSounding(e->clip, e->anchorSample, held))
-                hit("G", noteLeft(e->clip, e->anchorSample, held));
     for (const auto& [track, e] : newest) {
         if (track == id("tr_3") && e->action == LaunchLogEntry::Action::Clip &&
             e->anchorSample <= start) {
@@ -679,18 +652,7 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         const std::int64_t length = g.end - g.out - kFade;
         if (length <= 0 || q.lateEnds.count(g.epoch)) continue;
         std::int64_t covered = 0;
-        if (const char* f = faultAt(log, g.epoch, 0, g.song, false, g.continuous, !q.anticipative,
-                                    g.held, &covered))
-            ++n.faults[f];
-        // (H: compared after it, as after the frames a fault covers.)
-        if (!q.anticipative && q.liveFeed && g.playStart) {
-            covered = std::max(covered, hFrames(log, g.epoch, g.song));
-            ++n.faults["H"];
-        }
-        if (const std::int64_t c = g.continuous ? cFrames(log, g.epoch, 0, g.song) : 0; c > 0) {
-            covered = std::max(covered, c);
-            ++n.faults["C"];
-        }
+        if (const char* f = faultAt(log, g.epoch, 0, g.song, false, &covered)) ++n.faults[f];
         if (covered >= length) continue;
         auto offline = replay(s, dir, epochLog(log, g.epoch), g.song, std::size_t(length), g.loop);
         const std::size_t skip = std::size_t(covered);
@@ -750,16 +712,10 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         if (!located) continue;
         const std::int64_t offset = *located;
         std::int64_t covered = 0;
-        const char* f = faultAt(log, g.epoch, offset, c.capture.startSample, true, g.continuous,
-                                !q.anticipative, g.held, &covered);
+        const char* f = faultAt(log, g.epoch, offset, c.capture.startSample, true, &covered);
         if (f) ++n.faults[f];
-        if (!q.anticipative && q.liveFeed && g.playStart && offset == 0) {
-            covered = std::max(covered, hFrames(log, g.epoch, c.capture.startSample));
-            ++n.faults["H"];
-        }
-        if (const std::int64_t cf = offset > 0 || g.continuous
-                                        ? cFrames(log, g.epoch, offset, c.capture.startSample)
-                                        : 0;
+        if (const std::int64_t cf =
+                offset > 0 ? cFrames(log, g.epoch, offset, c.capture.startSample) : 0;
             cf > 0) {
             covered = std::max(covered, cf);
             ++n.faults["C"];
@@ -803,19 +759,11 @@ int compareExecutors(Sequence& a, Sequence& b) {
         // change, begins elsewhere in the song: not comparable.)
         if (g.song != gb.song) continue;
         // (Not its last frames before a stop or seek, a crossfade and the
-        // shift: the executors' tails there differed by 64 frames once, open;
-        // nor a loop change's epoch over a held note, G.)
+        // shift: the executors' tails there differed by 64 frames once, open.)
         const std::int64_t length = sameUpTo(epochLog(logA, g.epoch), epochLog(logB, g.epoch),
                                              std::min(g.end - g.out, gb.end - gb.out) - kFade);
         if (length <= 0) continue;
-        std::int64_t skip = 0;
-        if (const char* f =
-                faultAt(logA, g.epoch, 0, g.song, false, g.continuous, true, g.held, &skip);
-            !f || f[0] != 'G')
-            skip = 0;  // (G: the in-callback executor's held note, compared after it)
-        if (a.liveFeed && g.playStart) skip = std::max(skip, hFrames(logA, g.epoch, g.song));
-        if (g.continuous) skip = std::max(skip, cFrames(logA, g.epoch, 0, g.song));  // C
-        if (length <= skip) continue;
+        const std::int64_t skip = 0;
         const std::vector<float> slice(
             outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + skip)),
             outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + length)));
@@ -1200,6 +1148,83 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
                 (void)runSequence(s, edited, dir, seed, 400, false, true);
         }
     }
+}
+
+TEST_CASE(
+    "the in-callback executor starts an epoch as the renderer and the replay do: at a loop change "
+    "while playing and a pause and play with no block between (round 215 F-B1)" *
+    doctest::description("rt")) {
+    // From off the 32-frame grid, tr_2's modulated cl_3 and tr_3's cl_6
+    // launched on the bar
+    // (inside its held G3) playing, with tr_4's Notes feed following tr_3
+    // (live, with a device, or not): a loop change while playing, or a
+    // pause and a play with no block between. Each executor's epoch from
+    // there equals its log's replay, and the two executors equal each other.
+    // The in-callback executor once kept what ran before: the modulation's
+    // run up to the next grid point (C), the held note (G), the live gate
+    // (H), where the renderer and the replay start afresh.
+    // Each class alone: C, cl_3 alone; G, cl_6 alone; H, cl_6 with the live
+    // feed (its gate follows tr_3's note, so G's note sounds there too).
+    for (const char cls : {'C', 'G', 'H'})
+        for (const bool loopChange : {true, false}) {
+            const bool liveFeed = cls == 'H';
+            INFO(std::string(1, cls)
+                 << ": "
+                 << std::string(loopChange ? "a loop change while playing" : "a pause and play"));
+            Project p;
+            project(p, liveFeed);
+            const model::Session s = p.app->head();
+            Sequence a(s, p.app->projectDir(), kInCallback, 1),
+                b(s, p.app->projectDir(), EngineOptions{.workers = 0}, 1);
+            a.liveFeed = b.liveFeed = liveFeed;
+            const auto each = [&](auto&& f) {
+                f(a);
+                f(b);
+            };
+            each([](Sequence& q) {
+                q.seek(1001);  // off the grid
+                q.play();
+                q.run(20);
+                q.engine.service();
+                q.settle();
+            });
+            for (Sequence* q : {&a, &b}) {
+                std::vector<Engine::LaunchRequest> r;
+                if (cls == 'C') r.push_back(request("tr_2", "cl_3"));
+                if (cls != 'C') r.push_back(request("tr_3", "cl_6"));
+                REQUIRE(q->engine.launch(r, model::LaunchQuantize::Bar));  // at 96000 in both
+            }
+            each([](Sequence& q) {
+                q.run(3200);  // 8041 frames into cl_6's first note, cl_3 sounding
+                q.engine.service();
+                q.settle();
+            });
+            each([&](Sequence& q) {
+                if (loopChange) {
+                    q.setLoop({0, 48000 * 30, true});
+                } else {
+                    q.pause();
+                    q.play();
+                }
+            });
+            each([](Sequence& q) {
+                q.run(400);
+                q.engine.service();
+                q.settle();
+                q.pause();
+                q.run(5);
+                q.engine.service();
+            });
+            for (Sequence* q : {&a, &b}) {
+                INFO(std::string(q->anticipative ? "anticipative" : "in-callback"));
+                REQUIRE(q->segments.size() >= 2);
+                CHECK(q->segments[1].continuous);
+                const Counts n = judge(*q, s, p.app->projectDir());
+                CHECK(n.comparedEpochs >= 2);
+            }
+            CHECK(compareExecutors(a, b) >= 2);
+            each([](Sequence& q) { q.engine.stop(); });
+        }
 }
 
 TEST_CASE(

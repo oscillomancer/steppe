@@ -452,13 +452,10 @@ instructions are in `docs/guides/installing.md`.
       note's start with every instrument's state, the open pre-roll item);
       (F5, anticipative,
       with a live input) a capture switched on while playing after a
-      relocation starts at its stream frame, not its song position. Also
-      open: (G) on a loop change while playing, or a pause and play with
-      no block between, the in-callback executor's instruments sound on
-      (a held MIDI note) where the anticipative executor and the replay
-      start silent; (H) in-callback, a live Notes feed's gate holds its
-      value from before a pause after the play, for the first block or
-      until a note sounding there ends. The sequence test compares each
+      relocation starts at its stream frame, not its song position. Both
+      executors start every transport epoch afresh, as its replay does (a
+      loop change while playing and a pause and play with no block between
+      included). The sequence test compares each
       epoch and capture after the frames its class covers. Not yet traced:
       the executors' last 64 frames before a seek differed once (the
       channel shift).
@@ -1023,12 +1020,8 @@ instructions are in `docs/guides/installing.md`.
   does not run then keeps to the grid when it first does. A capture
   switched on while playing replays with the rack's Mod Outs restarted at
   0, where live keeps their history, so a modulated chain's frames up to
-  the next grid point can differ; it says `began_mid_run`. Open: at a loop
-  change while playing, or a pause and play with no block between, the
-  in-callback executor keeps the modulation history where the
-  anticipative executor and the replay restart it, so the executors
-  differ there up to the next grid point (the launch sequence test's
-  class C; review round 215 F-B1, with G and H); and an FX moved from another track inside a plan an
+  the next grid point can differ; it says `began_mid_run`. Open: an FX
+  moved from another track inside a plan an
   adoption brings after a locate (a new stage, the same instance) plays
   the value it was sent before for up to 19 frames, to the next grid
   point (review round 213). A route

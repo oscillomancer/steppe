@@ -535,7 +535,8 @@ until it is released.
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
   - **A run's first frame** (an offline render's first block, a locate: a
-    seek or a play start), on the grid or not, also sends every modulated
+    seek, a play start, or any new transport epoch, a pause or a loop
+    change included, in either executor), on the grid or not, also sends every modulated
     parameter, the memo made stale there. Its sum there is its routes'
     values at that frame, which a locate starts afresh: the rack restarts
     its Mod Outs at 0, held up to their first grid point, and the route's
@@ -3745,7 +3746,14 @@ harness. See the tooling README for schemas, limits and invocation details.
   main thread; the callback drops older chunks at its next cycle (pause is
   silent at once, a seek never plays stale audio); the renderer relocates —
   after a pause to the position the callback reports once it has seen the
-  new epoch. New plans are adopted at the render position (edits are heard
+  new epoch. Every epoch starts afresh, as an offline render from its
+  position does: the renderer relocates its nodes and the callback its
+  live ones (the racks restart their modules and the modulation its run,
+  held voices end, plug-ins reset). Without anticipation the callback
+  does the same at any new epoch, a pause or a loop change with no seek
+  included (review round 215 F-B1: it once kept them across a loop change
+  while playing and a pause and play with no block between, so it
+  differed from the renderer and the replay there). New plans are adopted at the render position (edits are heard
   after the audio already rendered, no gap). Renderer parking follows
   ADR-0028: stopped block deadlines and event-driven buffer-space wakes
   from the callback, with a safety bound of half the playback buffer span

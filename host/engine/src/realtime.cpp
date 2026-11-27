@@ -2200,6 +2200,17 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::locate(*plan, pos_);
             resetOwned(processing_, plan);
         }
+    } else if (xportNew && xport.epoch != rtEpoch_ && plan) {
+        // A new epoch without a seek (a pause, a loop change) starts afresh
+        // where it is, as the anticipative engine's executors start every
+        // epoch (the renderer's relocate, liveRender) and as its replay does:
+        // the racks restart their modules and the modulation its run, held
+        // voices end, a live Notes feed's gate starts over (review round 215
+        // F-B1: the in-callback executor once kept them across a loop change
+        // while playing, and across a pause and play with no block between,
+        // classes C, G and H of the launch sequence test).
+        detail::locate(*plan, pos_);
+        resetOwned(processing_, plan);
     }
     if (const bool want = wantNow(); want != playing_) {
         playing_ = want;
