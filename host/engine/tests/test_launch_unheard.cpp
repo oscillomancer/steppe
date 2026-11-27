@@ -1255,6 +1255,105 @@ TEST_CASE(
     }
 }
 
+namespace {
+// tr_1 (twoAudioClips) armed and monitored with a MIDI input: live,
+// switched by the callback alone in the anticipative engine.
+model::Session liveTrack(Project& p) {
+    twoAudioClips(p);
+    p.run("track.set", R"({"track": "tr_1", "armed": true, "record_midi": "*", "monitor": "on"})");
+    return p.app->head();
+}
+bool tr1Live(const Engine& engine) {
+    for (const detail::Node& n : EngineTestAccess::latestPlan(engine).nodes)
+        if (n.id == id("tr_1")) return n.live;
+    return false;
+}
+}  // namespace
+
+TEST_CASE(
+    "a launch on a live track is not listed queued once it plays, anticipative (round 215 F-A1)" *
+    doctest::description("rt")) {
+    // The callback switches a launch on a live track alone; the renderer,
+    // with no target of it, marks it done at its next pass. launch.state
+    // read after every cycle never says tr_1 plays a clip and has it
+    // queued (the rule round 214 removed listed such a launch queued until
+    // the renderer's pass: PROBE215 Q, 600 of 2400 polls).
+    Project p;
+    const model::Session s = liveTrack(p);
+    Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 12);
+    e.engine.play();
+    e.run(20);
+    e.engine.service();
+    REQUIRE(tr1Live(e.engine));
+    int both = 0, playing = 0;
+    for (int k = 0; k < 20; ++k) {
+        const char* clip = k % 2 == 0 ? "cl_1" : "cl_2";
+        (void)e.place(request("tr_1", clip), model::LaunchQuantize::None);
+        for (int c = 0; c < 15; ++c) {
+            e.run(e.done + 1);
+            e.engine.service();
+            for (const Engine::TrackLaunch& t : e.engine.launchState())
+                if (t.track == id("tr_1") && t.plays == Engine::TrackLaunch::Plays::Clip &&
+                    t.clip == id(clip)) {
+                    ++playing;
+                    if (t.queued && t.queued->request.clip == id(clip)) ++both;
+                }
+        }
+    }
+    INFO("polls playing the launched clip: " << playing);
+    CHECK(playing > 0);
+    CHECK(both == 0);
+    CHECK(EngineTestAccess::passedPending(e.engine) == 0);
+    e.engine.stop();
+}
+
+TEST_CASE(
+    "a launch on a live track made while the renderer's leave is pending is not counted as passed, "
+    "and the capture stays as heard (round 215 F-A2)" *
+    doctest::description("rt")) {
+    // PROBE215 Z's shape: tr_1 live; a seek while playing with the
+    // renderer's leave held late (the hook), a capture on and cl_1 launched
+    // meanwhile. The renderer, with no target of the launch, passes it in
+    // its pending branch; that lacks nothing (the callback switches it), so
+    // it is not counted (round 214 scan: the renderer's own targets only)
+    // and the capture is not marked.
+    Project p;
+    const model::Session s = liveTrack(p);
+    for (const bool unquantized : {true, false}) {
+        INFO(std::string(unquantized ? "unquantized" : "on the bar"));
+        Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 12);
+        e.engine.play();
+        e.run(20);
+        e.engine.service();
+        REQUIRE(tr1Live(e.engine));
+        EngineTestAccess::rendererLeaveLate(e.engine, true);
+        e.engine.seek(2.5);
+        e.run(e.done + 2);
+        REQUIRE(e.engine.captureLaunches(true));
+        const auto r = request("tr_1", "cl_1");
+        const auto q = unquantized ? model::LaunchQuantize::None : model::LaunchQuantize::Bar;
+        auto placed = e.engine.launch(std::span(&r, 1), q);
+        for (int again = 0; !placed && placed.error().code == "launch.later" && again < 8;
+             ++again) {
+            e.run(e.done + 1);
+            placed = e.engine.launch(std::span(&r, 1), q);
+        }
+        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+        CHECK(EngineTestAccess::leavePending(e.engine));
+        e.run(e.done + 200);
+        EngineTestAccess::rendererLeaveLate(e.engine, false);
+        e.run(e.done + 3000);
+        e.engine.service();
+        CHECK(EngineTestAccess::passedPending(e.engine) == 0);
+        CHECK(EngineTestAccess::playStartMissed(e.engine) == 0);
+        CHECK(e.node() == "clip cl_1");
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        CHECK_FALSE(capture->facts.launchUnsettled);
+        e.engine.stop();
+    }
+}
+
 TEST_CASE(
     "a newest launch an edit makes unplayable cancels only itself: a replaced launch that was "
     "heard plays on, an unheard one stays dropped (round 209 F1)" *
