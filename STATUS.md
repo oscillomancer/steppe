@@ -451,7 +451,10 @@ instructions are in `docs/guides/installing.md`.
       relocation starts at its stream frame, not its song position. Both
       executors start every transport epoch afresh, as its replay does (a
       loop change while playing and a pause and play with no block between
-      included). The sequence test compares each
+      included), resetting each plug-in once. Known behaviour, in both
+      executors and older than this batch: a new epoch while monitoring
+      (a seek, a pause, a loop change, a loop edit while stopped included)
+      cuts a monitored strip's plug-in tails. The sequence test compares each
       epoch and capture after the frames its class covers. Not yet traced:
       the executors' last 64 frames before a seek differed once (the
       channel shift).

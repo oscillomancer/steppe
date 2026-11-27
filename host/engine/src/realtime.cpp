@@ -2192,6 +2192,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             stoppedGen_.store(plan->generation, std::memory_order_release);
         }
     }
+    bool restarted = false;  // this cycle reset every instance it owns
     if (xportNew && xport.seekSeq != seekSeen_) {
         seekSeen_ = xport.seekSeq;
         clickAge_ = -1;
@@ -2199,6 +2200,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         if (plan) {
             detail::locate(*plan, pos_);
             resetOwned(processing_, plan);
+            restarted = true;
         }
     } else if (xportNew && xport.epoch != rtEpoch_ && plan) {
         // A new epoch without a seek (a pause, a loop change) starts afresh
@@ -2211,10 +2213,14 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // classes C, G and H of the launch sequence test).
         detail::locate(*plan, pos_);
         resetOwned(processing_, plan);
+        restarted = true;
     }
     if (const bool want = wantNow(); want != playing_) {
         playing_ = want;
-        if (!want) resetOwned(processing_, plan);  // no hanging notes
+        // No hanging notes; once: a pause's new epoch has just reset them
+        // (twice was a second round trip to each bridged plug-in; round
+        // 217).
+        if (!want && !restarted) resetOwned(processing_, plan);
         // Starting: what ran while stopped (plugins, the Console 9 noise)
         // starts over, as in the renderer; monitored strips play on.
         if (want && plan) {
