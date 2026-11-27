@@ -2061,6 +2061,10 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
+  A render restarts the rack modules it takes from its pool and ends their
+  notes, as a locate does, so renders that share a pool each play as from
+  a fresh one (they once kept a Mod Out's last value from the render
+  before up to its first grid point).
 - **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
   render gives each bridged one a call deadline of its own,
   `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;

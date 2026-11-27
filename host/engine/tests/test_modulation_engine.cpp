@@ -926,11 +926,8 @@ void checkLocates(const model::Session& s, std::uint32_t block, bool stopped,
     constexpr std::int64_t kSeg = 2048;
     const std::vector<std::int64_t> to = locateTargets();
     std::vector<std::vector<float>> offline;
+    auto pool = makePool();  // one for every render (each restarts its racks)
     for (const std::int64_t x : to) {
-        // A fresh pool per render, as the app's renders have: a pool's rack
-        // modules are not restarted at a render's start (its Mod Outs would
-        // hold the last render's values up to their first grid point).
-        auto pool = makePool();
         auto r = renderOffline(s, pool,
                                {.startSeconds = double(x) / 48000.0,
                                 .endSeconds = double(x + kSeg) / 48000.0,
@@ -1022,6 +1019,29 @@ TEST_CASE(
         for (const std::uint32_t block : {37u, 128u, 512u})
             for (const bool stopped : {false, true}) checkLocates(s, block, stopped, 32);
     }
+}
+
+TEST_CASE("modulation: renders that share a pool play as renders from fresh pools" *
+          doctest::description("rt")) {
+    // A pool's rack modules outlive a render. Each render restarts the ones
+    // it takes, so a Mod Out does not hold the last render's value up to its
+    // first grid point (each range starts off the grid, where it shows).
+    const model::Session s = locateScene(120.0, false);
+    const std::int64_t starts[] = {145375, 96001, 145375, 30011, 96001};
+    auto shared = makePool();
+    for (const std::uint32_t block : {37u, 128u})
+        for (const std::int64_t x : starts) {
+            INFO("block " << block << ", from " << x);
+            const OfflineSettings settings{.startSeconds = double(x) / 48000.0,
+                                           .endSeconds = double(x + 2048) / 48000.0,
+                                           .blockSize = block};
+            auto fresh = makePool();
+            auto a = renderOffline(s, fresh, settings);
+            auto b = renderOffline(s, shared, settings);
+            REQUIRE_MESSAGE(a, (a ? std::string() : a.error().toString()));
+            REQUIRE_MESSAGE(b, (b ? std::string() : b.error().toString()));
+            CHECK(b->audio.channels[0] == a->audio.channels[0]);
+        }
 }
 
 TEST_CASE("modulation: a track's volume moves by signal x depth in dB, clamped to its range" *
