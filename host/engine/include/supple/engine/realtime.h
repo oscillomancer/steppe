@@ -1303,6 +1303,11 @@ class Engine {
     // the slots and deciding them, as a main thread preempted there.
     void (*launchCommitForTests_)(void*) = nullptr;
     void* launchCommitContext_ = nullptr;
+    // Tests only (EngineTestAccess): runs in the in-callback executor's cycle
+    // right after it takes a new epoch, as a main thread acting during that
+    // cycle (the hook disables RealtimeSanitizer itself).
+    void (*epochTakenForTests_)(void*) = nullptr;
+    void* epochTakenContext_ = nullptr;
     // Tests only (EngineTestAccess): this many of the next prepareRatePlan
     // attempts are late, as if the renderer had passed their hand, so they
     // prepare again (the third fails, and a recovery seek follows).

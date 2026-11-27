@@ -2257,9 +2257,14 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // Its position with it: stopped, nothing else stores it, so a play
         // start's launch clock (launchClock) read the last position played
         // before the stop, and a capture switched on before the first cycle
-        // began there (fault E, seed 4).
+        // began there (fault E, seed 4); and the reported one, which
+        // transport() reads once the epoch is taken (callbackPosition), so a
+        // launch or capture made during this cycle does not take the position
+        // before a stopped seek (round 216 F-C1).
         rtPos_.store(pos_, std::memory_order_relaxed);
+        reportedPos_.store(pos_);
         rtPosEpoch_.store(rtEpoch_, std::memory_order_release);
+        if (epochTakenForTests_) epochTakenForTests_(epochTakenContext_);
     }
     if (plan) {
         startFree(processing_, &plan->instances, &processing_);  // any refused, retried

@@ -1251,6 +1251,75 @@ TEST_CASE(
     }
 }
 
+TEST_CASE(
+    "in-callback, a launch and a capture made inside the cycle that takes a stopped seek begin "
+    "where the seek goes (round 216 F-C1)" *
+    doctest::description("rt")) {
+    // Played to 2 s, paused, a seek to 5 s; the callback's next cycle takes
+    // the seek, and inside it (the hook, after the take) a capture is
+    // switched on and cl_1 launched while stopped. Both begin at 5 s, and
+    // cl_1 plays from the play start. (The callback published the epoch at
+    // the cycle's start but its position only at the end, so they took
+    // 2 s: the reviewer's journey variant J, 7 of 240 in-callback.)
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    constexpr std::int64_t kTo = 48000 * 5;
+    Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 12);
+    e.engine.play();
+    e.run(3000);
+    e.engine.service();
+    e.engine.pause();
+    e.run(e.done + 5);
+    e.engine.service();
+    struct Inside {
+        Engine* engine;
+        int calls = 0;
+        std::optional<Engine::LaunchPlaced> placed;
+        std::string error;
+    } inside;
+    inside.engine = &e.engine;
+    EngineTestAccess::afterEpochTaken(
+        e.engine,
+        [](void* c) {
+            [[maybe_unused]] const rt::ScopedRtsanDisabler off;  // main-thread work, in the cycle
+            auto& in = *static_cast<Inside*>(c);
+            if (in.calls++ > 0) return;
+            if (!in.engine->captureLaunches(true)) in.error = "capture";
+            const auto r = request("tr_1", "cl_1");
+            const auto placed = in.engine->launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+            if (placed)
+                in.placed = *placed;
+            else
+                in.error = placed.error().toString();
+        },
+        &inside);
+    e.engine.seek(double(kTo) / 48000);
+    e.run(e.done + 1);  // takes the seek, the hook inside
+    EngineTestAccess::afterEpochTaken(e.engine, nullptr, nullptr);
+    REQUIRE(inside.calls == 1);
+    REQUIRE_MESSAGE(inside.placed, inside.error);
+    CHECK(inside.placed->anchorSample == kTo);
+    e.engine.service();
+    e.engine.play();
+    e.run(e.done + 2400);
+    e.engine.service();
+    const auto capture = e.engine.launchCapture();
+    REQUIRE(capture);
+    CHECK(capture->startSample == kTo);
+    const auto log = e.engine.launchLog();
+    INFO("log:" << describe(log));
+    int cl1 = 0;
+    for (const LaunchLogEntry& le : log)
+        if (le.clip == id("cl_1")) {
+            ++cl1;
+            CHECK(le.anchorSample == kTo);
+        }
+    CHECK(cl1 == 1);
+    CHECK(e.node() == "clip cl_1");
+    e.engine.stop();
+}
+
 namespace {
 // tr_1 (twoAudioClips) armed and monitored with a MIDI input: live,
 // switched by the callback alone in the anticipative engine.

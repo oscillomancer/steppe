@@ -59,6 +59,10 @@ struct EngineTestAccess {
         if (!p || p->rateSwitchDevice == INT64_MIN) return INT64_MIN;
         return p->rateSwitchDevice - p->rateOrigin;
     }
+    static void afterEpochTaken(Engine& e, void (*hook)(void*), void* context) {
+        e.epochTakenForTests_ = hook;
+        e.epochTakenContext_ = context;
+    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;

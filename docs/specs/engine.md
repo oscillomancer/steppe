@@ -1134,8 +1134,10 @@ the same.*
   goes even before the executor's next cycle has taken the relocation,
   and a launch placed meanwhile (stopped, or at a play start before the
   first cycle) is anchored from there too (the in-callback executor once
-  used where it last was, fault E: `Engine::callbackPosition`, and its
-  launch clock's position is stored with the epoch it takes). A capture armed while a launched clip's
+  used where it last was, fault E: `Engine::callbackPosition`; its
+  launch clock's position and its reported position are stored with the
+  epoch it takes, so one made during the cycle that takes it begins there
+  too, round 216 F-C1). A capture armed while a launched clip's
   MIDI note sounds commits that note struck again, at any rate: the
   committed piece starts at the capture's start, inside the note, and the
   arrangement strikes a note held into an item's start at that start, so
