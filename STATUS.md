@@ -451,14 +451,20 @@ instructions are in `docs/guides/installing.md`.
       playing (to be marked: an exact replay needs pre-roll from the
       note's start with every instrument's state, the open pre-roll item),
       or (E, in-callback) after being switched on while stopped and a seek
-      while stopped (it keeps the old start and spans the jump). Also open:
-      (G) on a loop change while playing, or a pause and play with no
-      block between, the in-callback executor's instruments sound on
+      while stopped (it keeps the old start and spans the jump), or at a
+      play start before the callback has played the epoch (it starts where
+      the stop was, before the seeks while stopped); (F5, anticipative,
+      with a live input) a capture switched on while playing after a
+      relocation starts at its stream frame, not its song position. Also
+      open: (G) on a loop change while playing, or a pause and play with
+      no block between, the in-callback executor's instruments sound on
       (a held MIDI note) where the anticipative executor and the replay
       start silent; (H) in-callback, a live Notes feed's gate holds its
-      value from before a pause for the first block after the play; the
-      executors' last 64 frames before a seek differed once (the channel
-      shift; not yet traced).
+      value from before a pause after the play, for the first block or
+      until a note sounding there ends. The sequence test compares each
+      epoch and capture after the frames its class covers. Not yet traced:
+      the executors' last 64 frames before a seek differed once (the
+      channel shift).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

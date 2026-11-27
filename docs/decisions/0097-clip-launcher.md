@@ -1439,6 +1439,12 @@ fault the hold's timing exposed: a renderer leave settling with its end unknown 
 ring holds) took back a switch whose slot had since been reused, though reuse means it was heard;
 such a record now stays.
 
+Round 211 (2026-11-27): the play-start misses are counted on the path the journey's launch took, a
+committed launch passed and voided, besides the two the hold makes unreachable. A settle needs no
+locate of its own (the take-back relocates each node it restores). With the hold, round 207's
+handling of a launch the renderer passed while its leave was pending can no longer be reached and is
+kept as a fallback.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

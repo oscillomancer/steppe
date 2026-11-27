@@ -2809,7 +2809,6 @@ std::uint64_t Engine::relocate(std::uint64_t previous) {
         detail::locateClass(*plan_, pos_, false);
         resetOwned(processing_, plan_);
     }
-    rendererLocatedFresh_ = true;
     epochStartLocal_ = pos_;
     epochStart_.store(pos_);
     streamLocal_ = 0;
@@ -2966,6 +2965,9 @@ void Engine::rendererLoop(std::uint64_t seen) {
         const auto event = rendererEvent_.load(std::memory_order_acquire);
         if (rendererQuit_.load(std::memory_order_acquire)) break;
         rendererWakeAt_.store(INT64_MAX);
+        // Held only while in the hold's wait below: a pass leaving it by
+        // another way (a relocation, a stop, no room) is not held (round 211).
+        rendererLaunchHeld_.store(false, std::memory_order_release);
         if (playing_ && plan_ && plan_->split && !plan_->feedsCallback()) {
             // Everything is live: nothing to render. Stay one render-ahead
             // span past what the callback played, so that a plan giving the
@@ -3052,7 +3054,6 @@ void Engine::rendererLoop(std::uint64_t seen) {
             if (want && plan_) {
                 detail::locateClass(*plan_, pos_, false);
                 resetOwned(processing_, plan_);
-                rendererLocatedFresh_ = true;
             }
             reportedPlaying_.store(playing_);
             notifyMain();
@@ -3120,7 +3121,6 @@ void Engine::rendererLoop(std::uint64_t seen) {
                           std::chrono::steady_clock::now() + rendererSafetyTimeout());
             continue;
         }
-        rendererLaunchHeld_.store(false, std::memory_order_release);
         auto renderFrames = block;
         if (queuedRate && plan != plan_ && plan->handEpoch == seen && plan->rateSeekSequence == 0 &&
             plan->handAt > streamLocal_)
@@ -3132,7 +3132,6 @@ void Engine::rendererLoop(std::uint64_t seen) {
         std::uint32_t n = detail::rateUntil(*plan_, pos_, renderFrames, loopR_,
                                             0);                  // no chunk crosses a loop wrap
         n = launchesAt(*plan_, 0, seen, streamLocal_, n, true);  // or a launch
-        rendererLocatedFresh_ = false;
         const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         const bool ok = [&] {
             BenchProbe::Timer timer(options_.benchProbe, false, n);

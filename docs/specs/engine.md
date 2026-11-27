@@ -710,10 +710,10 @@ the same.*
     heard (`dropout`); the launch still switches at its frame. A launch
     placed at a play start (`LaunchSlot::playStart`) is never missed and
     placed again a bar later; a path that misses one all the same counts
-    it (`launchPlayStartMissed_`, by path: publishing, or an executor
-    passing it undecided) and marks the capture. A leave settling before
-    the renderer has rendered anything since its locate locates again after
-    the take-back, as a direct relocation takes back before its locate. A
+    it (`launchPlayStartMissed_`, by path: publishing, an executor passing
+    it undecided, or an executor passing it committed so that it is voided
+    and placed again, the path the journey's launch took before the hold)
+    and marks the capture. A
     record whose slot has since been reused is never taken back: a slot is
     free again only once its launch is known heard (round 209: with the
     leave's end unknown after more epochs than the ring holds, such a heard
@@ -730,7 +730,11 @@ the same.*
     queued until then (an applied launch heard by the callback, or of an
     ended epoch, that an executor has not switched). The renderer passing
     such a launch's frame marks the late span whether or not anything was
-    applied ahead (round 207).
+    applied ahead (round 207). Since the hold (round 209) no path passes
+    such a launch while playing: the renderer holds before it, and the
+    callback, playing only what was rendered, cannot switch it first; the
+    renderer's pass for an all-live plan has no targets of its own. These
+    rules are kept as the fallback should one (round 211).
   - **A slot's lifetime** (round 205): a launch takes a free slot, or one
     whose launch every executor is done with and whose switch is known
     heard: in its epoch once the callback has played past its key, after

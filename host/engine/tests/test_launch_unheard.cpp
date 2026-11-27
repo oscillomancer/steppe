@@ -1091,6 +1091,11 @@ TEST_CASE(
                 const Engine::LaunchRequest r = request("tr_1", c.last);
                 REQUIRE(e.engine.launch(std::span(&r, 1), c.quantize));
             }
+            // Before any service, launch.state lists the newest launch on tr_1
+            // only: one it replaced is not (round 209 F2).
+            for (const auto& waiting : e.engine.launchesPending())
+                if (waiting.request.track == id("tr_1"))
+                    CHECK(waiting.request.clip.str() == newest);
             e.engine.service();
             e.run(e.done + 400);
             e.run(e.done + 3500);  // past the next bar
@@ -1231,8 +1236,7 @@ TEST_CASE(
                 CHECK_FALSE(capture->facts.launchUnsettled);
                 CHECK_FALSE(capture->facts.dropout);
                 CHECK(e.engine.anticipationMisses() == 0);
-                CHECK(EngineTestAccess::playStartMissed(e.engine, 0) == 0);
-                CHECK(EngineTestAccess::playStartMissed(e.engine, 1) == 0);
+                CHECK(EngineTestAccess::playStartMissed(e.engine) == 0);
                 const auto log = e.engine.launchLog();
                 INFO("log:" << describe(log));
                 int cl1 = 0;
@@ -1247,5 +1251,156 @@ TEST_CASE(
                 e.engine.stop();
             }
         }
+    }
+}
+
+TEST_CASE(
+    "a newest launch an edit makes unplayable cancels only itself: a replaced launch that was "
+    "heard plays on, an unheard one stays dropped (round 209 F1)" *
+    doctest::description("rt")) {
+    // tr_1 cl_1 launched, run 1, 6 or 200 cycles (heard or not, by executor:
+    // the renderer applies it ahead), a seek, then the newest launch on Bar:
+    // tr_1 cl_2 alone or with tr_2 cl_4, and cl_2 removed by an edit before
+    // any service. Whatever was heard of cl_1 keeps playing (the log says
+    // whether it was), what was not stays dropped (the arrangement), and the
+    // dropped cl_2 takes nothing else with it: tr_2 still switches to cl_4.
+    Project p;
+    twoAudioClips(p);
+    p.run("track.add", R"({"name": "Second"})");
+    for (const char* scene : {"sc_1", "sc_2"}) {
+        auto args = j(R"({"track": "tr_2"})");
+        args["scene"] = scene;
+        args["audio_file"] = p.ramp((std::string("tr2-") + scene + ".wav").c_str(), 36000).string();
+        p.runArgs("clip.add", args);
+    }
+    const model::Session s = p.app->head();
+    for (const bool ahead : {false, true})
+        for (const int cycles : {1, 6, 200})
+            for (const bool both : {false, true}) {
+                INFO(std::string(ahead ? "anticipative" : "in-callback")
+                     << ", " << cycles << " cycles before the seek"
+                     << std::string(both ? ", with tr_2" : ""));
+                Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback,
+                         32, 48000 * 12);
+                e.engine.play();
+                e.run(20);
+                e.engine.service();
+                const std::uint64_t before = EngineTestAccess::epoch(e.engine);
+                const Engine::LaunchRequest r1 = request("tr_1", "cl_1");
+                REQUIRE(e.engine.launch(std::span(&r1, 1), model::LaunchQuantize::None));
+                e.run(e.done + cycles);
+                e.engine.seek(2.5);
+                e.run(e.done + 2);
+                std::vector<Engine::LaunchRequest> newest{request("tr_1", "cl_2")};
+                if (both) newest.push_back(request("tr_2", "cl_4"));
+                auto placed = e.engine.launch(newest, model::LaunchQuantize::Bar);
+                for (int again = 0; !placed && placed.error().code == "launch.later" && again < 8;
+                     ++again) {
+                    e.run(e.done + 1);
+                    placed = e.engine.launch(newest, model::LaunchQuantize::Bar);
+                }
+                REQUIRE(placed);
+                p.run("clip.remove", R"({"clip": "cl_2"})");
+                REQUIRE(e.engine.load(p.app->head(), p.app->projectDir()));
+                e.run(e.done + 2);
+                e.engine.service();
+                e.run(e.done + 400);
+                e.engine.service();
+                e.run(e.done + 3500);  // past the next bar
+                e.engine.service();
+                bool heard = false;
+                for (const LaunchLogEntry& le : e.engine.launchLog())
+                    if (le.track == id("tr_1") && le.clip == id("cl_1") && le.epoch == before)
+                        heard = true;
+                INFO("cl_1 heard: " << heard << "; log tr_1 " << tr1From(e.engine, 0));
+                if (cycles == 200) CHECK(heard);  // both executors heard it by then
+                CHECK(e.plays() == std::string(heard ? "clip cl_1" : "arrangement"));
+                CHECK(e.node() == e.plays());
+                CHECK(tr1From(e.engine, 0).find("cl_2") == std::string::npos);
+                if (both) {
+                    std::string tr2;
+                    for (const auto& t : e.engine.launchState())
+                        if (t.track == id("tr_2") && t.plays == Engine::TrackLaunch::Plays::Clip)
+                            tr2 = t.clip.str();
+                    CHECK(tr2 == "cl_4");
+                }
+                CHECK(e.engine.launchesPending().empty());
+                CHECK(EngineTestAccess::slotsHeld(e.engine) == 0);
+                e.engine.stop();
+                REQUIRE(p.app->undo());  // cl_2 back for the next case
+            }
+}
+
+TEST_CASE(
+    "a launch frees the launches still waiting on its track, and launch.state lists only it, "
+    "with the renderer's leave held late too (round 209 F2)" *
+    doctest::description("rt")) {
+    // cl_1 then cl_2 on Bar on tr_1 with no cycle between: one slot held
+    // (cl_2 takes cl_1's waiting slot), only cl_2 listed and played. Then,
+    // anticipative with the renderer's leave held late: cl_1 unquantized,
+    // applied ahead by the renderer, a seek (its leave pending, so cl_1 is
+    // neither heard nor voided yet, and cl_2 cannot free it), and cl_2 on
+    // Bar: launch.state lists cl_2 alone, not cl_1 it replaced, and cl_2
+    // plays.
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    const auto tr1Waiting = [](const Engine& engine) {
+        std::string out;
+        for (const auto& w : engine.launchesPending())
+            if (w.request.track == id("tr_1"))
+                out += (out.empty() ? "" : " ") + w.request.clip.str();
+        return out;
+    };
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 8);
+        e.engine.play();
+        e.run(20);
+        e.engine.service();
+        (void)e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar);
+        const Engine::LaunchRequest r2 = request("tr_1", "cl_2");
+        REQUIRE(e.engine.launch(std::span(&r2, 1), model::LaunchQuantize::Bar));
+        CHECK(EngineTestAccess::slotsHeld(e.engine) == 1);
+        CHECK(tr1Waiting(e.engine) == "cl_2");
+        e.run(e.done + 3500);  // past the bar
+        e.engine.service();
+        CHECK(e.plays() == "clip cl_2");
+        CHECK(tr1From(e.engine, 0) == "cl_2");
+        e.engine.stop();
+    }
+    {
+        INFO("anticipative, the renderer's leave held late");
+        Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 8);
+        e.engine.play();
+        e.run(20);
+        e.engine.service();
+        EngineTestAccess::rendererLeaveLate(e.engine, true);
+        const Engine::LaunchRequest r1 = request("tr_1", "cl_1");
+        REQUIRE(e.engine.launch(std::span(&r1, 1), model::LaunchQuantize::None));
+        // Applied ahead by the renderer, not yet heard (by condition, a cycle
+        // at a time; its switch is about 140 cycles ahead of the callback).
+        for (int i = 0; i < 20 && !EngineTestAccess::appliedAhead(e.engine, id("tr_1").n); ++i)
+            e.run(e.done + 1);
+        REQUIRE(EngineTestAccess::appliedAhead(e.engine, id("tr_1").n));
+        e.engine.seek(2.5);
+        e.run(e.done + 2);
+        REQUIRE(EngineTestAccess::leavePending(e.engine));
+        const Engine::LaunchRequest r2 = request("tr_1", "cl_2");
+        auto placed = e.engine.launch(std::span(&r2, 1), model::LaunchQuantize::Bar);
+        for (int again = 0; !placed && placed.error().code == "launch.later" && again < 8;
+             ++again) {
+            e.run(e.done + 1);
+            placed = e.engine.launch(std::span(&r2, 1), model::LaunchQuantize::Bar);
+        }
+        REQUIRE(placed);
+        CHECK(tr1Waiting(e.engine) == "cl_2");
+        EngineTestAccess::rendererLeaveLate(e.engine, false);
+        e.run(e.done + 3500);
+        e.engine.service();
+        CHECK(e.plays() == "clip cl_2");
+        CHECK(e.node() == e.plays());
+        e.engine.stop();
     }
 }

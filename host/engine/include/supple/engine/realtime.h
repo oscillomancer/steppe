@@ -1486,10 +1486,6 @@ class Engine {
     // Renderer-private: the pending leave left switch records behind, so
     // what it renders before settling is marked (round 209).
     bool launchLeaveUndos_ = false;
-    // Renderer-private: nothing rendered since its last locate (a relocation
-    // or a play start): a leave settling then locates again after its
-    // take-back, so what it restored plays from here (round 209).
-    bool rendererLocatedFresh_ = false;
     // The renderer's pending leave settled once the callback's end for it is
     // known: its unheard slots done, its nodes taken back. False while
     // still unknown.
@@ -1505,8 +1501,10 @@ class Engine {
     std::atomic<bool> rendererLaunchHeld_{false};  // holding so (awaitRendered: as full)
     // A launch placed at a play start that was missed all the same, by the
     // path that missed it: [0] publishing (a horizon past it), [1] an
-    // executor passing it undecided (round 209; expected 0).
-    std::array<std::atomic<std::uint64_t>, 2> launchPlayStartMissed_{};
+    // executor passing it undecided, [2] an executor passing it committed,
+    // so it is voided and placed again (the path the journey's launch took
+    // before round 209; round 211 F1). Expected 0.
+    std::array<std::atomic<std::uint64_t>, 3> launchPlayStartMissed_{};
     void playStartMissed(int path) SUPPLE_RT;
     // Counted where a verdict came late or had to be taken as unheard (a
     // renderer that went on before the callback left the epoch, an end

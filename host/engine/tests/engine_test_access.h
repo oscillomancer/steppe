@@ -99,6 +99,17 @@ struct EngineTestAccess {
             n += !e.slotReusable(s, s.state.load(), current, plan);
         return n;
     }
+    // Whether a launch on track `track` (its id's number) is applied, and
+    // the callback has not yet played to its key.
+    static bool appliedAhead(const Engine& e, std::uint32_t track) {
+        const std::uint64_t current = e.epoch_.load();
+        const detail::Plan* plan = e.latestPlan_.load();
+        for (const Engine::LaunchSlot& s : *e.launchSlots_)
+            if ((s.state.load() & 7) == Engine::LaunchSlot::kApplied && s.track.load() == track &&
+                s.epoch.load() == current && e.slotKey(s, plan) >= e.playedStream(current))
+                return true;
+        return false;
+    }
     // The slots whose switch is still ahead: waiting to apply, or applied in
     // the running epoch at or past what the callback has played.
     static std::size_t slotsAhead(const Engine& e) {
@@ -265,8 +276,12 @@ struct EngineTestAccess {
     static bool rendererLaunchHeld(const Engine& e) { return e.rendererLaunchHeld_.load(); }
     // What the listener has played of the current epoch.
     static std::int64_t playedStream(const Engine& e) { return e.playedStream(e.epoch_.load()); }
-    static std::uint64_t playStartMissed(const Engine& e, int path) {
-        return e.launchPlayStartMissed_[std::size_t(path)].load();
+    // Launches placed at a play start that were missed all the same, on
+    // every path (round 209, round 211 F1).
+    static std::uint64_t playStartMissed(const Engine& e) {
+        std::uint64_t n = 0;
+        for (const auto& c : e.launchPlayStartMissed_) n += c.load();
+        return n;
     }
     // A track's channel's shift in the latest plan (its launches' switch
     // frame is their target plus it).

@@ -637,7 +637,10 @@ std::vector<Engine::LaunchPending> Engine::launchesPending() const {
         const auto st = status(s.state.load(std::memory_order_acquire));
         // (Or applied, heard by the callback or in an ended epoch, and still
         // waiting for an executor to switch its targets: a renderer whose
-        // leave is held late has not switched them yet; round 207.)
+        // leave is held late has not switched them yet; round 207. A
+        // fallback since round 209: such a renderer holds before them, and
+        // the callback plays only what it rendered, so cannot apply one
+        // first.)
         const std::uint8_t need = s.required.load(std::memory_order_relaxed);
         const std::uint64_t slotEpoch = s.epoch.load(std::memory_order_relaxed);
         const std::uint64_t now = epoch_.load(std::memory_order_acquire);
@@ -801,15 +804,9 @@ bool Engine::settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SU
     takeBackNodes(p, liveClass, left, *end);
     markLeft(1, left, left + 1);
     launchLateEnd_.store(stream, std::memory_order_release);
-    // Settled before rendering anything since its locate (as at a play
-    // start it held for): what was taken back is located here as a direct
-    // relocation's take-back is, before its locate (round 209: else the
-    // restored players kept the epoch before's state, and a launch at the
-    // play start crossfaded from it).
-    if (rendererLocatedFresh_) {
-        detail::locateClass(p, pos_, false);
-        resetOwned(processing_, &p);
-    }
+    // (No locate here: takeBackLaunches relocates each node it restores, and
+    // a renderer settling before it rendered anything since its locate, as
+    // at a play start it held for, has nothing else to clear; round 211 F2.)
     return true;
 }
 
@@ -875,7 +872,15 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     // The renderer's leave of an epoch the callback had not left (its wait
     // timed out) waits for the callback's end: until then nothing applies
     // and nothing is taken back (round 201 F2), and such a block does not
-    // count as run (what it passed it did not switch: round 207).
+    // count as run (what it passed it did not switch: round 207). Since
+    // round 209 the renderer holds before the first frame of any launch of
+    // its epoch it has not switched (launchHeldByLeave), so it passes none
+    // here; only its pass for an all-live plan, which has no targets of its
+    // own, does not hold; and the callback, playing only what was rendered,
+    // cannot apply such a launch before it. What follows for a passed launch
+    // (not counted as run, the late mark, the switch at its next block, and
+    // launch.state calling it queued) is kept as the fallback should a path
+    // pass one (round 211 F2).
     if (renderer && launchLeavePending_ != UINT64_MAX && !settleLeave(p, liveClass, stream)) {
         // Rendering with switches the listener may not have heard still in
         // place: these frames are not as heard (round 209: marked here, as
@@ -1085,7 +1090,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         // late until the callback's end is known): switched now, at this
         // block, as a relocation switches (playing by its phase from here,
         // as the other executor's targets do), so no target of it is left
-        // behind (round 207).
+        // behind (round 207). A fallback since round 209: a renderer whose
+        // leave is pending holds before such a launch (launchHeldByLeave).
         if (was == LaunchSlot::kApplied && allPassed && !due) {
             apply([&](std::int64_t at) { return at < stream; }, true);
             launchDone(slot, mine);
@@ -1112,6 +1118,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             if (passed || lacking) {
                 if (slot.state.compare_exchange_strong(st, with(st, LaunchSlot::kVoided))) {
                     launchesQueued_.fetch_sub(1, std::memory_order_acq_rel);
+                    if (passed && slot.playStart.load(std::memory_order_relaxed))
+                        playStartMissed(2);
                     notifyMain();
                 }
                 continue;
