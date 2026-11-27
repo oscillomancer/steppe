@@ -1023,13 +1023,15 @@ instructions are in `docs/guides/installing.md`.
   chain's run starts with its track's (a seek, a pause and play, a loop
   wrap: every offset sent at the first frame), so from a song position off
   the 32-frame grid it plays as the offline render from there; one that
-  does not run then keeps to the grid when it first does. Open: a capture
-  switched on while playing, or replayed from inside a run it does not
-  restart (a loop change, a pause and play with no block between),
-  restarts the rack's Mod Outs at 0 in its offline replay, where live
-  keeps their history, so a modulated chain's frames up to the next grid
-  point differ while the capture says as heard (the launch sequence
-  test's class C); and an FX moved from another track inside a plan an
+  does not run then keeps to the grid when it first does. A capture
+  switched on while playing replays with the rack's Mod Outs restarted at
+  0, where live keeps their history, so a modulated chain's frames up to
+  the next grid point can differ; it says `began_mid_run`. Open: at a loop
+  change while playing, or a pause and play with no block between, the
+  in-callback executor keeps the modulation history where the
+  anticipative executor and the replay restart it, so the executors
+  differ there up to the next grid point (the launch sequence test's
+  class C; review round 215 F-B1, with G and H); and an FX moved from another track inside a plan an
   adoption brings after a locate (a new stage, the same instance) plays
   the value it was sent before for up to 19 frames, to the next grid
   point (review round 213). A route
