@@ -109,6 +109,12 @@ std::string itemEditFingerprint(const Session& s, std::span<const Id> selected) 
             ids.insert(entry.id);
     for (const auto& entry : s.autoItems)
         if (ids.contains(entry.value->envelope)) ids.insert(entry.id);
+    // The modulation routes into its take FX (ADR-0096 M5): an exact bake is
+    // stale once one is added, removed or changed, its source included, as
+    // freezeDependencyHash has it for a freeze.
+    for (const auto& entry : s.modulations)
+        if (entry.value->target.object.kind == Kind::Fx && ids.contains(entry.value->target.object))
+            ids.insert(entry.id);
     std::map<Id, Id> remap;
     Counters counters;
     for (Id id : ids) remap[id] = Id{id.kind, ++counters[id.kind]};
@@ -141,6 +147,15 @@ std::string itemEditFingerprint(const Session& s, std::span<const Id> selected) 
     append(s.midi);
     append(s.envelopes);
     append(s.autoItems);
+    // A route's lane is the GUI's, not its sound; its source module is not
+    // remapped: it lies outside the print, like a sidechain's source.
+    for (const auto& entry : s.modulations)
+        if (ids.contains(entry.id)) {
+            auto modulation = toJson(*entry.value);
+            modulation.asObject().erase("lane");
+            value.push_back(remap.at(entry.id).str());
+            value.push_back(remapIds(modulation, schemaOf<Modulation>().jsonSchema(), remap));
+        }
     return "sha256:" + sha256Hex(json::writeCompact(value));
 }
 }  // namespace supple::model

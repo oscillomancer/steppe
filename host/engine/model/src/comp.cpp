@@ -245,6 +245,8 @@ bool joinablePieces(const Session& s, Id left, Id right) {
             const auto* p = s.fx.find(x->chain[f]);
             const auto* q = s.fx.find(y->chain[f]);
             if (!p || !q || toJson(*p) != toJson(*q)) return false;
+            // Nor routes that differ: a join must not drop one (ADR-0096 M5).
+            if (!sameModulations(s, x->chain[f], y->chain[f])) return false;
         }
         for (const auto& e : s.envelopes) {
             const Id object = e.value->target.object;

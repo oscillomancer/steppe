@@ -56,6 +56,12 @@ struct ModListArgs {
 struct FedBy {
     std::string module, output, type;
 };
+// Where a take FX target is (ADR-0096 M5): its take, and the item or clip.
+struct ModOwner {
+    std::optional<std::string> item, clip;
+    std::string take;
+};
+
 struct ModEntry {
     std::string modulation;
     SourceArg source;
@@ -64,8 +70,10 @@ struct ModEntry {
     bool enabled = true, lane = true;
     std::string range;  // bipolar (-1..1) or unipolar (0..1)
     std::vector<FedBy> fedBy;
-    std::optional<std::string> inert;       // why the plan cannot apply it: source, target, latency
+    std::optional<std::string> inert;  // why the plan cannot apply it: source, target, envelope,
+                                       // latency, take
     std::optional<std::string> param_name;  // a plug-in target's display name
+    std::optional<ModOwner> owner;          // a take FX target's take and item or clip
 };
 
 struct ModList {
@@ -367,10 +375,13 @@ Status checkRoute(EngineApp& app, const model::Session& s, model::Modulation& m,
         if (!fx)
             return refused("modulation.target", "no " + target.str(), "/target/fx",
                            "fx.list names the plug-ins on each track");
-        if (!model::trackOfChainFx(s, target))
+        if (!model::trackOfChainFx(s, target) && !model::trackOfTakeFx(s, target))
             return refused("modulation.target",
-                           target.str() + " is not in a track's chain or input chain", "/target/fx",
-                           "modulate an FX on a track; take FX and a rack's plug-ins come later");
+                           target.str() +
+                               " is not in a track's chain, input chain or a take's "
+                               "chain",
+                           "/target/fx",
+                           "modulate an FX on a track or a take; a rack's plug-ins come later");
         if (auto owner = model::frozenOwner(s, target))
             return model::frozenError(s, *owner, "/target");
         auto found = modulatableParam(app, *fx, param, ambiguity);
@@ -424,6 +435,28 @@ Status checkRoute(EngineApp& app, const model::Session& s, model::Modulation& m,
                            "/target",
                            "change " + e.id.str() + "'s depth with modulation.set instead");
     return {};
+}
+
+// What checkRoute and checkCycle answer (modulation.add, modulation.set and,
+// through modulation.add, modulate); `add` adds the route limit.
+std::vector<cmd::ErrorSpec> routeErrors(bool add) {
+    std::vector<cmd::ErrorSpec> out = {
+        {"modulation.source", "the source is not a Mod Out module",
+         "use rack.get to find the rack's Mod Out, or add one with module.add"},
+        {"modulation.target", "the target is missing, not one object, or not modulatable",
+         "check fx.describe or the track's params, and name one fx, track or route"},
+        {"modulation.envelope", "the parameter takes routes through an envelope it lacks",
+         "add one with env.add, or use modulate, which adds it"},
+        {"modulation.depth", "the depth is outside the target's range",
+         "-1..1 for a plug-in parameter, -48..48 dB for volume, -200..200 % for pan or width"},
+        {"modulation.duplicate", "the same source already reaches that parameter",
+         "change that route's depth with modulation.set instead"},
+        {"modulation.cycle", "the route would let its rack hear what it modulates",
+         "modulate another track, or remove the send into the rack's In module"}};
+    if (add)
+        out.push_back({"modulation.limit", "the project holds the most routes it can",
+                       "remove routes you no longer need with modulation.remove"});
+    return out;
 }
 
 // After the edit: a cycle is the model's to find; say it at the target.
@@ -480,6 +513,8 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Route a rack's Mod Out to a plug-in parameter or mixer level.";
         c.description =
+            "The plug-in sits in a track's chain or input chain, or in a take's chain (an "
+            "item's or a clip's: copies of the take keep the route). "
             "depth is the offset at a signal of 1: for a plug-in parameter a fraction of its "
             "CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset "
             "directly; one marked modulatable_by_envelope (automatable, continuous, not "
@@ -515,6 +550,7 @@ void registerModulationCommands(cmd::Registry& registry) {
                              "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})"),
                        j(R"({"modulation": "mr_1", "param": "gain", "param_name": "<any>"})"),
                        "song_with_mod_out"}};
+        c.errors = routeErrors(true);
         c.run = [](const ModAddArgs& a, Context& ctx) -> Result<ModAdded> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -602,6 +638,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.result = emptySchema();
         c.examples = {{"Deepen", j(R"({"modulation": "mr_1", "depth": 0.5})"), j("{}"),
                        "song_with_modulation"}};
+        c.errors = routeErrors(false);
         c.run = [](const ModSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -664,9 +701,13 @@ void registerModulationCommands(cmd::Registry& registry) {
             "cannot apply it, inert: source (nothing is cabled into the input), target (the "
             "parameter cannot take it, or the target's track is frozen and its level is "
             "outside the print), envelope (a parameter reached through its envelope, which is "
-            "gone or off) or latency (its "
+            "gone or off), latency (its "
             "plug-in changed latency while modulated; editing a route into it turns them back "
-            "on).";
+            "on) or take (its plug-in is in the chain of a take that does not play: not its "
+            "item's or clip's active take, or its item is muted; in a comp, each piece's copy of "
+            "a take answers for that piece). owner: for a plug-in in a take's chain, the item or "
+            "clip and the take that "
+            "hold it; track lists those too.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModListArgs>("modulation_list_args")
                      .field("track", &ModListArgs::track, idArg("tr", "Target track"))
@@ -693,6 +734,13 @@ void registerModulationCommands(cmd::Registry& registry) {
                 .field("inert", &ModEntry::inert, schema::string())
                 .field("param_name", &ModEntry::param_name,
                        schema::string().doc("A plug-in target's display name."))
+                .field("owner", &ModEntry::owner,
+                       schema::object<ModOwner>("modulation_owner")
+                           .field("item", &ModOwner::item, schema::string())
+                           .field("clip", &ModOwner::clip, schema::string())
+                           .field("take", &ModOwner::take, schema::string())
+                           .build()
+                           .doc("A take FX target's take, and the item or clip that holds it"))
                 .build();
         c.result = schema::object<ModList>("modulation_list")
                        .field("modulations", &ModList::modulations, schema::arrayOf(entry))
@@ -771,7 +819,19 @@ void registerModulationCommands(cmd::Registry& registry) {
                     if (const model::FxInstance* f = s.fx.find(m.target.object))
                         if (auto found = modulatableParam(app, *f, m.target.param))
                             row.param_name = found->info.name;
-                    if (app.instances().modulationDisabled(m.target.object))
+                    const auto where = model::takeFxOwner(s, m.target.object);
+                    if (where) {
+                        ModOwner owner;
+                        (where->owner.kind == model::Kind::Clip ? owner.clip : owner.item) =
+                            where->owner.str();
+                        owner.take = where->take.str();
+                        row.owner = std::move(owner);
+                    }
+                    // A take the engine does not play first: the plan binds
+                    // nothing for it, so no other reason can arise (M5).
+                    if (where && !model::takeFxPlays(s, *where))
+                        row.inert = "take";
+                    else if (app.instances().modulationDisabled(m.target.object))
                         row.inert = "latency";
                     else if (const std::string why = unplayable(m.target); !why.empty())
                         row.inert = why;
@@ -846,8 +906,18 @@ void registerModulationCommands(cmd::Registry& registry) {
                              "rack": "rk_1", "module": "mo_3", "mod_out": "mo_2",
                              "input": "in_1"})"),
                        "song_with_mod_out"}};
-        c.errors = {{"modulation.cycle", "a follower on a track the target feeds",
-                     "listen to another track, or modulate a buss it feeds"}};
+        // Its route goes through modulation.add, so it answers what that does
+        // but modulation.envelope (it adds the envelope first); a follower on
+        // a track the target feeds is its own cycle.
+        c.errors = routeErrors(true);
+        std::erase_if(c.errors,
+                      [](const cmd::ErrorSpec& e) { return e.code == "modulation.envelope"; });
+        for (cmd::ErrorSpec& e : c.errors)
+            if (e.code == "modulation.cycle")
+                e = {"modulation.cycle",
+                     "the route, or a follower on a track the target feeds, "
+                     "would let the rack hear what it modulates",
+                     "listen to another track, or modulate a buss it feeds"};
         c.run = [](const ModulateArgs& a, Context& ctx) -> Result<Modulated> {
             EngineApp& app = engine::app(ctx);
             const auto nested = [&](const char* name, json::Value args,

@@ -7,6 +7,7 @@
 #include "supple/model/groups.h"
 #include "supple/model/item_edits.h"
 #include "supple/model/schemas.h"
+#include "supple/model/session.h"
 
 namespace supple::model {
 namespace {
@@ -140,6 +141,16 @@ Status sameTake(const Session& s, const Take& first, const Take& previous, const
     for (std::size_t i = 0; i < first.chain.size(); ++i)
         if (toJson(*s.fx.find(first.chain[i])) != toJson(*s.fx.find(current.chain[i])))
             return incompatible("stored take FX states or settings differ", "item.heal_fx");
+    // Their modulation routes must match too, or the join would drop the
+    // right-hand ones (ADR-0096 M5); consolidating would not help here.
+    for (std::size_t i = 0; i < first.chain.size(); ++i)
+        if (!sameModulations(s, first.chain[i], current.chain[i]))
+            return Error("item.heal_fx",
+                         "the modulation routes into " + first.chain[i].str() + " and " +
+                             current.chain[i].str() + " differ",
+                         "/items",
+                         "make the routes match with modulation.set or modulation.remove "
+                         "(modulation.list {fx})");
     return {};
 }
 }  // namespace

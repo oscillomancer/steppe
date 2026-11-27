@@ -178,7 +178,11 @@ a consumer reads a path as text and never resolves it against the input.
 Successful replies may have a `warnings` array. After validating the raw
 handler result and committing any transaction, dispatch appends each
 `Context::warn()` diagnostic, including argument-decoder warnings, as
-`{code: string, message: string, path: string}`. The path is preserved as
+`{code: string, message: string, path: string}`, with `reason: string`
+where the warning's code names its causes: a short fixed word for this
+cause, listed with the code (session-model.md for `modulation.not_copied`
+and `modulation.removed`), so a client branches on it rather than on the
+message. It is left out when empty. The path is preserved as
 supplied: decoder JSON Pointers are relative to the arguments object;
 handler paths identify arguments or documents as that command describes.
 An empty path is global, and non-pointer source positions are unchanged.

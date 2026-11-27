@@ -264,6 +264,9 @@ struct EngineStatus {
 
 struct RecordingWarning {
     std::string code, message, path, hint, track, file;
+    // The cause, where the code names its causes (modulation.not_copied:
+    // session-model.md), written as its word.
+    std::optional<model::RouteWarningReason> reason = std::nullopt;
 };
 
 struct RecordedInfo {
@@ -1469,8 +1472,33 @@ class EngineApp : public cmd::Host {
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already
 // have a new source/offset; `shift` clips its item-relative envelopes for a split.
+// The modulation routes into its FX are copied onto the copies (ADR-0096 M5),
+// after the envelopes, in the originals' id order, and noted on the
+// transaction (EditTxn::copiedRoute) for settleCopiedRoutes.
 Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, model::Id original,
                            model::Take copy, double shift = 0);
+// Copies each route of `source` whose target is an FX among `fx`'s keys onto
+// that FX's copy, its value (ADR-0096 M5): the same source, parameter,
+// depth, enabled and lane, in the originals' id order, each noted on the
+// transaction (EditTxn::copiedRoute) for settleCopiedRoutes. Keys that are
+// not FX are skipped. copyTake's last step (take.add {from} copies through
+// copyTake).
+void copyRoutesInto(const model::Session& source, model::EditTxn& txn,
+                    const std::map<model::Id, model::Id>& fx);
+// A route a copy could not keep (ADR-0096 M5): `reason` is source, cycle or
+// limit; `message` names it, the copy's FX and the remedy.
+struct RouteNotCopied {
+    model::Id original, copy;
+    model::RouteWarningReason reason = model::RouteWarningReason::Source;
+    std::string message;
+};
+// Once a command has placed its copies: removes each copied route whose
+// source the destination lacks, then each that closes a cycle, in creation
+// order; with `trimToLimit` (a recording, which is never refused), the
+// copied routes past kMaxModulations too, the last made first.
+// `kept` collects the originals of the copies that stay.
+std::vector<RouteNotCopied> settleCopiedRoutes(model::EditTxn& txn, bool trimToLimit,
+                                               std::vector<model::Id>* kept = nullptr);
 // A copied take gets its own copy of an unpooled MIDI source; audio and
 // pooled MIDI stay shared.
 void unpoolCopiedSource(model::Take& take, const model::Session& s, model::EditTxn& txn);

@@ -4,7 +4,7 @@ Launcher playback: launch scenes and clips, stop, capture, commit.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -418,6 +418,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `item.locked`: a locked item is in the way Hint: unlock it with item.set first
 - `clip.unsupported`: a clip's loop window has no item equivalent Hint: set its loop to the whole content, or off
 - `launch.commit.fade`: a piece would start or end inside a clip's own fade Hint: capture again with the switches and loop wraps outside the clip's fades, or set its fades to 0 (clip.set); the performance is kept
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 

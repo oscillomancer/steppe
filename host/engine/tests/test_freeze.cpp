@@ -691,3 +691,39 @@ TEST_CASE("freeze: a frozen home locks its racks' learn bindings (ADR-0075)") {
     f.run("module.learn.set", "{\"module\":\"" + vca + "\",\"param\":\"level\"," + cc22 + "}");
     f.run("module.learn.remove", "{\"module\":\"" + vca + "\",\"param\":\"level\"}");
 }
+
+TEST_CASE("freeze: a modulated take FX prints as it plays (M5, F10)" * doctest::description("rt")) {
+    // A rack on another channel moves the gain in the item's take chain by
+    // Transport's beat phase: the frozen print equals the unfrozen track's
+    // pre-fader sound, and the route is in the freeze's dependencies.
+    Fixture f;
+    f.run("track.add", R"({"name":"Modulators"})");                // tr_2
+    f.run("rack.add", R"({"track":"tr_2"})");                      // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out"})");    // mo_2
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");  // mo_3
+    f.run("cable.add", R"({"from":"mo_3.beat_phase","to":"mo_2.in_1"})");
+    f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");  // fx_1
+    const auto routed = f.app->head();
+    f.run("modulation.add", R"({"source":{"module":"mo_2","input":"in_1"},
+        "target":{"fx":"fx_1","param":"gain"},"depth":0.3})");
+    const auto before = f.app->head();
+    CHECK(model::freezeDependencyHash(before, track) != model::freezeDependencyHash(routed, track));
+    OfflineSettings played;
+    played.track = track;
+    played.tap = model::Tap::PreFader;
+    played.endSeconds = 2048. / 48000.;
+    played.threads = 1;
+    auto heard = f.app->renderSession(before, played);
+    REQUIRE(heard);
+    auto unmodulated = f.app->renderSession(routed, played);
+    REQUIRE(unmodulated);
+    CHECK_FALSE(bool(heard->audio.channels == unmodulated->audio.channels));
+    auto done = f.run("track.freeze", R"({"track":"tr_1"})");
+    REQUIRE(f.app->head().tracks.find(track)->freeze);
+    auto cached = audio::readAudio(done["path"].asString());
+    REQUIRE(cached);
+    REQUIRE(cached->frames() >= 2048);
+    for (std::size_t c = 0; c < 2; ++c)
+        for (std::size_t i = 0; i < 2048; ++i)
+            REQUIRE(cached->channels[c][i] == heard->audio.channels[c][i]);
+}

@@ -73,7 +73,8 @@ set(_engine_test_sources
   tests/test_clip_player_rate_retry.cpp
   tests/test_launch_capture_kept.cpp tests/test_render_performance.cpp
   tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp
-  tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp
+  tests/test_clip_player_follow.cpp tests/test_clip_player_modulation.cpp tests/test_launch_access.cpp
+  tests/test_scene_section.cpp
   tests/test_scripts.cpp tests/test_strips.cpp
   tests/test_plan_dump.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp
   tests/test_pdc.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_workers.cpp

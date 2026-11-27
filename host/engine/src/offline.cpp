@@ -21,11 +21,14 @@
 #include <set>
 #include <thread>
 
+#include "supple/base/sha256.h"
 #include "supple/base/thread.h"
 #include "supple/clap/semantic_params.h"
 #include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/model/numeric.h"
+#include "supple/model/schemas.h"
+#include "supple/model/versions.h"
 #include "supple/params/params.h"
 #include "supple/time/timeline.h"
 
@@ -158,6 +161,132 @@ Session upstreamSession(const Session& source, Id target) {
     return s;
 }
 }  // namespace
+
+std::string upstreamFingerprint(const Session& source, Id target, const Session* original) {
+    const Session s = upstreamSession(source, target);
+    std::set<Id> ids;
+    for (const auto& e : s.tracks) {
+        ids.insert(e.id);
+        ids.insert(e.value->chain.begin(), e.value->chain.end());
+        ids.insert(e.value->inputChain.begin(), e.value->inputChain.end());
+    }
+    for (const auto& e : s.items) {
+        ids.insert(e.id);
+        for (Id takeId : e.value->takes) {
+            ids.insert(takeId);
+            if (const model::Take* take = s.takes.find(takeId)) {
+                if (take->source) ids.insert(*take->source);
+                ids.insert(take->chain.begin(), take->chain.end());
+            }
+        }
+    }
+    for (const auto& e : s.routes) ids.insert(e.id);
+    for (const auto& e : s.racks) ids.insert(e.id);
+    for (const auto& e : s.modulations) ids.insert(e.id);
+    for (const auto& e : s.modules)
+        if (ids.count(e.value->rack)) {
+            ids.insert(e.id);
+            if (e.value->fx) ids.insert(*e.value->fx);
+        }
+    for (const auto& e : s.cables)
+        if (const auto rack = model::rackOfEnd(s, e.value->from); rack && ids.count(*rack))
+            ids.insert(e.id);
+    for (const auto& e : s.groups)
+        if (std::any_of(e.value->members.begin(), e.value->members.end(),
+                        [&](Id member) { return ids.count(member) != 0; }))
+            ids.insert(e.id);
+    for (const auto& e : s.envelopes)
+        if (ids.count(e.value->target.object)) ids.insert(e.id);
+    for (const auto& e : s.autoItems)
+        if (ids.count(e.value->envelope)) ids.insert(e.id);
+    // The warp peers of each kept take, which the render reads from the
+    // whole view (a bundle shares its synthesis): their takes, items and
+    // media, so a peer's edit shows by construction (review round 193 S1).
+    std::set<Id> peers;
+    for (const auto& e : s.takes)
+        if (ids.count(e.id))
+            for (Id peer : e.value->warpPeers)
+                if (!ids.count(peer) && source.takes.contains(peer)) peers.insert(peer);
+    for (const auto& e : source.items)
+        for (Id take : e.value->takes)
+            if (peers.count(take)) peers.insert(e.id);
+    for (const auto& e : source.takes)
+        if (peers.count(e.id) && e.value->source) peers.insert(*e.value->source);
+    // IDs keep their spelling, but those the private view made itself
+    // (mixView's buss and its routes, absent from `original`), whose numbers
+    // follow counters that unrelated creations move: they take a range no
+    // project reaches, so nothing renumbered can share a spelling with an
+    // ID left as written (review round 193 R1).
+    std::map<Id, Id> remap;
+    if (original) {
+        model::Counters made;
+        const auto exists = [&](Id id) {
+            return original->tracks.contains(id) || original->routes.contains(id) ||
+                   original->fx.contains(id) || original->envelopes.contains(id) ||
+                   original->items.contains(id) || original->takes.contains(id) ||
+                   original->media.contains(id) || original->midi.contains(id) ||
+                   original->groups.contains(id) || original->autoItems.contains(id) ||
+                   original->racks.contains(id) || original->modules.contains(id) ||
+                   original->cables.contains(id) || original->modulations.contains(id);
+        };
+        for (Id id : ids)
+            if (!exists(id)) remap[id] = Id{id.kind, 0x40000000u + ++made[id.kind]};
+    }
+    json::Value value = json::Value::object();
+    value["project"] = model::toJson(*s.project);
+    const auto every = [&](const char* key, const auto& objects) {
+        json::Value list = json::Value::array();
+        for (const auto& e : objects) list.push_back(model::toJson(*e.value));
+        value[key] = std::move(list);
+    };
+    every("tempo", s.tempo);
+    every("meters", s.meters);
+    every("context", s.context);
+    json::Value objects = json::Value::array();
+    const auto append = [&](const auto& map) {
+        using T = typename std::decay_t<decltype(*map.begin()->value)>;
+        for (const auto& e : map)
+            if (ids.count(e.id)) {
+                json::Value one = model::toJson(*e.value);
+                if constexpr (std::is_same_v<T, model::Track>) {
+                    // Its children outside the closure are not read.
+                    json::Value kept = json::Value::array();
+                    for (Id child : e.value->children)
+                        if (ids.count(child)) kept.push_back(child.str());
+                    one["children"] = std::move(kept);
+                }
+                const auto to = remap.find(e.id);
+                objects.push_back((to == remap.end() ? e.id : to->second).str());
+                objects.push_back(model::remapIds(one, model::schemaOf<T>().jsonSchema(), remap));
+            }
+    };
+    const auto appendPeers = [&](const auto& map) {
+        for (const auto& e : map)
+            if (peers.count(e.id)) {
+                objects.push_back(e.id.str());
+                objects.push_back(model::toJson(*e.value));
+            }
+    };
+    append(s.tracks);
+    append(s.groups);
+    append(s.items);
+    append(s.takes);
+    append(s.media);
+    append(s.midi);
+    append(s.fx);
+    append(s.routes);
+    append(s.envelopes);
+    append(s.autoItems);
+    append(s.racks);
+    append(s.modules);
+    append(s.cables);
+    append(s.modulations);
+    appendPeers(source.items);
+    appendPeers(source.takes);
+    appendPeers(source.media);
+    value["objects"] = std::move(objects);
+    return "sha256:" + sha256Hex(json::writeCompact(value));
+}
 
 // --- instance pool ------------------------------------------------------------------
 
@@ -957,6 +1086,15 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         if (watch.abandoned()) return renderCancelled();
         return std::move(prepared).error();
     }
+    // A pool's rack modules outlive a render, and a caller may render from
+    // one pool more than once: the render restarts the modules it took, and
+    // ends their notes, as a locate does, so it plays as from a fresh pool
+    // (its first block runs the restart, on the render's audio thread).
+    for (Node& node : p.nodes)
+        if (node.rack) node.rack->resetModules = node.rack->resetNotes = true;
+    // Its first block starts a run: every modulated parameter is sent there
+    // (an instance from a pool may hold what an earlier render sent it).
+    detail::startModulationRun(p);
     // ADR-0090: a plug-in that fails while the render runs fails the
     // render; one that had failed before keeps its behaviour.
     struct Watched {
@@ -1185,6 +1323,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             Id clip;
             bool early = false;  // its clip chains' input side (Node::launchLead)
             bool warm = false;   // its converter's warm-up (Node::launchWarm, S3 step D)
+            bool enter = false;  // a modulated clip chain's entry (ADR-0096 M5, G1)
         };
         std::vector<Switch> switches;
         // The log's anchors are timeline samples (the live plan counts from
@@ -1240,6 +1379,19 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                         {},
                                         false,
                                         true});
+                // As live: the incoming chain's entry, then its input switch
+                // (ADR-0096 M5, G1). The live delivery clamps each early
+                // frame at 0; the replay's switches before 0 apply at 0 too.
+                if (node.modClipChain && a.kind == detail::LaunchState::Kind::Clip)
+                    switches.push_back(
+                        {e.runningFrame + node.timelineShift - detail::launchEntryLead(node),
+                         k,
+                         a,
+                         -1,
+                         {},
+                         false,
+                         false,
+                         true});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1259,6 +1411,8 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                         detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
                                                 sw.action.kind, sw.clip, sw.action.anchorSample,
                                                 sw.action.anchorBeat);
+                    else if (sw.enter)
+                        detail::preenter(node, sw.action);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else if (sw.warm)  // its running frame, a launchWarm later, unshifted

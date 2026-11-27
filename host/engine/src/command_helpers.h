@@ -103,6 +103,14 @@ struct TextResult {
     std::string text;
 };
 
+// model::kRouteWarningReasons as a string enum (review round 195 F4).
+inline schema::Schema<model::RouteWarningReason> routeWarningReasonSchema() {
+    using R = model::RouteWarningReason;
+    const auto w = [](R r) { return std::pair{r, model::reasonWord(r)}; };
+    return schema::enumeration<R>({w(R::Source), w(R::Cycle), w(R::Limit), w(R::SourceRemoved),
+                                   w(R::TargetRemoved), w(R::SourceUnfit), w(R::TargetUnfit)});
+}
+
 inline schema::Schema<RecordingWarning> recordingWarningSchema() {
     return schema::object<RecordingWarning>("recording_warning")
         .field("code", &RecordingWarning::code, schema::string())
@@ -111,6 +119,7 @@ inline schema::Schema<RecordingWarning> recordingWarningSchema() {
         .field("hint", &RecordingWarning::hint, schema::string())
         .field("track", &RecordingWarning::track, schema::string())
         .field("file", &RecordingWarning::file, schema::string())
+        .field("reason", &RecordingWarning::reason, routeWarningReasonSchema())
         .build();
 }
 

@@ -216,17 +216,18 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
                                   busHeld, busControllers, instance, fx, lanes, laneModRoutes,
-                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch, bypass,
-                                  instrument, autoBypassOnSilence, sleeping, processed,
-                                  inputLatency, rateLive, callbackBypass, wet, appliedWet,
-                                  rampFromWet, rampToWet, wetRampLeft, preserveDryOnLocate, latency,
-                                  dry, out, dryBuf, keyed, keyChannels, key, inPin, outPin, keyPins,
-                                  pinned, chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr,
-                                  auxWritten, blockEvents, voices, pendingVoices, noteSources,
-                                  noteSourceIndex, sourceIds, nextNoteId, releases, voiceDropped,
-                                  modDeferred, outStorage, outEvents, blocks, openGesture,
-                                  openGestures, pdcIgnore, parallel, group, groupEnd, before, align,
-                                  groupIn, groupOut, os, osFilters, osIn, osOut, osKey, osPad] = st;
+                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch,
+                                  modRunStart, bypass, instrument, autoBypassOnSilence, sleeping,
+                                  processed, inputLatency, rateLive, callbackBypass, wet,
+                                  appliedWet, rampFromWet, rampToWet, wetRampLeft,
+                                  preserveDryOnLocate, latency, dry, out, dryBuf, keyed,
+                                  keyChannels, key, inPin, outPin, keyPins, pinned, chanDelay,
+                                  pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten, blockEvents,
+                                  voices, pendingVoices, noteSources, noteSourceIndex, sourceIds,
+                                  nextNoteId, releases, voiceDropped, modDeferred, outStorage,
+                                  outEvents, blocks, openGesture, openGestures, pdcIgnore, parallel,
+                                  group, groupEnd, before, align, groupIn, groupOut, os, osFilters,
+                                  osIn, osOut, osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -266,6 +267,7 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     }
     d.put(a, "modRoutes", st.modRoutes);
     d.put(a, "modEvents", static_cast<std::uint64_t>(st.modEvents));
+    d.put(a, "modRunStart", st.modRunStart);
     d.put(a, "bypass", st.bypass);
     d.put(a, "instrument", st.instrument);
     d.put(a, "autoBypassOnSilence", st.autoBypassOnSilence);
@@ -479,11 +481,12 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
                                   takeChains, players, retiring, launch, launchLead, launchNext,
-                                  launchNextValid, launchFresh, launchReturned, skipLive,
-                                  launchFadeFrames, arrangementGain, arrangementGains, launchBuf,
-                                  launchReaders, launchWarm, launchWarmAt, launchSwitchAt,
-                                  launchSwitchPhase, launchSwitchPending, launchWarmNext,
-                                  launchWarmValid, launchNextKey, launchWarmKey, launchUndos,
+                                  launchNextValid, modClipChain, launchEntry, launchEntryValid,
+                                  launchFresh, launchReturned, skipLive, launchFadeFrames,
+                                  arrangementGain, arrangementGains, launchBuf, launchReaders,
+                                  launchWarm, launchWarmAt, launchSwitchAt, launchSwitchPhase,
+                                  launchSwitchPending, launchWarmNext, launchWarmValid,
+                                  launchNextKey, launchWarmKey, launchEntryKey, launchUndos,
                                   launchUndoCount, launchUndoLostKey, launchUndoLostEpoch,
                                   clipVoices, clipWindow, postItems, itemShift, items, mix,
                                   silentFrom, silentTo, dropItems, noteTarget, volumeDb, pan,
@@ -532,6 +535,9 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     }
     // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
     d.put(a, "launchLead", n.launchLead);
+    // Whether its launches enter a modulated clip chain early (ADR-0096 M5);
+    // launchEntry is state.
+    d.put(a, "modClipChain", n.modClipChain);
     // Its readers on the playrate path (S3): whether the plan made them.
     d.put(a, "launchReaders", n.launchReaders[0].state != nullptr);
     // A pitch-keeping plan's warm-up lead (S3 step D); the warm-up is state.
@@ -632,8 +638,9 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
 // A modulation edge (ADR-0096); its delay's contents are runtime state.
 void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     [[maybe_unused]] const auto& [route, from, to, fromId, toId, modOut, input, target, stage,
-                                  inputStage, clapId, viaLane, depth, enabled, inert, tap, delay,
-                                  preserveDelayOnLocate, values] = e;
+                                  inputStage, takeChain, takeStage, unplayed, clapId, viaLane,
+                                  depth, enabled, inert, tap, delay, preserveDelayOnLocate,
+                                  values] = e;
     d.put(a, "route", e.route);
     d.put(a, "from", static_cast<std::uint64_t>(e.from));
     d.put(a, "to", static_cast<std::uint64_t>(e.to));
@@ -641,6 +648,8 @@ void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     d.put(a, "source", std::array{e.modOut, e.input});
     d.put(a, "target", e.target.object.str() + " " + e.target.param);
     d.put(a, "stage", std::array{e.stage, e.inputStage});
+    d.put(a, "takeStage", std::array{e.takeChain, e.takeStage});
+    d.put(a, "unplayed", e.unplayed);
     d.put(a, "depth", e.depth);
     d.put(a, "enabled", e.enabled);
     d.put(a, "inert", e.inert);

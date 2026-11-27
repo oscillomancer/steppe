@@ -497,8 +497,13 @@ struct ModEdge {
     int input = 0;    // 0 .. kModOutInputs - 1
     model::EnvTarget target;
     // Where the target is: a stage of the node's chain, of its input chain,
-    // or neither (a mixer target).
-    int stage = -1, inputStage = -1;
+    // of one of its take chains (`takeChain`, an index into Node::takeChains,
+    // and `takeStage` in it; ADR-0096 M5), or none of them (a mixer target).
+    int stage = -1, inputStage = -1, takeChain = -1, takeStage = -1;
+    // A take FX target whose take the plan does not play (an inactive take,
+    // an item left out, a clip chain a render without launches dropped): an
+    // edge for order and liveness, `before` 0, with no delay and nothing sent.
+    bool unplayed = false;
     std::uint32_t clapId = 0;  // a plug-in target's parameter, bound by prepare
     // Applied by the parameter's envelope lane, which sends the summed value
     // (ADR-0096 step M4), rather than as PARAM_MOD.
@@ -713,12 +718,19 @@ struct Stage {
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.
     // `modHeard` and `modEpoch`: the instance and its modulationEpoch() the
-    // memo was last checked against; a change marks it stale.
+    // memo was last checked against; a change marks it stale. `modRunStart`:
+    // a run starts at its next block (a restarting locate, a loop wrap, an
+    // offline render's first block: startModulationRun), which sends every
+    // slot at its first frame whatever the grid, so what follows a locate
+    // off the grid is the offline render's from there. A plan's adoption
+    // and a handoff do not set it, and the next block consumes it whether
+    // or not the stage's chain runs or sends.
     std::vector<ModParam> mods;
     std::vector<std::uint32_t> modRoutes;
     std::size_t modEvents = 0;
     const host::Instance* modHeard = nullptr;
     std::uint32_t modEpoch = 0;
+    bool modRunStart = false;
     bool bypass = false, instrument = false;
     bool autoBypassOnSilence = false, sleeping = false, processed = false;
     std::int64_t inputLatency = 0;  // stage input's timeline shift, also corrects output events
@@ -992,6 +1004,10 @@ struct LaunchUndo {
     bool nextValid = false, warmValid = false;
     std::int64_t warmAt = 0;
     std::int64_t nextKey = INT64_MIN, warmKey = INT64_MIN;  // their switch frames
+    // A modulated clip chain's entry (preenter, M5 G1), and its switch frame.
+    LaunchAction entry;
+    bool entryValid = false;
+    std::int64_t entryKey = INT64_MIN;
     bool releaseHeld = false, launchFresh = false, switchPending = false;
     std::int64_t switchAt = INT64_MIN;
     double switchPhase = std::numeric_limits<double>::quiet_NaN();
@@ -1190,6 +1206,15 @@ struct Node {
     std::int64_t launchLead = 0;
     LaunchAction launchNext;
     bool launchNextValid = false;
+    // A modulated clip chain (ADR-0096 M5, round 188 G1): a route edge into a
+    // stage of one of its clip chains, enabled or not, decided at compile. A
+    // launch then reaches the node kAutomationStep frames before its lead as
+    // well (`launchEntry`, preenter): the incoming clip's chain is entered
+    // there and runs on silence until its input switches (launchNext), so
+    // its first grid point falls before the onset at any block size.
+    bool modClipChain = false;
+    LaunchAction launchEntry;
+    bool launchEntryValid = false;
     // A launch applied at this block's start (applyLaunch): on a playrate
     // plan its first frame takes the clip's notes from the anchor on, which
     // may lie behind the previous frame's song position (S3).
@@ -1239,6 +1264,7 @@ struct Node {
     // launchWarmNext hold, so a take-back drops an early half whose switch
     // was heard.
     std::int64_t launchNextKey = INT64_MIN, launchWarmKey = INT64_MIN;
+    std::int64_t launchEntryKey = INT64_MIN;  // the entry's (preenter, M5 G1)
     std::array<LaunchUndo, kLaunchUndos> launchUndos;
     std::size_t launchUndoCount = 0;
     std::int64_t launchUndoLostKey = INT64_MIN;
@@ -1659,6 +1685,10 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole = true) SUPPLE_RT;
 // delay lines and plugin tails, restarting console seeds; notes held at the wrap get
 // note-offs at the start of the next block.
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT;
+// A run starts at the plan's next block (ADR-0096, Stage::modRunStart):
+// locates and wraps start one per node; an offline render calls this
+// before its first block.
+void startModulationRun(Plan& p) SUPPLE_RT;
 // A plan swap (ADR-0016): device notes still sounding on a track carry over
 // to the new plan's node, which releases them, and only them, if it no
 // longer hears the same MIDI input (so monitoring off never leaves a note
@@ -1783,6 +1813,13 @@ inline void clearLaunchUndos(Node& n) SUPPLE_RT {
 // A launch reaching the node Node::launchLead before it applies: its clip
 // chains' input (that much ahead) takes it from here.
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// A launch reaching a node with a modulated clip chain launchLead +
+// kAutomationStep before it applies (ADR-0096 M5, G1): the incoming clip's
+// chain is entered from here; its input still switches at prelaunch.
+void preenter(Node& n, const LaunchAction& a) SUPPLE_RT;
+inline std::int64_t launchEntryLead(const Node& n) SUPPLE_RT {
+    return n.launchLead + std::int64_t{kAutomationStep};
+}
 // A launch reaching the node Node::launchWarm before it applies, switching
 // at stream frame `at` (Node::launchWarmAt; S3 step D): its converter warms
 // up from here.
@@ -1796,9 +1833,13 @@ inline bool launchWarms(const Node& n, LaunchState::Kind kind, int player) SUPPL
 }
 // How early that launch reaches the node: its clip chains' lead, or its
 // warm-up when it has one. MIDI, stops and returns keep the lead alone.
+// A modulated clip chain's entry adds one grid interval to the lead for a
+// clip launch (ADR-0096 M5, G1).
 inline std::int64_t launchEarly(const Node& n, LaunchState::Kind kind, int player) SUPPLE_RT {
     const std::int64_t warm = launchWarms(n, kind, player) ? n.launchWarm : 0;
-    return n.launchLead > warm ? n.launchLead : warm;
+    const std::int64_t lead =
+        n.modClipChain && kind == LaunchState::Kind::Clip ? launchEntryLead(n) : n.launchLead;
+    return lead > warm ? lead : warm;
 }
 // An audio clip whose active take has FX or envelopes: it plays through a
 // take chain (plan.cpp), which a pitch-keeping plan cannot read launched yet.

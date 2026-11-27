@@ -322,8 +322,8 @@ instructions are in `docs/guides/installing.md`.
     heard at its boundary, starts afresh at each launch, and is cut at the
     switch away after the crossfade. The take's envelopes, and those on its
     FX, are from the clip's start, pass after pass (ADR-0097, amended
-    2026-11-20). Modulation routes do not reach a clip take's FX, as
-    they do not reach an item's (`modulation.target`: take FX come later).
+    2026-11-20). Modulation routes reach a clip take's FX as they reach
+    an item's (ADR-0096 M5; see Modulation routes).
   - Renders play the arrangement unless given a performance:
     `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
     take `performance` ("captured", a `captured_performance`, or the
@@ -1005,7 +1005,56 @@ instructions are in `docs/guides/installing.md`.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
-  volume, pan and width, and a send's level. A plug-in's offset is signal
+  volume, pan and width, and a send's level. Take FX (M5, schema 2.23): a
+  route into an item's or a clip's take FX is compensated on its track's
+  node, and `modulation.list` names the owner. A take chain is entered one
+  32-frame grid interval early, so its first modulated frame does not
+  depend on the block size (a plug-in that smooths its parameters still
+  hears the grid values from the entry, which falls on a block boundary,
+  so its output after the onset can depend on the block size and, after an
+  off-grid loop wrap, on the pass; a switch's entry is proved by red runs,
+  but the tests' memoryless gain cannot prove the early entry after a wrap
+  by one, only cover it: the round 187 question, open); on a track whose clip chain is modulated an
+  unquantized launch applies up to 32 frames later, and a quantized one
+  pressed within 32 more frames of its boundary takes the next. A take
+  chain's run starts with its track's (a seek, a pause and play, a loop
+  wrap: every offset sent at the first frame), so from a song position off
+  the 32-frame grid it plays as the offline render from there; one that
+  does not run then keeps to the grid when it first does. A capture
+  switched on while playing replays with the rack's Mod Outs restarted at
+  0, where live keeps their history, so a modulated chain's frames up to
+  the next grid point can differ; it says `began_mid_run`. Open: at a loop
+  change while playing, or a pause and play with no block between, the
+  in-callback executor keeps the modulation history where the
+  anticipative executor and the replay restart it, so the executors
+  differ there up to the next grid point (the launch sequence test's
+  class C; review round 215 F-B1, with G and H); and an FX moved from another track inside a plan an
+  adoption brings after a locate (a new stage, the same instance) plays
+  the value it was sent before for up to 19 frames, to the next grid
+  point (review round 213). A route
+  into a take that does not play is idle (`modulation.list` says `inert:
+  "take"`). Copies keep their routes: every
+  command that copies a take copies the routes into its FX in the same
+  undo step, and one the copy cannot keep (its source missing, or a
+  cycle) is dropped and named (`modulation.not_copied`, with a `reason`:
+  source, cycle or limit; a removed route's `modulation.removed` says
+  which end went or stopped fitting, and a recording's `record.warning`
+  event carries the reason too). A copy past 4096
+  routes is refused whole (`modulation.limit`); an overdub's is trimmed
+  instead. `track.duplicate` copies every route whose target is on the
+  track (before M5 it copied none). A move that would close a cycle (a
+  take's, or since round 193 a track FX's by `fx.move`) is refused
+  (`modulation.cycle`), and heal and `take.comp` join only pieces
+  whose routes match. All four bakes print the modulation exactly; a
+  consolidate or mix-to-track is refused as stale when anything its render
+  read changed before its commit, a route's source and the tracks feeding
+  it included (a freeze's hash leaves the source racks out, by design).
+  That check costs main-thread time at a bake's start, its commit and its
+  publish, a known cost not yet optimised: on the 96-track capacity
+  session, item.mix-to-track's start (one fingerprint and the job's
+  set-up) took 24.7 ms, and a fingerprint over all 96 tracks 48 ms
+  (review round 193, a dev build on Linux). A
+  plug-in's offset is signal
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
   target's is linear between grid points, added after automation and
@@ -1026,8 +1075,10 @@ instructions are in `docs/guides/installing.md`.
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
-  executors, bridged, at seeks and over loop wraps. Removing a route's
-  source or target removes it with a `modulation.removed` warning. A
+  executors, bridged, at seeks and over loop wraps (a seek or a pause off
+  the 32-frame grid included: a run's first frame sends every offset).
+  Removing a route's source or target removes it with a
+  `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
   one of them is edited (`modulation.latency`). `modulation.telemetry`
   (and `EngineApp::modulationOffsets()`) reads each route's live target

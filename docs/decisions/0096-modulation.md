@@ -41,6 +41,137 @@ bound to that parameter's automation lane (§"Targets", Step M4).
 - **Recording.** A write mode records what the plug-in reports minus the
   route's current offset, clamped to the range.
 
+*Amended 2026-11-25 (step M5, take FX targets; the contract, written before
+the code, revised after review round 187):* a route may target an FX in a
+take's chain, on an arrangement item's take or a launcher clip's. Everything
+above holds for it, with the differences below. The step's list of code
+changes is in engine.md §1.4.1, "Take FX targets".
+- **Targets.** The parameters are the same as for a chain FX: CLAP
+  parameters flagged modulatable, or any automatable continuous parameter
+  through its envelope (M4). The lane of a clip's take FX runs in clip time
+  (ADR-0097, amended 2026-11-20, C2), and its base is what that lane plays.
+  The FX of plugin modules stay out of scope.
+- **The target's node.** It is the track that holds the take's item or
+  clip. `modulationTargetNode`, and so the node order, maps a take FX to
+  it, and that track is the edge's end for order, cycles, liveness, freeze
+  and the latency solve. A take belongs to one item or one clip, so a route
+  reaches at most one stage.
+  - The plan compiles a take chain only for a take it plays. A route into
+    the FX of any other take is still an edge, by amendment M-l. It
+    compiles like an inert route, with `before` 0, and sends nothing.
+    `modulation.list` reports such a route as `inert: "take"` (engine.md
+    §1.4.1 says which takes play, and what holds in a comp).
+- **Timing.** A take chain runs ahead of its track by its lead `L`: an
+  item's chain by its own latency, a launcher clip's by the node's launch
+  lead.
+  - Where the track's input plays timeline sample t, stage k of the chain
+    is already processing t + (L − before_k). The edge's `before` is
+    before_k − L, plus the chain latency for a master's items, which play
+    after the master's chain.
+  - That is negative for a channel's items and for clips, and may be
+    positive for a master's items.
+  - The solve's formulas are unchanged; its induction holds whatever the
+    sign of `before` (round 187).
+  - Where the track has less read-ahead than the chain's lead, it waits for
+    its source, by at most L plus the tap beyond the source's arrival. That
+    is the existing rule that a late source path delays its target.
+  - A negative `before` is not new: a mixer target's is negative in a chain
+    under 32 samples (Lookahead, below).
+  - While a take FX is modulated, activating a take, muting an item, or
+    moving one into or out of the plan can change the plan's latency.
+  - Under a master playrate all of this is in device frames, as now.
+- **Delivery.**
+  - `PARAM_MOD` goes out on the absolute 32-frame grid of the node's
+    position, and the memo rules are unchanged.
+  - A take chain is entered, and its plug-ins reset, at least one grid
+    interval before its input reaches the item or clip. The grid point at
+    or before the onset is then inside a block the chain runs, at every
+    block size, in both executors (round 187 F1).
+  - On a node with a modulated clip chain, the incoming clip's chain alone
+    is entered one grid interval before the launch's input switch, which
+    stays at the node's lead (round 188 G1).
+    - An outgoing clip still ends at the switch.
+    - Placement keeps the extra 32 frames of room. An unquantized launch
+      applies up to 32 frames later, and a quantized one pressed within
+      32 frames more before its boundary takes the next boundary.
+  - The reset moves `modulationEpoch`, so the first grid point sends every
+    modulated parameter.
+- **Copies keep their routes.** This is the co-director's ruling of
+  2026-11-25, worded after round 187; Nate may overrule it.
+  - **What is copied.** A command that copies a take also copies, in the
+    same undo step, each route whose target is an FX of the copied chain:
+    the same source, parameter, depth, `enabled` and `lane`.
+  - **What that promises.** A copy at another song time hears its sources
+    at its own time. So the promise is the same routes, and the same sound
+    at the same song time.
+  - **Which commands.** Every command that copies a take: duplicating,
+    pasting or splitting an item; laying a clip on the timeline (by hand,
+    a scene insert or an arrangement build); capturing items into clips;
+    duplicating a clip or a track; committing a performance; an overdub's
+    new take; a consolidation's MIDI merge; copying a take within its item
+    or clip (`take.add {from}`, ruled 2026-11-26).
+  - **`track.duplicate`.** It copies every route whose target is on the
+    track: fader, pan, width, its sends' levels, chain, input-chain and
+    take FX. Before M5 it copied none. Its copy cannot close a cycle.
+  - **A split.** Both halves keep the routes.
+  - **Joins.** `item.heal` and `take.comp` join only pieces whose routes
+    match, and no join drops a route.
+  - **A route that cannot be copied.** Its source is missing in the
+    destination, or the copy would close a cycle there. The command
+    answers a `modulation.not_copied` warning per route, never silently,
+    and the rest of the copy goes ahead.
+  - **The route limit.** A copy that would take the project past 4096
+    routes is refused whole, with the count and how many to remove. The
+    one exception is a recording: the overdub's take always commits, and
+    the routes past the limit are not copied, each named by
+    `modulation.not_copied`.
+  - **Routes out of the chain.** A route whose source is inside the copied
+    chain and whose target is outside it is not copied. Today that case
+    cannot arise.
+- **Moves.** A move to another track keeps its routes, and one that would
+  close a cycle is refused (`modulation.cycle`). No route is dropped by a
+  move.
+- **Bakes.** Consolidating, applying FX, mixing to a track and freezing
+  are each exact, printing the modulation, or refused while a take FX they
+  bake is modulated (`modulation.bake`). None uses an unmodulated stand-in.
+  *2026-11-26 (step M5 built, review round 192):* all four are exact, each
+  pinned by a test against playback, so no bake refuses and
+  `modulation.bake` was never built. A background bake (consolidate,
+  mix-to-track) is refused as stale when anything its render read changed
+  before its commit, a route's source rack and the tracks feeding it
+  included. Here bakes differ from freeze (below), whose hash leaves the
+  source racks out: a bake is a one-off print that must not commit what it
+  was not rendered from, while a freeze plays its print and locks what it
+  owns, with that stated limit (the co-director's ruling, round 192 F4).
+- **Removal.** Removing a take FX, its take, or its item or clip (directly,
+  or with its scene or track) removes its routes with `modulation.removed`,
+  as `fx.remove` does.
+- **Freeze.** The routes into take FX on a frozen track are in its freeze
+  hash, as its take envelopes are. `freezeDependencyHash` already gathers
+  them.
+- **Schema.** The step raises the minor (2.23 by order of landing, G-d), so
+  an older build warns before it drops these routes (G-c).
+
+*Amended 2026-11-26 (review rounds 208 F2, 210 and 212):* a plug-in
+target is also sent every modulated parameter at a run's first frame (an
+offline render's first block, a locate), on the grid or not, the memo
+made stale there, and at a loop wrap's first frame; an adoption keeps to
+the grid, so a route an edit adds while playing first sends at the next
+grid point, as does an input chain whose track is armed while playing.
+Both executors' locates clear the routes' delays and the mixer targets'
+interpolation. "At the first grid point" in §"Alignment and delivery"
+reads "at the run's first frame" for a plug-in target. The frames before
+a run's first grid point hold the routes' values there (each Mod Out
+restarts at 0 and holds it to its first grid point), as an offline
+render from there does. A wrap restarts nothing (the rack keeps its
+modules' state and the routes' delays carry on), so it resends the sums
+carried over it: the loop goes on, unlike a render from the loop start.
+Before, a plug-in kept across a seek what it was sent before it, up to
+31 frames, and the in-callback seek kept a mixer target's interpolation.
+At the take-fx merge (review round 213): a node's take chains start a run
+with its own chains, and a take chain that does not run consumes it, so
+it first sends on the grid.
+
 ## Context
 
 Nate asked for modulators: any parameter can be modulated, and racks are the
@@ -171,7 +302,8 @@ The same rule holds for every new kind (amendment G-c).
   - VST3 parameters. The VST3 host never sets the flag
     (`vst3_host.cpp`, parameter info), and it drops `ParamMod` events.
   - CLAP parameters without the flag, or flagged read-only or bypass.
-  - Take FX and the FX of plugin modules: later.
+  - Take FX and the FX of plugin modules: later. (Take FX: step M5,
+    amended 2026-11-25, above.)
   - Switches: mute, solo, bypass, phase invert, mono.
   - Playrate and tempo.
   - A route that closes a cycle.
@@ -373,6 +505,7 @@ inert.
 | M2b | builder | The other stock plug-ins mark their continuous parameters modulatable (never ones that restart the plug-in or change latency) |
 | M3 | gui-lead | One parameter menu, the same in the mixer and the track panel: MIDI learn…, Modulate ▸ (greyed where `fx.describe` reports the parameter not `modulatable`, M-b), Show lane. MIDI learn moves off the bare right-click into that menu, with a dated note on ADR-0058 and the manual's change (M-k). The `mod` slot lists the racks of the strip's track that hold a Mod Out. Rings and bars, lanes keyed by target, the FX parameter list. gui.md and the ADR-0058 note come with M3 |
 | M4 | lead | Modulation through an envelope (above) |
+| M5 | lead | Take FX targets, items' and clips' (amended 2026-11-25, above): the model and the commands, the copy rule, the edge into a take-chain stage with its own `before`, entry one grid interval early, and the runtime pass on take-chain stages |
 
 ## Consequences
 
