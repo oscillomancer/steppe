@@ -4544,7 +4544,9 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
                 ln.curve.cursor = 0;
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // the loop start's value
             }
-        restartModulation(n);  // and its modulation's, as after a seek there
+        // Modulation sends at the wrap's first frame too: the sums carried
+        // over it (the rack keeps its modules, the routes their delays).
+        restartModulation(n);
         for (std::size_t ei : n.in)
             if (!p.edges[ei].encode && !p.edges[ei].rackSend)  // the rack's (ADR-0075)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,

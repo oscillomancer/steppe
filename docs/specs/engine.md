@@ -333,14 +333,20 @@ until it is released.
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
   - **A run's first frame** (an offline render's first block, a locate: a
-    seek, a play start or a loop wrap), on the grid or not, also sends every modulated
+    seek or a play start), on the grid or not, also sends every modulated
     parameter, the memo made stale there. Its sum there is its routes'
     values at that frame, which a locate starts afresh: the rack restarts
     its Mod Outs at 0, held up to their first grid point, and the route's
     delay is cleared. So the frames up to the first grid point hold what an
     offline render from there holds, never what the plug-in was sent
     before the locate, which a plug-in may keep across its reset (up to 31
-    frames once differed after a seek off the grid; round 208 F2). A
+    frames once differed after a seek off the grid; round 208 F2). A loop
+    wrap sends every modulated parameter at its first frame too, but it
+    starts nothing afresh: the rack keeps its modules' state and the
+    routes' delays carry on (rack.md §6), so it resends the sums carried
+    over the wrap, which a plug-in already holds, and what follows is the
+    loop going on, not an offline render from the loop start (which
+    differs there up to the first grid point; round 210 F2). A
     handoff between executors and a plan's adoption continue the run on
     the grid: a route an edit adds while playing first sends at the next
     grid point, as does a stage that first processes or first has a route
