@@ -464,7 +464,9 @@ until it is released.
   which the one-interval lookahead above delivers early, and the offset at
   each frame is linear between the interval's start and end. A rack the
   other executor still owns holds the end. The interpolation is carried by
-  target across plan swaps and starts at 0 after a locate, with the delays.
+  target across plan swaps and starts at 0 after a locate, with the delays,
+  in either executor's locate (the in-callback seek once kept both up to
+  the first grid point; round 208 F2).
   The base (automation, else the fader's value) plus the offset is clamped
   per sample to the target's range (volume up to 12 dB, a level at −inf
   stays −inf; pan and width −100..100), before VCAs and the gain ramps; a

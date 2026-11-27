@@ -4460,6 +4460,21 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
             }
         }
     }
+    // Modulation delays and the mixer targets' interpolation, as locateNode
+    // does: the in-callback executor's seek comes here, and kept them before
+    // (a mixer target after a seek played from the value before it up to the
+    // first grid point, where the offline render from there starts from 0).
+    for (Node& n : p.nodes) {
+        for (std::size_t mi : n.modIn) {
+            ModEdge& me = p.modEdges[mi];
+            if (restartConsole || !me.preserveDelayOnLocate) me.delay.clear();
+            me.preserveDelayOnLocate = false;
+        }
+        for (Node::MixMod& mm : n.mixMods) {
+            if (restartConsole || !mm.preserveOnLocate) mm.prev = mm.next = 0.0;
+            mm.preserveOnLocate = false;
+        }
+    }
     for (Edge& e : p.edges) {
         locateEdge(e, restartConsole);
         for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripWidth,
