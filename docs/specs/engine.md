@@ -332,8 +332,8 @@ until it is released.
   the same frame: the sum of its routes' signal × depth × the parameter's
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
-  - **A run's first frame** (a plan's first block, a locate: a seek, a play
-    start or a loop wrap), on the grid or not, also sends every modulated
+  - **A run's first frame** (an offline render's first block, a locate: a
+    seek, a play start or a loop wrap), on the grid or not, also sends every modulated
     parameter, the memo made stale there. Its sum there is its routes'
     values at that frame, which a locate starts afresh: the rack restarts
     its Mod Outs at 0, held up to their first grid point, and the route's
@@ -342,7 +342,10 @@ until it is released.
     before the locate, which a plug-in may keep across its reset (up to 31
     frames once differed after a seek off the grid; round 208 F2). A
     handoff between executors and a plan's adoption continue the run on
-    the grid.
+    the grid: a route an edit adds while playing first sends at the next
+    grid point, as does a stage that first processes or first has a route
+    after its run's first block (it once sent at the first frame of the
+    block the plan arrived in; round 210 F1).
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6): a stage's slots are matched by instance and CLAP id. A
     parameter that the new plan no longer modulates is sent one 0 at its

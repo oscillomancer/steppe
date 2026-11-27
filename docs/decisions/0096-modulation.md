@@ -42,11 +42,13 @@ bound to that parameter's automation lane (§"Targets", Step M4).
   route's current offset, clamped to the range.
 
 *Amended 2026-11-26 (review round 208 F2):* a plug-in target is also sent
-every modulated parameter at a run's first frame (a plan's first block, a
-locate, a loop wrap), on the grid or not, the memo made stale there, and
-both executors' locates clear the routes' delays and the mixer targets'
-interpolation. "At the first grid point" in §"Alignment and delivery"
-reads "at the run's first frame" for a plug-in target. The frames before
+every modulated parameter at a run's first frame (an offline render's
+first block, a locate, a loop wrap), on the grid or not, the memo made
+stale there; an adoption keeps to the grid, so a route an edit adds while
+playing first sends at the next grid point. Both executors' locates
+clear the routes' delays and the mixer targets' interpolation. "At the
+first grid point" in §"Alignment and delivery" reads "at the run's first
+frame" for a plug-in target. The frames before
 a run's first grid point hold the routes' values there (each Mod Out
 restarts at 0 and holds it to its first grid point), as an offline render
 from there does. Before, a plug-in kept across a seek what it was sent

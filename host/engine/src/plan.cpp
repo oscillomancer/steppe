@@ -2639,8 +2639,9 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 // Modulation (ADR-0096), after the stage's automation: at each point of the
 // absolute kAutomationStep grid, one PARAM_MOD per slot whose routes' sum
 // differs from the memo, or for every slot while the memo is stale; and at
-// a run's first frame (Stage::modRunStart: a plan's first block, a locate, a
-// loop wrap), on the grid or not, where the memo is stale. A slot
+// a run's first frame (Stage::modRunStart: a restarting locate, a loop
+// wrap, an offline render's first block), on the grid or not, where the
+// memo is stale. An adoption or a handoff keeps to the grid. A slot
 // with no route this plan is sent one 0 if the memo lists it, then leaves
 // it. Only a stage that will process is sent anything; otherwise the memo
 // goes stale, as it does when the instance or its modulationEpoch() moves.
@@ -2648,6 +2649,11 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 // nothing this block (its Mod Outs hold).
 void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
                    const void* self) SUPPLE_RT {
+    // A run's start is this block's whatever is sent: a stage with no route
+    // yet, or not processing, leaves it, so a route an edit adds later (an
+    // adoption) or a stage that processes later keeps to the grid.
+    const bool runStart = st.modRunStart;
+    st.modRunStart = false;
     if (st.mods.empty()) return;
     const host::Instance* in = st.instance;
     if (in != st.modHeard || (in && in->modulationEpoch() != st.modEpoch)) {
@@ -2672,8 +2678,7 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
     const auto grid = static_cast<std::uint32_t>((kAutomationStep - phase) % kAutomationStep);
     // A run's first frame, then the grid: the plug-in does not keep what it
     // was sent before the locate up to the first grid point (n > 0).
-    const std::uint32_t first = st.modRunStart ? 0 : grid;
-    st.modRunStart = false;
+    const std::uint32_t first = runStart ? 0 : grid;
     for (std::uint32_t g = first; g < n; g = g < grid ? grid : g + kAutomationStep)
         for (ModParam& m : st.mods) {
             if (!m.count && (!m.listed || (!m.stale && m.sent == 0.0))) {
@@ -4320,9 +4325,9 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 // the plug-in starts afresh unless a swap just carried it (their notes are
 // their modules', which locateRack and the module restart look after). A
 // loop wrap (wrapTo) keeps it.
-// A run starts (ADR-0096): the next block a modulated stage processes sends
-// every slot at its first frame. Not on a handoff or an adoption, which
-// continue in place as the grid does.
+// A run starts (ADR-0096): the node's next block sends every modulated
+// slot at its first frame. Not on a handoff or an adoption, which continue
+// in place as the grid does.
 void restartModulation(Node& n) SUPPLE_RT {
     for (auto* chain : {&n.inputChain, &n.chain})
         for (Stage& st : *chain) {
@@ -4338,6 +4343,10 @@ void locateRackStages(Node& n) SUPPLE_RT {
     }
 }
 }  // namespace
+
+void startModulationRun(Plan& p) SUPPLE_RT {
+    for (Node& n : p.nodes) restartModulation(n);
+}
 
 void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     if (n.rack) locateRack(n, pos, restartConsole, restartConsole);

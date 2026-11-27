@@ -963,6 +963,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     // (its first block runs the restart, on the render's audio thread).
     for (Node& node : p.nodes)
         if (node.rack) node.rack->resetModules = node.rack->resetNotes = true;
+    // Its first block starts a run: every modulated parameter is sent there
+    // (an instance from a pool may hold what an earlier render sent it).
+    detail::startModulationRun(p);
     // ADR-0090: a plug-in that fails while the render runs fails the
     // render; one that had failed before keeps its behaviour.
     struct Watched {
