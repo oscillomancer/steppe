@@ -253,7 +253,21 @@ struct EngineTestAccess {
     // The renderer's launch acks dropped as by a full ring (ADR-0097, dated
     // 2026-11-26: judged once their switch is known to be heard).
     static void dropRendererAcks(Engine& e, bool on) { e.dropRendererAcksForTests_.store(on); }
-    static void rendererLeaveLate(Engine& e, bool on) { e.rendererLeaveLateForTests_.store(on); }
+    // Released, the renderer is woken: a hold on the leave (round 209) is
+    // looked at again at once, not at its safety timeout.
+    static void rendererLeaveLate(Engine& e, bool on) {
+        e.rendererLeaveLateForTests_.store(on);
+        if (!on) {
+            e.rendererLaunchHeld_.store(false);
+            e.wakeRenderer();
+        }
+    }
+    static bool rendererLaunchHeld(const Engine& e) { return e.rendererLaunchHeld_.load(); }
+    // What the listener has played of the current epoch.
+    static std::int64_t playedStream(const Engine& e) { return e.playedStream(e.epoch_.load()); }
+    static std::uint64_t playStartMissed(const Engine& e, int path) {
+        return e.launchPlayStartMissed_[std::size_t(path)].load();
+    }
     // A track's channel's shift in the latest plan (its launches' switch
     // frame is their target plus it).
     static std::int64_t launchShift(const Engine& e, model::Id track) {

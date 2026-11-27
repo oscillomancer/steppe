@@ -171,6 +171,10 @@ struct Sequence {
     std::map<std::string, std::string> newest;
     int step = 0;
     std::string trail;  // the steps so far, for a failure's message
+    // The renderer's leave held late (the test hook) until it holds for it:
+    // then the callback's next cycle, which records the end, settles it, as
+    // without the hook (round 209: never longer).
+    bool lateLeave = false;
 
     Sequence(const model::Session& s, const fs::path& dir, const EngineOptions& o, std::uint64_t sd)
         : backend({.mode = DummyBackend::Mode::Manual, .captureFrames = kFrames + 48000}),
@@ -201,10 +205,31 @@ struct Sequence {
     }
     void run(std::int64_t cycles) {
         if (cycles <= 0) return;
-        if (anticipative)
+        if (anticipative && lateLeave) {
+            for (std::int64_t i = 0; i < cycles; ++i) {
+                while (!engine.awaitRendered(4096)) {
+                }
+                if (lateLeave && EngineTestAccess::rendererLaunchHeld(engine)) {
+                    EngineTestAccess::rendererLeaveLate(engine, false);
+                    lateLeave = false;
+                    note("late settles");
+                }
+                // A play start the renderer held for: the callback waits for
+                // its pre-roll, so the epoch is heard a cycle later.
+                const bool fresh = playing && !segments.empty() && segments.back().end < 0 &&
+                                   done + i == epochCycle;
+                backend.run(1);
+                if (fresh && EngineTestAccess::playedStream(engine) == 0) {
+                    ++epochCycle;
+                    segments.back().out += kBlock;
+                    quietSince = std::max(quietSince, epochCycle);
+                }
+            }
+        } else if (anticipative) {
             runAheadOnState(engine, backend, cycles, kBlock);
-        else
+        } else {
             backend.run(cycles);
+        }
         done += cycles;
     }
     std::int64_t position() const {
@@ -655,14 +680,21 @@ int compareExecutors(Sequence& a, Sequence& b) {
                  << "\nanticipative log:" << describe(logB));
     for (std::size_t i = 0; i < a.segments.size(); ++i) {
         const Segment& g = a.segments[i];
-        REQUIRE(g.epoch == b.segments[i].epoch);
-        REQUIRE(g.out == b.segments[i].out);
+        const Segment& gb = b.segments[i];
+        REQUIRE(g.epoch == gb.epoch);
+        // (The anticipative run is heard a cycle later after a play start
+        // its renderer held for: round 209.)
+        REQUIRE(gb.out >= g.out);
         if (b.lateEnds.count(g.epoch)) continue;
+        // (After such a play start the anticipative run has played a cycle
+        // less, so an epoch that continues from where it was heard, a loop
+        // change, begins elsewhere in the song: not comparable.)
+        if (g.song != gb.song) continue;
         // (Not its last frames before a stop or seek, a crossfade and the
         // shift: the executors' tails there differed by 64 frames once, open;
         // nor a loop change's epoch over a held note, G.)
-        const std::int64_t length =
-            sameUpTo(epochLog(logA, g.epoch), epochLog(logB, g.epoch), g.end - g.out - kFade);
+        const std::int64_t length = sameUpTo(epochLog(logA, g.epoch), epochLog(logB, g.epoch),
+                                             std::min(g.end - g.out, gb.end - gb.out) - kFade);
         if (length <= 0) continue;
         if (const char* f = faultAt(logA, g.epoch, 0, g.song, false, g.continuous, true, g.held);
             f && f[0] == 'G')
@@ -670,8 +702,8 @@ int compareExecutors(Sequence& a, Sequence& b) {
         const std::int64_t skip = a.liveFeed && g.playStart ? kBlock : 0;  // H
         if (length <= skip) continue;
         const std::vector<float> slice(
-            outB.begin() + std::ptrdiff_t(latB + std::size_t(g.out + skip)),
-            outB.begin() + std::ptrdiff_t(latB + std::size_t(g.out + length)));
+            outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + skip)),
+            outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + length)));
         const std::size_t frames = std::size_t(length - skip);
         INFO("began at step " << g.steps);
         INFO("epoch " << g.epoch << " at frame " << g.out << ", " << length << " frames (from "
@@ -818,7 +850,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             each([](Sequence& q) { q.capturing ? q.captureOff() : q.captureOn(); });
         } else if (r < 86) {
             note("late");
-            late = true;
+            late = b.lateLeave = true;
             EngineTestAccess::rendererLeaveLate(b.engine, true);
         } else if (r < 89) {
             // A storm: more one-cycle seeks than the ring of epoch ends holds,
@@ -842,7 +874,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             run(1);
         }
         if (late && !longPlay && r >= 26 && r < 52) {  // the late leave settles from here
-            late = false;
+            late = b.lateLeave = false;
             EngineTestAccess::rendererLeaveLate(b.engine, false);
         }
         if (pick(100) < 85) {
@@ -871,6 +903,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
         each([](Sequence& q) { q.noteLate(); });
     }
     EngineTestAccess::rendererLeaveLate(b.engine, false);
+    b.lateLeave = false;
     each([](Sequence& q) {
         q.settle();
         if (q.playing) q.pause();
@@ -882,6 +915,9 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
         INFO(q.where());
         CHECK(q.engine.processErrors() == 0);
         if (q.anticipative) CHECK(q.engine.anticipationMisses() == 0);
+        // A launch placed at a play start is never missed there (round 209).
+        CHECK(EngineTestAccess::playStartMissed(q.engine, 0) == 0);
+        CHECK(EngineTestAccess::playStartMissed(q.engine, 1) == 0);
     });
     const int executors = compareExecutors(a, b);
     for (Sequence* q : both) {
@@ -958,18 +994,20 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
 }
 
 TEST_CASE(
-    "a launch the callback switched while the renderer's leave was held late reaches the "
-    "renderer's targets (round 207)" *
+    "a launch for the play start while the renderer's leave is held late reaches both "
+    "executors' targets there (rounds 207, 209)" *
     doctest::description("rt")) {
     // Anticipative, tr_3's launches switching both tr_3 (the renderer) and
     // tr_4's live Notes feed (the callback). The renderer's leave held late
     // across a pause; cl_5 launched while stopped, for the play start; play:
-    // the callback switches the feed at once while the renderer, its leave
-    // pending, applies nothing. Released mid-epoch (`midEpoch`), the renderer
-    // switches tr_3 at its next block; released only after a later pause
-    // and play, at its leave. Meanwhile launch.state says cl_5 is queued;
-    // after, tr_3 plays cl_5 and holds no slot, and a capture from the play
-    // start is not as heard.
+    // the renderer, its leave pending, holds before the launch instead of
+    // rendering past it (round 209; round 207 switched it late, the capture
+    // marked), and the callback waits for its pre-roll. Released at once
+    // (`midEpoch`) or only after a later pause and play, the renderer
+    // settles and switches tr_3 at the play start. Meanwhile launch.state
+    // says cl_5 is queued; after, tr_3 plays cl_5 from the play start, holds
+    // no slot, no anticipation was missed, and a capture from the play start
+    // is as heard.
     for (const bool midEpoch : {true, false}) {
         INFO(std::string(midEpoch ? "released mid-epoch" : "released after a pause and play"));
         Project p;
@@ -1011,14 +1049,91 @@ TEST_CASE(
         q.engine.service();
         CHECK_FALSE(q.queued("tr_3"));
         CHECK(q.plays("tr_3") == "clip cl_5");
-        // The capture from the play start lacks the switch on tr_3 there: not as heard.
         (void)q.engine.captureLaunches(false);
         q.engine.service();
         const auto capture = q.engine.launchCapture();
         REQUIRE(capture);
-        CHECK(capture->facts.launchUnsettled);
+        CHECK_FALSE(capture->facts.launchUnsettled);
+        CHECK_FALSE(capture->facts.dropout);
+        CHECK(q.engine.anticipationMisses() == 0);
         CHECK(q.node("tr_3") == "clip cl_5");
         CHECK(EngineTestAccess::slotsHeld(q.engine) == 0);
+        CHECK(EngineTestAccess::playStartMissed(q.engine, 0) == 0);
+        CHECK(EngineTestAccess::playStartMissed(q.engine, 1) == 0);
+        // cl_5 logged once, at the play start (the capture's first frame).
+        const auto log = q.engine.launchLog();
+        INFO("log:" << describe(log));
+        int cl5 = 0;
+        for (const LaunchLogEntry& e : log)
+            if (e.clip == id("cl_5")) {
+                ++cl5;
+                CHECK(e.anchorSample == capture->startSample);
+            }
+        CHECK(cl5 == 1);
         q.engine.stop();
     }
+}
+
+TEST_CASE(
+    "a renderer that holds for a launch longer than its lead while playing: the callback plays "
+    "silence, counted and marked, and the launch still switches at its frame (round 209)" *
+    doctest::description("rt")) {
+    // The defined fallback when the hold outlasts what the renderer has
+    // rendered ahead (the test hook keeps its leave unsettled for as long as
+    // it is on; without it, the callback's next cycle settles it): the
+    // callback lacks frames, plays silence for them and counts an
+    // anticipation miss, the stream does not move past what was rendered,
+    // and a capture over it is not as heard (a dropout). Never a silent miss
+    // of the launch: it switches at its frame once the renderer goes on.
+    Project p;
+    project(p, false);
+    const model::Session s = p.app->head();
+    Sequence q(s, p.app->projectDir(), EngineOptions{.workers = 0}, 1);
+    q.play();
+    q.run(20);
+    q.run(200);
+    q.engine.service();
+    // A seek with the leave late: the renderer goes on in the new epoch
+    // (nothing of it to hold for yet), and the callback hears it; a
+    // capture from there.
+    EngineTestAccess::rendererLeaveLate(q.engine, true);
+    q.seek(96000);
+    q.run(40);
+    q.engine.service();
+    REQUIRE(q.engine.captureLaunches(true));
+    q.run(10);
+    REQUIRE(EngineTestAccess::leavePending(q.engine));
+    const auto placed =
+        q.engine.launch(std::vector{request("tr_3", "cl_5")}, model::LaunchQuantize::Beat);
+    REQUIRE(placed);
+    // Held before it, for longer than its lead: the callback runs dry.
+    const auto misses = q.engine.anticipationMisses();
+    for (int i = 0; i < 1500; ++i) {  // 48000 frames, past the launch at 24000
+        while (!q.engine.awaitRendered(4096)) {
+        }
+        q.backend.run(1);
+        ++q.done;
+    }
+    CHECK(EngineTestAccess::rendererLaunchHeld(q.engine));
+    CHECK(q.engine.anticipationMisses() > misses);
+    EngineTestAccess::rendererLeaveLate(q.engine, false);
+    q.run(600);
+    q.engine.service();
+    (void)q.engine.captureLaunches(false);
+    q.engine.service();
+    const auto capture = q.engine.launchCapture();
+    REQUIRE(capture);
+    CHECK(capture->facts.dropout);  // not as heard
+    const auto log = q.engine.launchLog();
+    INFO("log:" << describe(log));
+    bool found = false;
+    for (const LaunchLogEntry& e : log)
+        if (e.clip == id("cl_5")) {
+            found = true;
+            CHECK(e.runningFrame == placed->stream);  // at its frame, not placed again
+        }
+    CHECK(found);
+    CHECK(q.node("tr_3") == "clip cl_5");
+    CHECK(EngineTestAccess::playStartMissed(q.engine, 1) == 0);
+    q.engine.stop();
 }

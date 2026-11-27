@@ -436,7 +436,10 @@ instructions are in `docs/guides/installing.md`.
       never runs out (round 205); a track's newest launch wins over any it
       replaced, taken back or not, and taken-back launches settle in one
       service (round 207); a renderer leave held late no longer loses a
-      launch the callback switched meanwhile (round 207); the GUI's
+      launch the callback switched meanwhile (round 207), and holds before
+      a launch of its epoch instead of rendering past it, so a launch made
+      while stopped that starts the transport sounds from the play start
+      under load too (round 209); the GUI's
       as-heard line does not word `launch_unsettled` yet (gui-lead). Open,
       found by the seeded sequence test (rounds 205 and 207; ruled for
       branch capture-start-state): a capture is as heard but its replay

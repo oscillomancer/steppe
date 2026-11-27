@@ -1163,3 +1163,89 @@ TEST_CASE(
                 e.engine.stop();
             }
 }
+
+TEST_CASE(
+    "a launch while stopped that starts the transport sounds from the play start in every order "
+    "of a late renderer leave and the service (round 209)" *
+    doctest::description("rt")) {
+    // The journey's shape (launch.scene while stopped answers started at
+    // beat 0): playing, a launch heard, stop, seek to 0, capture on, cl_1
+    // launched while stopped, play. The renderer's leave of the epoch it
+    // played is held late (the callback's end unknown: a relocation before
+    // the callback's next cycle) or not; the main thread's service runs
+    // before the launch, between it and play, after play, or not at all.
+    // Every order: cl_1 is logged once, at the play start (its running frame
+    // where it was placed, anchor beat 0), the capture is as heard, nothing
+    // was missed. (Before round 209 the renderer rendered the play start
+    // with its leave pending, passed the launch undecided, missed it, and
+    // service placed it a bar later.)
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    enum Service { Before, Between, After, None };
+    for (const bool leaveLate : {false, true}) {
+        for (const Service service : {Before, Between, After, None}) {
+            for (const bool ahead : {false, true}) {
+                INFO("leave late " << leaveLate << ", service " << int(service) << ", "
+                                   << (ahead ? "anticipative" : "in-callback"));
+                Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback,
+                         32, 48000 * 8);
+                e.engine.play();
+                e.run(20);
+                e.engine.service();
+                REQUIRE(e.engine.captureLaunches(true));
+                (void)e.place(request("tr_1", "cl_2"), model::LaunchQuantize::Bar);
+                e.run(3000);
+                e.engine.service();
+                EngineTestAccess::rendererLeaveLate(e.engine, leaveLate);
+                e.engine.pause();
+                e.engine.seek(0.0);  // the stop's return to the play start
+                e.engine.seek(0.0);  // and the journey's seek to beat 0
+                // (In-callback, a launch made before the callback has seen a
+                // stopped seek takes the old position's anchor: fault E, fixed
+                // on the capture start state branch. Here it sees it first.)
+                if (!ahead) e.run(e.done + 1);
+                if (service == Before) e.engine.service();
+                REQUIRE(e.engine.captureLaunches(true));
+                const auto r = request("tr_1", "cl_1");
+                const auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+                REQUIRE(placed);
+                CHECK(placed->anchorSample == 0);
+                if (service == Between) e.engine.service();
+                e.engine.play();
+                e.run(e.done + 4);
+                if (service == After) e.engine.service();
+                if (leaveLate) {
+                    // Held before the launch; the callback, waiting for its
+                    // pre-roll, misses nothing.
+                    if (ahead) CHECK(EngineTestAccess::rendererLaunchHeld(e.engine));
+                    EngineTestAccess::rendererLeaveLate(e.engine, false);
+                }
+                e.run(e.done + 400);
+                if (service != None) e.engine.service();
+                e.run(e.done + 3000);
+                e.engine.service();
+                const auto capture = e.engine.launchCapture();
+                REQUIRE(capture);
+                CHECK(capture->startSample == 0);
+                CHECK_FALSE(capture->facts.launchUnsettled);
+                CHECK_FALSE(capture->facts.dropout);
+                CHECK(e.engine.anticipationMisses() == 0);
+                CHECK(EngineTestAccess::playStartMissed(e.engine, 0) == 0);
+                CHECK(EngineTestAccess::playStartMissed(e.engine, 1) == 0);
+                const auto log = e.engine.launchLog();
+                INFO("log:" << describe(log));
+                int cl1 = 0;
+                for (const LaunchLogEntry& le : log)
+                    if (le.clip == id("cl_1")) {
+                        ++cl1;
+                        CHECK(le.runningFrame == placed->stream);
+                        CHECK(le.anchorSample == 0);
+                    }
+                CHECK(cl1 == 1);
+                CHECK(e.node() == "clip cl_1");
+                e.engine.stop();
+            }
+        }
+    }
+}
