@@ -2212,6 +2212,10 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
                 }
             from.runningFrame = 0;
             from.epoch = capture_.epoch;
+            // Only what the crossfade fades from, no launch at the start: no
+            // scene's (launch.commit counts a scene's launches at a frame to
+            // write its section; round 219 F1).
+            from.scene.reset();
             out.launches.push_back(from);
             out.launches.push_back(first);
             continue;

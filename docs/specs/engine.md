@@ -1057,7 +1057,16 @@ the same.*
   entry at the start is a switch at its frame 0, crossfading from it);
   for a capture begun while playing inside a switch's crossfade, what the
   switch faded from comes first and the switch after it, so the replay
-  crossfades as live did (fault B). So removing
+  crossfades as live did (fault B). That first entry is no launch at the
+  start: it carries no scene (a scene's section counts its launches at a
+  frame), and what a capture lays down (`heldLaunches`) is, for each track
+  and frame, the last entry, less a return at frame 0 (the arrangement it
+  begins in). A capture holds a performance only when one of those is a
+  clip or a stop (`holdsLaunches`): the one test the uncommitted check
+  (the project-switch prompt, the kept and replace warnings, whose count of
+  launches is of those entries) and `launch.commit` share, so a capture
+  holding only a return's crossfade is neither uncommitted nor written
+  (round 219 F1, F2). So removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip

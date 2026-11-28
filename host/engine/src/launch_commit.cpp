@@ -74,6 +74,21 @@ CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
     return p;
 }
 
+std::vector<const CapturedLaunch*> heldLaunches(const CapturedPerformance& perf) {
+    std::map<std::pair<std::string, std::int64_t>, const CapturedLaunch*> last;
+    for (const CapturedLaunch& e : perf.launches) last[{e.track, e.frame}] = &e;
+    std::vector<const CapturedLaunch*> out;
+    for (const auto& [at, e] : last)
+        if (at.second != 0 || e->action != "arrangement") out.push_back(e);
+    return out;
+}
+
+bool holdsLaunches(const CapturedPerformance& perf) {
+    const auto held = heldLaunches(perf);
+    return std::any_of(held.begin(), held.end(),
+                       [](const CapturedLaunch* e) { return e->action != "arrangement"; });
+}
+
 schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
     const auto sample = schema::integer().range(0, kSampleLimit);
     auto launch =
@@ -167,8 +182,13 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 if (!c->activeTake || !s.takes.find(*c->activeTake))
                     return stale(*e.clip + " has no take to lay down", "/clip");
             }
-            if (!byTrack.count(*track)) order.push_back(*track);
-            byTrack[*track].push_back(&e);
+        }
+        // What it lays down (heldLaunches), by track: nothing on a track that
+        // holds no clip or stop (holdsLaunches, below).
+        for (const CapturedLaunch* e : heldLaunches(perf)) {
+            const Id track = *Id::parse(e->track);
+            if (!byTrack.count(track)) order.push_back(track);
+            byTrack[track].push_back(e);
         }
     }
     std::sort(order.begin(), order.end());
@@ -181,6 +201,9 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
     CommitDone done;
     done.from = beatAt(double(perf.start));
     done.to = beatAt(double(perf.start + perf.frames));
+    // Holding nothing to lay down, it writes nothing (as the uncommitted
+    // check says: the same test).
+    if (!holdsLaunches(perf)) return done;
     model::EditTxn& t = app.txn();
 
     // A section for each scene launched whole: launch.scene logs each clip it
@@ -208,13 +231,9 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 if (scene) ++given[{e.frame, *scene}];
             }
         std::map<std::int64_t, std::vector<const CapturedLaunch*>> holding;  // by frame
-        for (const auto& [track, launches] : byTrack) {
-            std::map<std::int64_t, const CapturedLaunch*> last;  // the last at each frame
-            for (const CapturedLaunch* e : launches)
-                last[e->frame] = e;  // of one frame's launches the last given holds
-            for (const auto& [frame, e] : last)
-                if (e->action == "clip") holding[frame].push_back(e);
-        }
+        for (const auto& [track, launches] : byTrack)
+            for (const CapturedLaunch* e : launches)  // one a frame, the last given there
+                if (e->action == "clip") holding[e->frame].push_back(e);
         for (const auto& [frame, launched] : holding) {
             std::map<Id, std::vector<const CapturedLaunch*>> byScene;
             for (const CapturedLaunch* e : launched)
