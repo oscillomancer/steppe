@@ -1766,10 +1766,16 @@ class Engine {
         CaptureFacts facts;
         std::uint64_t misses = 0, bridgeLate = 0, xruns = 0, errors = 0;
         bool closed = false;
+        bool inNoteJudged = false;  // began_in_note decided (judgeCaptureInNote)
     };
     CaptureState capture_;
     CaptureFacts captureFacts() const;  // the running capture's so far, or the ended one's
-    void closeCapture();                // it ended: fixes its facts
+    // began_in_note, judged once with the plan playing then: as it is placed,
+    // or once every launch due before its start is in the log (`now`: at
+    // its end, with what is known).
+    void judgeCaptureInNote(bool now);
+    bool captureBeganInNote() const;
+    void closeCapture();  // it ended: fixes its facts
     // A load while a capture runs: what the edit changed (Engine::load).
     void captureEdit(const model::Session& before, const model::Session& after);
     void placeCapture();       // a pending start, once the clock reads

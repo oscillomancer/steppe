@@ -442,7 +442,8 @@ instructions are in `docs/guides/installing.md`.
       under load too (round 209); the GUI's
       as-heard line does not word `launch_unsettled` or `began_in_note`
       yet (gui-lead). A capture begun while playing inside a note a
-      clip or the arrangement is sounding says `began_in_note` (after
+      clip or the arrangement is sounding, or one its sustain pedal holds
+      past its off, says `began_in_note` (after
       `began_mid_run`): live holds the note, its replay never starts it.
       Pre-roll, open: an exact replay of a capture begun while playing
       needs every instrument's and effect's state from before its start;

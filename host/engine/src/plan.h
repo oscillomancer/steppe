@@ -1913,13 +1913,15 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
 bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
                     std::int64_t& ticks) SUPPLE_RT;
 // Whether a note `pl` plays from its anchor (`anchorSample`, `anchorBeat`)
-// is sounding at song sample `song`: begun before it, not yet ended
+// is sounding at song sample `song`: begun before it, not yet ended, or
+// ended while the clip's sustain pedal (CC 64) was down and not let up since
 // (`unanchored`: a loop clip playing by its phase before its anchor). A
 // replay beginning there never starts it (began_in_note, engine.md §3.1).
 // Control thread: reads only the compiled player.
 bool clipNoteSounding(const Plan& p, const ClipPlayer& pl, std::int64_t anchorSample,
                       double anchorBeat, bool unanchored, std::int64_t song);
-// Whether a note of node `n`'s arrangement is sounding at song sample `song`.
+// Whether a note of node `n`'s arrangement is sounding at song sample `song`,
+// held by its sustain pedal (CC 64) included.
 bool arrangementNoteSounding(const Node& n, std::int64_t song);
 // An audio clip's own fades where `player` is heard at song position `song`
 // (fractional on a playrate plan), by its phase in the pass (clipFade); 1

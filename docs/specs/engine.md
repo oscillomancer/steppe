@@ -2705,7 +2705,12 @@ whole song sample too, so the two switch on the same stream frame. The capture's
 by the engine (`Engine::CaptureFacts`: from the play start, begun
 inside a sounding note, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
-the capture ends.
+the capture ends; whether it began inside a sounding note is judged once,
+from the plan playing then, as it is placed or, when a launch due before
+its start has yet to switch on all its targets (a shifted channel switches
+later in the stream), once it has (at the latest as the capture ends), so
+no later edit changes it (round 220 F2). Only `launch_unsettled` moves after that, from not known
+to known, as the verdicts it waits for come in.
 
 **Heard.** A frame is heard when the executors hand it to the device
 callback, not the output latency later (§1.4.2, "A launch applied but not
@@ -2765,7 +2770,7 @@ refused. `tail_s`, `trim`,
 | Reason | When |
 | --- | --- |
 | `began_mid_run` | the capture did not begin at a play start |
-| `began_in_note` | it began while playing inside a note a track's clip or arrangement was sounding (a rack's Notes feed included): live holds the note, its replay, starting inside it, never starts it; always after `began_mid_run` (an exact replay needs pre-roll, an open item) |
+| `began_in_note` | it began while playing inside a note a track's clip or arrangement was sounding (a rack's Notes feed included), a note its sustain pedal (CC 64) holds past its off included: live holds the note, its replay, starting inside it, never starts it; always after `began_mid_run` (an exact replay needs pre-roll, an open item) |
 | `edited_during` | a plan compiled during it for anything but launches (any session edit) |
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
