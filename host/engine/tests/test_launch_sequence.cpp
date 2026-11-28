@@ -292,6 +292,7 @@ struct Sequence {
             backend.run(cycles);
         }
         done += cycles;
+        if (lawDue) checkLaw();
     }
     // The late hook released and cycles run straight after, before the
     // renderer settles: up to `most` (no more than the run has left), while
@@ -323,7 +324,25 @@ struct Sequence {
         }
         engine.holdRenderer(false);
         if (ran > 0) note("held" + std::to_string(ran));
+        lawDue = true;  // once run() has counted these cycles
         return ran;
+    }
+    // After a hook-driven timing (round 222), the renderer settled and the
+    // acks read (a service): the no-audio invariants (launch.state agrees
+    // with the nodes and the newest launches, no slot kept by what was
+    // heard: checkSettled, where the state has settled) and the three miss
+    // counters, none of which a step of this test may count (a play-start
+    // launch missed, a launch the renderer passed while its leave was
+    // pending, an anticipation miss).
+    bool lawDue = false;
+    void checkLaw() {
+        lawDue = false;
+        service();
+        checkSettled();
+        INFO(where());
+        CHECK(EngineTestAccess::playStartMissed(engine) == 0);
+        CHECK(EngineTestAccess::passedPending(engine) == 0);
+        CHECK(engine.anticipationMisses() == 0);
     }
     // The step that releases a late leave, `cycles` long: released as far
     // ahead as the renderer goes after them, or (round 222) part of the way,
@@ -358,7 +377,7 @@ struct Sequence {
             EngineTestAccess::rendererLeaveLate(engine, false);
         }
         engine.holdRendererFrom(std::numeric_limits<std::int64_t>::max());
-        settle();
+        checkLaw();
         run(cycles - first);
     }
     std::int64_t position() const {
@@ -785,13 +804,22 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
                                   << " frames, in epoch " << g.epoch << " (from song " << g.song
                                   << ", its frame " << c.offset
                                   << "); its launches:" << describe(c.capture.launches));
-        // Begun over frames a late leave's renderer rendered before it
-        // settled: never as heard (round 203 F2, round 205 F3).
-        if (const auto it = q.lateEnds.find(g.epoch);
-            it != q.lateEnds.end() && c.offset < it->second) {
-            CHECK_FALSE(asHeard);
-            ++n.markedCaptures;
-            continue;
+        // In an epoch a late leave went on in (round 222: the law there, no
+        // replay of the epoch itself): begun over frames its renderer
+        // rendered before it settled, never as heard, launch_unsettled or
+        // another reason true (round 203 F2, round 205 F3); begun after it
+        // settled, compared with its replay below when as heard. (A capture
+        // ends at a relocation, so its span touches those frames exactly
+        // when it begins before the settle point.)
+        if (const auto it = q.lateEnds.find(g.epoch); it != q.lateEnds.end()) {
+            if (c.offset < it->second) {
+                CHECK_FALSE(asHeard);
+                ++n.markedCaptures;
+                ++n.faults["late leave, before it settled, marked"];
+                continue;
+            }
+            ++n.faults[asHeard ? "late leave, after it settled, compared"
+                               : "late leave, after it settled, marked"];
         }
         if (!asHeard) {
             ++n.markedCaptures;
@@ -1238,7 +1266,8 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
                         << n.markedCaptures << " not as heard), " << q->engine.launchLog().size()
                         << " launches logged, " << q->partialReleases
                         << " late leaves released part of the way ahead, " << q->heldCycles
-                        << " cycles before a released renderer settled; not compared (faults): "
+                        << " cycles before a released renderer settled; counted, not compared "
+                           "(faults), and late-leave captures: "
                         << (faults.empty() ? std::string("none") : faults));
     }
     return {describe(b.engine.launchLog()), b.backend.capture().channels[0]};
