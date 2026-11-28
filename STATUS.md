@@ -460,11 +460,11 @@ instructions are in `docs/guides/installing.md`.
       channel shift). Open, the sequence test's next step: an epoch a late
       renderer leave went on in is not compared with its replay; the test
       drives the late timings by hook (a release part of the way ahead,
-      cycles before a released renderer settles) and checks there only
-      the law (the miss counters, launch.state against the nodes, the
-      marks of captures begun before the settle point), which few
-      captures reach. Judging those epochs needs a replay from the settle
-      point as a relocation, or a capture at each release.
+      cycles before a released renderer settles, a capture switched on
+      before it settles) and checks there only the law (no new miss,
+      launch.state against the nodes, the marks of captures begun before
+      the settle point). Judging those epochs needs a replay from the
+      settle point as a relocation.
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
