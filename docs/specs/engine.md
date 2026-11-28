@@ -1055,7 +1055,9 @@ the same.*
   included (round 176 F3). What each track played as a capture
   began is its newest entry before the start, a return included (an
   entry at the start is a switch at its frame 0, crossfading from it);
-  for a capture begun while playing inside a switch's crossfade, what the
+  for a capture begun while playing inside a switch's crossfade (in the
+  switch's own pass: as far after it on the song's running count as in
+  the song, no loop wrap between, round 220 F1), what the
   switch faded from comes first and the switch after it, so the replay
   crossfades as live did (fault B). That first entry is no launch at the
   start: it carries no scene (a scene's section counts its launches at a

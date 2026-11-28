@@ -2156,9 +2156,15 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     const std::int64_t song = capture_.startSample;  // where in the song it began
     const auto fading = [&](const LaunchLogEntry& e) {
         if (capture_.startStream == 0 || e.epoch != capture_.epoch || !plan) return false;
+        // How far it began after the switch, on the song's running count;
+        // a loop wrap between ends the crossfade (§1.4.2), so the song moved
+        // from the switch's position (its anchor) as far as the count did.
+        // (The folded position alone matched a later pass's frames; the
+        // running count alone, a crossfade a wrap had cut: round 220 F1.)
+        const std::int64_t since = start - e.songFrame;
+        if (song - e.anchorSample != since) return false;
         for (const detail::Node& n : plan->nodes)
-            if (n.id == e.track)
-                return e.anchorSample + n.launchFadeFrames + n.timelineShift > song;
+            if (n.id == e.track) return since < n.launchFadeFrames + n.timelineShift;
         return false;
     };
     // Begun while playing inside a note a track's clip or arrangement was
