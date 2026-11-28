@@ -464,7 +464,17 @@ instructions are in `docs/guides/installing.md`.
       before it settles) and checks there only the law (no new miss,
       launch.state against the nodes, the marks of captures begun before
       the settle point). Judging those epochs needs a replay from the
-      settle point as a relocation.
+      settle point as a relocation. Two known edges, both only on
+      captures already not as heard: a capture's list reads the newest
+      plan's crossfade lengths and channel shifts, so an edit after its end
+      that changes them changes the crossfade its replay (begun mid-run,
+      `began_mid_run`) starts with; and a count of unsettled launches that
+      moves in a later epoch also marks a capture already ended
+      `launch_unsettled` (conservative: it only adds the mark). Narrowing
+      that to open captures is safe only because the late span's mark is
+      fixed as a capture is placed (round 225): the later count is what
+      kept such a capture marked before, and no test pins the placement
+      alone.
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

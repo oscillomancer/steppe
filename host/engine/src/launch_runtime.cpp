@@ -1317,7 +1317,14 @@ void Engine::takeBackUnheard() {
 
 void Engine::judgeAckDrops() {
     // A verdict that came late or was taken as unheard (round 201 F2): the
-    // capture there is not as heard (launch_unsettled).
+    // capture there is not as heard (launch_unsettled). Any capture, an
+    // ended one too, and whatever epoch the count moved for: conservative.
+    // Narrowing this to open captures is safe only because placeCapture
+    // fixes the late span's mark (round 225); before that, a later span's
+    // count was what kept a capture of an earlier late epoch marked once
+    // the span's record had moved on, and no test pins the placement alone
+    // (round 225's subcase "a late span of its own" passes either way while
+    // this marks ended captures).
     if (const auto unsettled = launchUnsettled_.load(std::memory_order_relaxed);
         unsettled != launchUnsettledSeen_) {
         launchUnsettledSeen_ = unsettled;
