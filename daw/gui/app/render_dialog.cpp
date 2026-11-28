@@ -141,6 +141,11 @@ std::string captureRangeLine(double first, double last, double seconds, bool loo
 // is not a capture. An unknown reason reads as its code in words.
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
+    // Always after began_mid_run: a note a clip or the arrangement held over
+    // the capture's start, which live heard and the render, starting inside
+    // it, never starts (an exact replay needs pre-roll).
+    if (reason == "began_in_note")
+        return "a note was already sounding where it began (the render leaves that note out)";
     // An edit, or a clip's return to the arrangement (removed, frozen or
     // over the memory budget) during it.
     if (reason == "edited_during") return "the session or a clip it played changed during it";

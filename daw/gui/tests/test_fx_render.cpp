@@ -610,6 +610,9 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
     CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None) ==
           "a launch was lost from the log before or during it (a new capture after Restart audio "
           "in Edit > Audio device starts clean)");
+    // Always listed after began_mid_run, so the line reads on from it.
+    CHECK(gui::RenderDialog::reasonWords("began_in_note", End::None) ==
+          "a note was already sounding where it began (the render leaves that note out)");
     CHECK(gui::RenderDialog::reasonWords("given", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("from_launcher", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("something_new", End::None) == "something new");

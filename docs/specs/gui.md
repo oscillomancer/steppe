@@ -2426,7 +2426,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
       the capture Render would play.
     - **As heard** (Last capture): the dry run's `as_heard` shows under the
       range, "As heard" or "Not as heard: " and the reasons in the dialog's
-      words (the capture began while playing; the session or a clip it
+      words (the capture began while playing; a note was already sounding
+      where it began (the render leaves that note out), `began_in_note`,
+      always after the first; the session or a clip it
       played changed during it, an edit or a clip's return to the
       arrangement; the playback rate changed during it; live input was heard;
       audio dropped out during it; a plug-in failed before or during it; a
