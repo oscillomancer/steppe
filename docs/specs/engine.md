@@ -535,7 +535,8 @@ until it is released.
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
   - **A run's first frame** (an offline render's first block, a locate: a
-    seek or a play start), on the grid or not, also sends every modulated
+    seek, a play start, or any new transport epoch, a pause or a loop
+    change included, in either executor), on the grid or not, also sends every modulated
     parameter, the memo made stale there. Its sum there is its routes'
     values at that frame, which a locate starts afresh: the rack restarts
     its Mod Outs at 0, held up to their first grid point, and the route's
@@ -794,7 +795,16 @@ the same.*
     takes the song there; from then on it plays by its phase wherever the
     song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
-    a performance replays exactly from its log.
+    a performance replays exactly from its log. A render (a replay)
+    begins as a relocation: each track's first entry at its first frame,
+    when anchored before or after the render's start, is what was carried
+    there and plays by its phase from that frame with no crossfade, as the
+    relocation did live (a loop clip a seek back carried before its anchor
+    too: fault A; one carried inside a crossfade: fault B). A one-shot
+    anchored after the start stays silent until its anchor and takes no
+    crossfade there (it once took a false 240-frame one). An entry
+    anchored at the start is a launch there and crossfades from what came
+    before it, the track's carried entry or, with none, the arrangement.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
   was left's sounding notes at the switch sample. An audio clip laid one
   item per period (`clipLaysAsOneItem` false) that fades out reads on in
@@ -1043,7 +1053,11 @@ the same.*
   budget). The replay plays a logged return as heard: the whole log
   replayed equals live, the executors' fade into the arrangement
   included (round 176 F3). What each track played as a capture
-  began is its newest entry by the start, a return included, so removing
+  began is its newest entry before the start, a return included (an
+  entry at the start is a switch at its frame 0, crossfading from it);
+  for a capture begun while playing inside a switch's crossfade, what the
+  switch faded from comes first and the switch after it, so the replay
+  crossfades as live did (fault B). So removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip
@@ -1125,7 +1139,14 @@ the same.*
   `launch.commit` is refused meanwhile (`launch.capture.ending`). A
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins
-  again where the transport goes. A capture armed while a launched clip's
+  again where the transport goes. In either executor that is where it
+  goes even before the executor's next cycle has taken the relocation,
+  and a launch placed meanwhile (stopped, or at a play start before the
+  first cycle) is anchored from there too (the in-callback executor once
+  used where it last was, fault E: `Engine::callbackPosition`; its
+  launch clock's position and its reported position are stored with the
+  epoch it takes, so one made during the cycle that takes it begins there
+  too, round 216 F-C1). A capture armed while a launched clip's
   MIDI note sounds commits that note struck again, at any rate: the
   committed piece starts at the capture's start, inside the note, and the
   arrangement strikes a note held into an item's start at that start, so
@@ -1544,7 +1565,11 @@ the same.*
   seek, before the anticipative renderer has relocated, the play position
   `transport()` reports (and so a launch's anchor and a capture's start)
   is where it will relocate: the seek's sample, else where it paused
-  (review round 70). The queue has
+  (review round 70). A capture switched on while playing begins at the
+  heard clock's song position, its count from the epoch's start; the
+  anticipative engine's live render sets that start when it takes the
+  epoch, as consuming its first chunk does (F5: a capture placed between
+  the two began at the previous epoch's count). The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
   Each slot's state word carries a generation, so a slot the main thread
@@ -2660,7 +2685,8 @@ converts each launch's song frame to the first stream frame whose song
 position reaches it. That is live placement's rule (§1.4.2, under
 a master playrate), which places a launch with quantize none on the next
 whole song sample too, so the two switch on the same stream frame. The capture's facts are recorded
-by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
+by the engine (`Engine::CaptureFacts`: from the play start, begun
+inside a sounding note, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
 the capture ends.
 
@@ -2722,6 +2748,7 @@ refused. `tail_s`, `trim`,
 | Reason | When |
 | --- | --- |
 | `began_mid_run` | the capture did not begin at a play start |
+| `began_in_note` | it began while playing inside a note a track's clip or arrangement was sounding (a rack's Notes feed included): live holds the note, its replay, starting inside it, never starts it; always after `began_mid_run` (an exact replay needs pre-roll, an open item) |
 | `edited_during` | a plan compiled during it for anything but launches (any session edit) |
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
@@ -3740,7 +3767,14 @@ harness. See the tooling README for schemas, limits and invocation details.
   main thread; the callback drops older chunks at its next cycle (pause is
   silent at once, a seek never plays stale audio); the renderer relocates —
   after a pause to the position the callback reports once it has seen the
-  new epoch. New plans are adopted at the render position (edits are heard
+  new epoch. Every epoch starts afresh, as an offline render from its
+  position does: the renderer relocates its nodes and the callback its
+  live ones (the racks restart their modules and the modulation its run,
+  held voices end, plug-ins reset). Without anticipation the callback
+  does the same at any new epoch, a pause or a loop change with no seek
+  included (review round 215 F-B1: it once kept them across a loop change
+  while playing and a pause and play with no block between, so it
+  differed from the renderer and the replay there). New plans are adopted at the render position (edits are heard
   after the audio already rendered, no gap). Renderer parking follows
   ADR-0028: stopped block deadlines and event-driven buffer-space wakes
   from the callback, with a safety bound of half the playback buffer span

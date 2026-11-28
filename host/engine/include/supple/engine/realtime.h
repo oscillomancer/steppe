@@ -929,11 +929,15 @@ class Engine {
     // (engine.md §3.1): recorded while it runs, fixed when it ends.
     struct CaptureFacts {
         bool fromPlayStart = false;  // it began where playing began (stream 0)
-        bool edited = false;         // the session changed apart from the playrate
-        bool rateChanged = false;    // the playrate's controls, or a sync chase's scale
-        bool liveInput = false;      // a plan monitoring live input played during it
-        bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
-        bool pluginFailed = false;   // a processing error (processErrors)
+        // Begun while playing (not from a play start) inside a sounding
+        // note, which live holds and its replay, starting inside the note,
+        // never starts: an exact replay needs pre-roll (began_in_note).
+        bool beganInNote = false;
+        bool edited = false;        // the session changed apart from the playrate
+        bool rateChanged = false;   // the playrate's controls, or a sync chase's scale
+        bool liveInput = false;     // a plan monitoring live input played during it
+        bool dropout = false;       // an anticipation miss, a late bridge cycle, an xrun
+        bool pluginFailed = false;  // a processing error (processErrors)
         // A launch ack lost to a full ring while it ran, or at any time
         // before it began: the log misses a launch that was heard.
         bool launchUnlogged = false;
@@ -1179,6 +1183,8 @@ class Engine {
     // The anticipative executors' position in `epoch`, also before the
     // renderer has relocated for it: then what relocate() will take.
     std::int64_t anticipativePosition(std::uint64_t epoch) const;
+    // The callback's executor's, also before its next cycle has taken it.
+    std::int64_t callbackPosition(std::uint64_t epoch) const;
     // Frames the callback has played in `epoch` (0 before its first).
     // The epoch with its seek target and loop, read under xportSeq_: the
     // audio thread gives up after `tries` (a write in progress) and keeps
@@ -1301,6 +1307,11 @@ class Engine {
     // the slots and deciding them, as a main thread preempted there.
     void (*launchCommitForTests_)(void*) = nullptr;
     void* launchCommitContext_ = nullptr;
+    // Tests only (EngineTestAccess): runs in the in-callback executor's cycle
+    // right after it takes a new epoch, as a main thread acting during that
+    // cycle (the hook disables RealtimeSanitizer itself).
+    void (*epochTakenForTests_)(void*) = nullptr;
+    void* epochTakenContext_ = nullptr;
     // Tests only (EngineTestAccess): this many of the next prepareRatePlan
     // attempts are late, as if the renderer had passed their hand, so they
     // prepare again (the third fails, and a recovery seek follows).

@@ -440,28 +440,20 @@ instructions are in `docs/guides/installing.md`.
       a launch of its epoch instead of rendering past it, so a launch made
       while stopped that starts the transport sounds from the play start
       under load too (round 209); the GUI's as-heard line words
-      `launch_unsettled` (gui.md §4.8). Open,
-      found by the seeded sequence test (rounds 205 and 207; ruled for
-      branch capture-start-state): a capture is as heard but its replay
-      differs when it begins (A) where a loop clip carried from before
-      plays before its anchor (after a seek back; live plays it by its
-      phase, the replay is silent), (B) at a play start inside a crossfade
-      carried from before the stop or from a clip the stop kept (the
-      replay fades from silence), (D) inside a sounding MIDI note while
-      playing (to be marked: an exact replay needs pre-roll from the
-      note's start with every instrument's state, the open pre-roll item),
-      or (E, in-callback) after being switched on while stopped and a seek
-      while stopped (it keeps the old start and spans the jump), or at a
-      play start before the callback has played the epoch (it starts where
-      the stop was, before the seeks while stopped); (F5, anticipative,
-      with a live input) a capture switched on while playing after a
-      relocation starts at its stream frame, not its song position. Also
-      open: (G) on a loop change while playing, or a pause and play with
-      no block between, the in-callback executor's instruments sound on
-      (a held MIDI note) where the anticipative executor and the replay
-      start silent; (H) in-callback, a live Notes feed's gate holds its
-      value from before a pause after the play, for the first block or
-      until a note sounding there ends. The sequence test compares each
+      `launch_unsettled` (gui.md §4.8), not `began_in_note` yet
+      (gui-lead). A capture begun while playing inside a note a
+      clip or the arrangement is sounding says `began_in_note` (after
+      `began_mid_run`): live holds the note, its replay never starts it.
+      Pre-roll, open: an exact replay of a capture begun while playing
+      needs every instrument's and effect's state from before its start;
+      without it the replay also misses a note's release tail and
+      effects' tails sounding there (marked only `began_mid_run`). Both
+      executors start every transport epoch afresh, as its replay does (a
+      loop change while playing and a pause and play with no block between
+      included), resetting each plug-in once. Known behaviour, in both
+      executors and older than this batch: a new epoch while monitoring
+      (a seek, a pause, a loop change, a loop edit while stopped included)
+      cuts a monitored strip's plug-in tails. The sequence test compares each
       epoch and capture after the frames its class covers. Not yet traced:
       the executors' last 64 frames before a seek differed once (the
       channel shift).
@@ -1023,13 +1015,11 @@ instructions are in `docs/guides/installing.md`.
   chain's run starts with its track's (a seek, a pause and play, a loop
   wrap: every offset sent at the first frame), so from a song position off
   the 32-frame grid it plays as the offline render from there; one that
-  does not run then keeps to the grid when it first does. Open: a capture
-  switched on while playing, or replayed from inside a run it does not
-  restart (a loop change, a pause and play with no block between),
-  restarts the rack's Mod Outs at 0 in its offline replay, where live
-  keeps their history, so a modulated chain's frames up to the next grid
-  point differ while the capture says as heard (the launch sequence
-  test's class C); and an FX moved from another track inside a plan an
+  does not run then keeps to the grid when it first does. A capture
+  switched on while playing replays with the rack's Mod Outs restarted at
+  0, where live keeps their history, so a modulated chain's frames up to
+  the next grid point can differ; it says `began_mid_run`. Open: an FX
+  moved from another track inside a plan an
   adoption brings after a locate (a new stage, the same instance) plays
   the value it was sent before for up to 19 frames, to the next grid
   point (review round 213). A route

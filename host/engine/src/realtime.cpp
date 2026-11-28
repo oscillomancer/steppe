@@ -1154,6 +1154,21 @@ std::int64_t Engine::anticipativePosition(std::uint64_t epoch) const {
     return playedPosition(epoch, epochStart_.load());
 }
 
+std::int64_t Engine::callbackPosition(std::uint64_t epoch) const {
+    // As anticipativePosition, for the callback's executor: until its next
+    // cycle takes `epoch` (it publishes rtPosEpoch_ there, stopped or
+    // playing), the seek's sample when a seek opened an epoch it has not
+    // taken, else where it is (a pause or a loop change resumes there). A
+    // launch or capture placed while stopped, right after a seek, then
+    // begins where the transport goes, not where it was (fault E, found by
+    // the launch sequence test; 31-37 of 40 in-callback on a threaded
+    // device, PROBE211 J).
+    const auto taken = rtPosEpoch_.load(std::memory_order_acquire);
+    if (taken < epoch && seekEpoch_.load(std::memory_order_acquire) > taken)
+        return seekSample_.load();
+    return reportedPos_.load();
+}
+
 std::int64_t Engine::playedStream(std::uint64_t epoch) const {
     const auto stream = rtStream_.load();  // consumption/renderer-arm handshake
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? stream : 0;
@@ -1170,7 +1185,7 @@ TransportState Engine::transport() const {
         t.sample = static_cast<std::int64_t>(std::llround(sample));
         t.seconds = sample / config_.sampleRate;
     } else {
-        t.sample = options_.anticipative ? anticipativePosition(epoch) : reportedPos_.load();
+        t.sample = options_.anticipative ? anticipativePosition(epoch) : callbackPosition(epoch);
         const auto* prepared = latestPlan_.load(std::memory_order_acquire);
         if (prepared && prepared->rateSeekSequence != 0 &&
             prepared->preparedRateBoundary.epoch == epoch)
@@ -2177,6 +2192,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             stoppedGen_.store(plan->generation, std::memory_order_release);
         }
     }
+    bool restarted = false;  // this cycle reset every instance it owns
     if (xportNew && xport.seekSeq != seekSeen_) {
         seekSeen_ = xport.seekSeq;
         clickAge_ = -1;
@@ -2184,11 +2200,27 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         if (plan) {
             detail::locate(*plan, pos_);
             resetOwned(processing_, plan);
+            restarted = true;
         }
+    } else if (xportNew && xport.epoch != rtEpoch_ && plan) {
+        // A new epoch without a seek (a pause, a loop change) starts afresh
+        // where it is, as the anticipative engine's executors start every
+        // epoch (the renderer's relocate, liveRender) and as its replay does:
+        // the racks restart their modules and the modulation its run, held
+        // voices end, a live Notes feed's gate starts over (review round 215
+        // F-B1: the in-callback executor once kept them across a loop change
+        // while playing, and across a pause and play with no block between,
+        // classes C, G and H of the launch sequence test).
+        detail::locate(*plan, pos_);
+        resetOwned(processing_, plan);
+        restarted = true;
     }
     if (const bool want = wantNow(); want != playing_) {
         playing_ = want;
-        if (!want) resetOwned(processing_, plan);  // no hanging notes
+        // No hanging notes; once: a pause's new epoch has just reset them
+        // (twice was a second round trip to each bridged plug-in; round
+        // 217).
+        if (!want && !restarted) resetOwned(processing_, plan);
         // Starting: what ran while stopped (plugins, the Console 9 noise)
         // starts over, as in the renderer; monitored strips play on.
         if (want && plan) {
@@ -2228,7 +2260,17 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         rtEpoch_ = xport.epoch;
         rateEpochStart_ = double(pos_);
         rtStream_.store(0, std::memory_order_relaxed);
+        // Its position with it: stopped, nothing else stores it, so a play
+        // start's launch clock (launchClock) read the last position played
+        // before the stop, and a capture switched on before the first cycle
+        // began there (fault E, seed 4); and the reported one, which
+        // transport() reads once the epoch is taken (callbackPosition), so a
+        // launch or capture made during this cycle does not take the position
+        // before a stopped seek (round 216 F-C1).
+        rtPos_.store(pos_, std::memory_order_relaxed);
+        reportedPos_.store(pos_);
         rtPosEpoch_.store(rtEpoch_, std::memory_order_release);
+        if (epochTakenForTests_) epochTakenForTests_(epochTakenContext_);
     }
     if (plan) {
         startFree(processing_, &plan->instances, &processing_);  // any refused, retried
@@ -3411,6 +3453,11 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         }
         livePos_ = playedPosition(rtEpoch_, epochStart_.load());
         liveStream_ = playedStream(rtEpoch_);
+        // The heard clock's count from the epoch's start (publishRateClock,
+        // unity): set here too, as the consumed first chunk sets it, which
+        // may come after this cycle's publish (F5, round 209: a capture
+        // placed meanwhile began at the previous epoch's count).
+        if (liveStream_ == 0) rateEpochStart_ = double(livePos_);
         // The first plan, or a new epoch, starts afresh; a plan taking over
         // from the renderer mid-epoch continues (adoptLive).
         detail::locateClass(p, livePos_, true, !liveEntered_);

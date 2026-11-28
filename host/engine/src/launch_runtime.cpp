@@ -2137,27 +2137,93 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         out.endsFrame = capture_.endSong - start;
         out.endsBeat = capture_.endBeat;
     }
-    // What each track played as the capture began: its newest entry by
+    // What each track played as the capture began: its newest entry before
     // then, a plan's return included (one after it, such as a clip removed
-    // later, is a launch within).
+    // later, is a launch within; one at its first frame is a switch there).
+    // A render begins in each track's first entry as a relocation would
+    // (engine.md §1.4.2): by its phase, its crossfade over. So for a capture
+    // begun mid-run (not at its epoch's first frame, where live relocated)
+    // inside the crossfade of a switch made in its epoch, what that switch
+    // faded from comes first, and the switch after it at frame 0: its
+    // replay crossfades as live did (fault B).
     std::map<model::Id, std::size_t> before;
     for (std::size_t i = 0; i < launchLog_.size(); ++i) {
         const LaunchLogEntry& e = launchLog_[i];
-        if (e.epoch < capture_.epoch || (e.epoch == capture_.epoch && e.songFrame <= start))
+        if (e.epoch < capture_.epoch || (e.epoch == capture_.epoch && e.songFrame < start))
             before[e.track] = i;
+    }
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    const std::int64_t song = capture_.startSample;  // where in the song it began
+    const auto fading = [&](const LaunchLogEntry& e) {
+        if (capture_.startStream == 0 || e.epoch != capture_.epoch || !plan) return false;
+        for (const detail::Node& n : plan->nodes)
+            if (n.id == e.track)
+                return e.anchorSample + n.launchFadeFrames + n.timelineShift > song;
+        return false;
+    };
+    // Begun while playing inside a note a track's clip or arrangement was
+    // sounding (D): live holds it, its replay never starts it. (From a play
+    // start or a relocation live starts afresh: no note sounds on.)
+    if (capture_.startStream != 0 && plan) {
+        const auto sounding = [&](model::Id track, auto&& clipNote, auto&& arrangementNote) {
+            const auto it = before.find(track);
+            if (it == before.end() ||
+                launchLog_[it->second].action == LaunchLogEntry::Action::Arrangement)
+                return arrangementNote();
+            const LaunchLogEntry& e = launchLog_[it->second];
+            return e.action == LaunchLogEntry::Action::Clip && clipNote(e);
+        };
+        for (const detail::Node& n : plan->nodes) {
+            const auto clipNote = [&](const LaunchLogEntry& e) {
+                const int k = detail::playerOf(n, e.clip);
+                return k >= 0 && detail::clipNoteSounding(
+                                     *plan, n.players[static_cast<std::size_t>(k)], e.anchorSample,
+                                     e.anchorBeat, e.anchorSample > song, song);
+            };
+            if (sounding(n.id, clipNote, [&] { return detail::arrangementNoteSounding(n, song); }))
+                out.facts.beganInNote = true;
+            if (n.rack)  // a rack's Notes feeds play their source track's clips
+                for (const detail::NotesFeed& feed : n.rack->notes) {
+                    if (!feed.follows || !feed.source) continue;
+                    const auto feedNote = [&](const LaunchLogEntry& e) {
+                        const int k = detail::playerOf(feed, e.clip);
+                        return k >= 0 &&
+                               detail::clipNoteSounding(
+                                   *plan, feed.players[static_cast<std::size_t>(k)], e.anchorSample,
+                                   e.anchorBeat, e.anchorSample > song, song);
+                    };
+                    if (sounding(*feed.source, feedNote, [] { return false; }))
+                        out.facts.beganInNote = true;
+                }
+        }
     }
     for (const auto& [track, i] : before) {
         LaunchLogEntry first = launchLog_[i];
-        if (first.action == LaunchLogEntry::Action::Arrangement) continue;
         first.runningFrame = 0;
         first.epoch = capture_.epoch;
+        if (fading(launchLog_[i])) {
+            LaunchLogEntry from = first;  // the arrangement, unless an entry came before
+            from.action = LaunchLogEntry::Action::Arrangement;
+            from.clip = {};
+            for (std::size_t k = i; k-- > 0;)
+                if (launchLog_[k].track == track) {
+                    from = launchLog_[k];
+                    break;
+                }
+            from.runningFrame = 0;
+            from.epoch = capture_.epoch;
+            out.launches.push_back(from);
+            out.launches.push_back(first);
+            continue;
+        }
+        if (first.action == LaunchLogEntry::Action::Arrangement) continue;
         out.launches.push_back(first);
     }
     // Then each launch within it, in frame order: the log's, where a return
     // comes first at a frame it shares (a launch there came after it).
     const std::size_t firsts = out.launches.size();
     const auto within = [&](const LaunchLogEntry& e) {
-        if (e.epoch != capture_.epoch || e.songFrame <= start || e.songFrame >= end) return;
+        if (e.epoch != capture_.epoch || e.songFrame < start || e.songFrame >= end) return;
         LaunchLogEntry in = e;
         in.runningFrame = e.songFrame - start;
         out.launches.push_back(in);

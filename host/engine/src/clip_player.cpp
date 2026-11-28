@@ -1894,6 +1894,50 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
     window(fold, frames, true);
 }
 
+bool clipNoteSounding(const Plan& p, const ClipPlayer& pl, std::int64_t anchorSample,
+                      double anchorBeat, bool unanchored, std::int64_t song) {
+    if (!pl.midi || pl.muted || pl.events.empty() || !(pl.periodBeats > 0)) return false;
+    const time::TimeMap& tm = *p.timeMap;
+    const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
+    const auto sampleOf = [&](double beat) {
+        return time::samplesAt(tm.secondsAt(beat), p.rate) - origin;
+    };
+    const double beat = tm.beatAt(double(song + origin) / p.rate);
+    const auto k = static_cast<std::int64_t>(std::floor((beat - anchorBeat) / pl.periodBeats));
+    const bool before = unanchored && !pl.once;  // as clipMidi
+    // Its pass and the one before (a note-off may sit at the period's end).
+    for (std::int64_t pass = k - 1; pass <= k; ++pass) {
+        if ((pass < 0 && !before) || (pl.once && pass > 0)) continue;
+        const double base = anchorBeat + double(pass) * pl.periodBeats;
+        for (const ClipEvent& e : pl.events) {
+            if (e.event.kind != host::Event::Kind::NoteOff) continue;
+            const std::int64_t on = sampleOf(base + e.start), off = sampleOf(base + e.beat);
+            if (!before && on < anchorSample) continue;  // never played (clipMidi)
+            if (on < song && off > song) return true;
+        }
+    }
+    return false;
+}
+
+bool arrangementNoteSounding(const Node& n, std::int64_t song) {
+    // Its events are on the node's timeline (timelineShift later), sorted.
+    const std::int64_t at = song + n.timelineShift;
+    std::vector<std::pair<std::int32_t, std::int32_t>> open;  // (noteId, channel·128 + key)
+    for (const TimedEvent& t : n.events) {
+        const host::Event& e = t.event;
+        if (e.kind == host::Event::Kind::NoteOn) {
+            if (t.sample >= at) break;  // one starting there is started there
+            open.emplace_back(e.noteId, e.channel * 128 + e.key);
+        } else if (e.kind == host::Event::Kind::NoteOff || e.kind == host::Event::Kind::NoteChoke) {
+            if (t.sample > at) continue;
+            const std::pair<std::int32_t, std::int32_t> key{e.noteId, e.channel * 128 + e.key};
+            if (const auto it = std::find(open.begin(), open.end(), key); it != open.end())
+                open.erase(it);
+        }
+    }
+    return !open.empty();
+}
+
 bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
                     std::int64_t& ticks) SUPPLE_RT {
     if (player < 0) return false;
