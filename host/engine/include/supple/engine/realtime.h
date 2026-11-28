@@ -746,6 +746,15 @@ class Engine {
     // Bounded by awaitSeconds() unless a bound is passed.
     bool awaitRendered(std::int64_t frames) { return awaitRendered(frames, awaitSeconds()); }
     bool awaitRendered(std::int64_t frames, double timeoutSeconds);
+    // Anticipative, main thread: the frames of the current transport epoch
+    // rendered past what the callback has played (0 before the renderer has
+    // relocated there; with no anticipation, no limit). A manual backend's
+    // caller runs no more cycles than this covers, and at least one (which
+    // plays a pre-roll, or drops older epochs' chunks so the renderer has
+    // room): what it plays then never depends on when the renderer's thread
+    // runs (awaitRendered also answers for a renderer that can do nothing
+    // more until the callback runs).
+    std::int64_t renderedAhead() const;
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
     // (anticipative; immediately true otherwise, where the next cycle does).

@@ -1333,6 +1333,14 @@ bool Engine::awaitRendered(std::int64_t frames, double timeoutSeconds) {
     }
 }
 
+std::int64_t Engine::renderedAhead() const {
+    if (!ring_) return INT64_MAX;
+    const std::uint64_t e = epoch_.load();
+    if (epochDone_.load() != e) return 0;  // relocate stores the stream before the epoch
+    return std::max<std::int64_t>(
+        0, renderedStream_.load(std::memory_order_acquire) - playedStream(e));
+}
+
 bool Engine::awaitRendererHeld(double timeoutSeconds) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
