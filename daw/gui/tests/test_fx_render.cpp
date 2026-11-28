@@ -5698,6 +5698,60 @@ TEST_CASE("every refusal a rack knob's commands declare or answer has the GUI's 
           "The knob's lane could not be shown or hidden (made.up).");
 }
 
+TEST_CASE("a rack knob's rack.param refusal is worded by the argument it is refused at") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string rack = exec("rack.add", R"({"name":"Lead"})")["rack"].asString();
+    const auto add = [&](const char* type) {
+        return exec("module.add",
+                    R"({"rack":")" + rack + R"(","type":")" + type + R"("})")["module"]
+            .asString();
+    };
+    const std::string filter = add("filter"), adsr = add("adsr");
+    // The engine's own refusal of `args`, worded.
+    const auto refused = [&](const char* command, const std::string& args, const std::string& at) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "rack.param");
+        CHECK(r.error().path.ends_with(at));
+        const std::string words = gui::racks::knobRefusalWords(f.app->head(), command, r.error());
+        CHECK(words.find(r.error().message) == std::string::npos);
+        return words;
+    };
+    // A knob the module does not have, and a value or choice key a knob
+    // does not take, are refused at the same argument (/params/<key>): one
+    // sentence true for both.
+    const std::string either =
+        "The knob could not be set: the knob does not take that value, or "
+        "its module no longer has that knob.";
+    CHECK(refused("module.set", R"({"module":")" + filter + R"(","params":{"nope":1}})",
+                  "/params/nope") == either);
+    CHECK(refused("module.set", R"({"module":")" + adsr + R"(","params":{"mode":"sideways"}})",
+                  "/params/mode") == either);
+    CHECK(refused("module.set", R"({"module":")" + filter + R"(","params":{"cutoff":"loud"}})",
+                  "/params/cutoff") == either);
+    // MIDI learn names the knob apart (/param): only a knob it lacks.
+    CHECK(refused("module.learn.set",
+                  R"({"module":")" + filter +
+                      R"(","param":"nope","midi":{"kind":"cc","channel":1,"number":21}})",
+                  "/param") ==
+          "The knob's MIDI controller could not be set: its module no longer has that knob.");
+    // Every knob at once (a type not installed, a plug-in's module) and a
+    // plug-in's module for learn, as the engine names them.
+    const model::Session& s = f.app->head();
+    CHECK(gui::racks::knobRefusalWords(s, "module.set", Error("rack.param", "x", "/params")) ==
+          "The knob could not be set: its module's type is not installed, or its knobs are a "
+          "plug-in's.");
+    CHECK(
+        gui::racks::knobRefusalWords(s, "module.learn.set", Error("rack.param", "x", "/module")) ==
+        "The knob's MIDI controller could not be set: its knobs are a plug-in's.");
+}
+
 TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs follow playback") {
     Fixture f;
     if (!f.ok) return;

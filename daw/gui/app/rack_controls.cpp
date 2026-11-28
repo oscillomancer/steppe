@@ -227,16 +227,28 @@ std::string knobAction(std::string_view command) {
     return "The knob could not be changed";
 }
 
-// Why, by code (each of kKnobCommands' declared codes, and those its run
-// answers for arguments the GUI gives); nullopt for a code the GUI's
-// arguments never meet (a schema or command code, a take's or a clip's).
-std::optional<std::string> knobCause(std::string_view code) {
+// Why, by code and the argument it is refused at (each of kKnobCommands'
+// declared codes, and those its run answers for arguments the GUI gives);
+// nullopt for a code the GUI's arguments never meet (a schema or command
+// code, a take's or a clip's).
+std::optional<std::string> knobCause(std::string_view code, std::string_view path) {
     if (code == "module.unknown" || code == "mo.unknown" || code == "rack.unknown_module")
         return "its module is no longer in the rack";
     if (code == "en.unknown") return "its lane is gone";
     if (code == "rack.unknown_type") return "its module's type is not installed";
-    if (code == "rack.param")
-        return "its module no longer has that knob, or its type is not installed";
+    if (code == "rack.param") {
+        if (path.starts_with("/args")) path.remove_prefix(5);
+        // module.set: every knob at once (/params, /preset) when the type
+        // is missing or the module is a plug-in's; one knob (/params/<key>)
+        // when it has no such knob or does not take that value or choice,
+        // which one path names alike. module.learn.set: the module
+        // (/module, a plug-in's) or its knob (/param, none such).
+        if (path == "/params" || path == "/preset")
+            return "its module's type is not installed, or its knobs are a plug-in's";
+        if (path == "/module") return "its knobs are a plug-in's";
+        if (path == "/param") return "its module no longer has that knob";
+        return "the knob does not take that value, or its module no longer has that knob";
+    }
     if (code == "params.out_of_range" || code == "env.value")
         return "the value is outside the knob's range";
     if (code == "module.learn_unknown") return "the knob has no MIDI controller now";
@@ -253,7 +265,7 @@ std::optional<std::string> knobCause(std::string_view code) {
 
 std::string knobRefusalWords(const model::Session& s, std::string_view command, const Error& e) {
     if (auto words = views::modulationRefusalWords(s, command, e)) return *words;
-    if (auto cause = knobCause(e.code)) return knobAction(command) + ": " + *cause + ".";
+    if (auto cause = knobCause(e.code, e.path)) return knobAction(command) + ": " + *cause + ".";
     return knobAction(command) + " (" + e.code + ").";
 }
 
