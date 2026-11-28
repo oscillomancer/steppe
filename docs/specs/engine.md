@@ -674,6 +674,142 @@ the same.*
   the engine's life, since its tracks' entries may be stale (round 178
   F4: which launch was lost cannot be told exactly, so none is
   restored). A new engine (Restart audio) starts clean.
+  **A launch applied but not heard is taken back** (ADR-0097, revision
+  2026-11-26, review round 192 F6). The anticipative renderer applies a
+  launch in the frames it renders ahead, up to its render-ahead span
+  before the listener, and the in-callback executor applies a launch's
+  early half (prelaunch, prewarm, a modulated clip chain's entry) before
+  its switch. A pause or a seek that ends the epoch before the switch is
+  heard leaves that work unheard:
+  - **Heard** means handed to the device callback, not the output latency
+    later. Where hearing ended in an epoch is one value, the callback's: it
+    publishes it as it leaves the epoch (the stream it had played; 0 for an
+    epoch it skipped) in a ring of 64 epochs (`heardEnds_`, each entry
+    stored with its epoch number and checked on read, so a reused entry
+    never reads as another epoch's).
+  - **A verdict is made once and stored; nothing is judged twice** (round
+    203 F1). As the callback leaves an epoch it first writes each applied
+    slot's verdict (`LaunchSlot::verdict`: heard when its key is below the
+    end; unheard in an epoch it skipped), then publishes the end. Each
+    executor takes back at its own leave of the epoch, by those verdicts:
+    the callback there and then, the renderer in `relocate` after waiting
+    for the callback to see the new epoch (a manual backend's callback runs
+    only when told, so what it consumed is final there). If the wait times
+    out, the renderer applies and takes back nothing until the verdicts are
+    in (`settleLeave`); what it renders meanwhile may still hold an unheard
+    switch, so a capture in the epoch it went on in that began before it
+    settled, over frames it rendered so, is not as heard
+    (`launch_unsettled`, round 203 F2; marked as those frames are rendered,
+    round 209), and so is one running across the leave, pending or placed.
+    It never renders past a launch of the epoch it goes on in that it has
+    not switched (round 209): before such a launch's first frame on its
+    targets (early halves included) it holds, and the callback's next
+    cycle, which publishes the end it waits for, wakes it to settle and
+    switch the launch at its frame. At a play start the callback is
+    waiting for its pre-roll meanwhile, so the start is one period later
+    and nothing is missed: a launch placed while stopped sounds from the
+    play start on both executors, is logged there, and a capture from
+    there is as heard. Should a hold outlast what the renderer has rendered
+    ahead while playing, the callback plays silence for the frames it
+    lacks and counts an anticipation miss (`engine.status`), the stream
+    does not move past what was rendered, and a capture over it is not as
+    heard (`dropout`); the launch still switches at its frame. A launch
+    placed at a play start (`LaunchSlot::playStart`) is never missed and
+    placed again a bar later; a path that misses one all the same counts
+    it (`launchPlayStartMissed_`, by path: publishing, an executor passing
+    it undecided, or an executor passing it committed so that it is voided
+    and placed again, the path the journey's launch took before the hold)
+    and marks the capture. A
+    record whose slot has since been reused is never taken back: a slot is
+    free again only once its launch is known heard (round 209: with the
+    leave's end unknown after more epochs than the ring holds, such a heard
+    switch was taken back and the node played what the log did not). A relocation while
+    such a leave is still pending leaves that epoch too (it applied
+    nothing there) and moves the late span on to the epoch it goes on in
+    (round 205 F3). A record applied as a relocation in a later epoch is
+    judged by its frame there against that epoch's end. A block the
+    renderer renders with such a leave pending does not count as run: a
+    launch the callback switched meanwhile (a Notes feed's target) is
+    switched on the renderer's targets once the leave settles, at its next
+    block if still in that epoch, else at its first block after it, playing
+    by its phase as a relocation does. The renderer passing such a launch's
+    frame marks the late span whether or not anything was applied ahead
+    (round 207). Since the hold (round 209) no path passes such a launch:
+    the renderer holds before a launch it has targets of, and the callback,
+    playing only what was rendered, cannot switch it first; the renderer's
+    pass for an all-live plan has no targets of its own. A path that passes
+    one all the same is counted (`launchPassedPending_`, by path: passed by
+    the renderer, or switched late after the callback) and marks the
+    capture (round 214). For the same reason `launch.state` lists no applied
+    launch as queued while an executor has yet to switch it (round 207 did):
+    none is heard before the renderer switches it, and one on the callback's
+    targets alone plays at once.
+  - **A slot's lifetime** (round 205): a launch takes a free slot, or one
+    whose launch every executor is done with and whose switch is known
+    heard: in its epoch once the callback has played past its key, after
+    it by its verdict. A launch reads the executors' acks first, and taking
+    such a slot settles its log entries as heard, so no entry is ever
+    judged against a reused slot. A slot whose switch was not heard is not
+    taken: it is voided and placed again once every executor has left its
+    epoch and taken back (`LaunchSlot::left`). So a long play reuses slots
+    as their launches are heard, and many epochs without a service lose
+    no heard launch.
+  - **The newest launch on a track wins** (round 207): after a take-back a
+    track holds what the in-callback executor, which never ran ahead,
+    would. A launch replaces every launch still waiting on its track
+    (pending, committed, missed or voided), and one taken back that a
+    newer launch on its track replaced (`LaunchSlot::order`, the track's
+    newest) is dropped, not placed again, nor listed by `launch.state`. One
+    placed again goes back into its own slot, so every taken-back launch
+    settles in one service. A launch first takes back and voids what the
+    executors have judged unheard, so with no service at all the slots
+    held stay bounded by the tracks.
+  - The main thread judges each log entry once: a slot's entry by the
+    slot's verdict, or as heard when its slot is taken (above), a return
+    by its epoch's end, which it copies from the ring the first
+    time a service reads it. An entry judged heard is never looked at
+    again; `launch.state` reads the same stored verdicts. "Unknown, so
+    unheard" applies only to an epoch whose end no service read before its
+    ring entry was reused (64 epochs without a service), and marks the
+    capture.
+  - The key is the target plus the track's channel shift (`timelineShift`)
+    as of the switch (`LaunchSlot::key`, round 203 F3): an early half sets
+    it from its plan's shift, the first target to switch sets it again
+    from its own;
+    each executor records it, each ack carries it, and the log keeps it
+    with its entry, so a plan published after the switch with another
+    shift changes no verdict. A switch whose shift differs from its early
+    half's, or from the other executor's switch, is not judged exactly: the
+    capture is marked (`launch_unsettled`). A stop exactly at the switch
+    frame is not heard; one frame later it is, keeps its ack and is not
+    placed again.
+  - Each node keeps undo records of what an apply changed (`LaunchUndo`,
+    16 per node, carried by `carryLaunch`): its launch state, the prelaunch
+    and prewarm halves, the reader rotation, a feed's state. An early
+    half's record restores only what that half set (the next and warm-up
+    halves), never the launch state, because a heard switch may have come
+    after it: two launches closer together than the channel's lead record
+    the second's early half before the first's switch (round 201 F1). On
+    leaving an epoch an executor undoes, newest first, the records whose
+    key is at or past the heard end, so a node with several unheard
+    switches goes back to its state at the heard frame. A full ring drops its oldest record
+    and is counted (`launchUndoLost_`, warned; never expected).
+  - The main thread removes the unheard entries of an ended epoch from the
+    log (a return so removed is logged again at the start of the epoch it
+    goes on in), voids the unheard applied slots once both executors are
+    done with them, and places them again in their order (epoch, then
+    target) at the next play, by the existing path for voided slots. Every
+    kind of slot is judged alike: a clip launch, a stop, a return to the
+    arrangement, a scene's slots (each its own, at the same target) and a
+    class move's return.
+  - What an unheard launch derived goes with it: its prelaunch and its
+    warm-up's readers (a pitch-keeping playrate's primed stretch), so the
+    node gives at the next play what the in-callback executor gives. No
+    launch schedules another (there are no follow actions or chained
+    launches), so nothing else derives from one.
+  - A launch ack dropped by a full ring is judged once its epoch's heard
+    end is known: a dropped ack for an unheard slot does not count toward
+    `launch_unlogged`.
   A capture includes each return within its span in the log's order, and
   one with a return is not as heard (`edited_during`, §3.1), for the
   edit behind it alone: a return comes from a plan compiled for an edit
@@ -2298,6 +2434,18 @@ by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
 the capture ends.
 
+**Heard.** A frame is heard when the executors hand it to the device
+callback, not the output latency later (§1.4.2, "A launch applied but not
+heard is taken back"). A capture that a stop or seek ends holds no launch
+whose switch was not heard by then: the renderer may have applied it
+ahead, but it is taken back, and the launch placed again is logged once,
+in the new epoch. In between, `launch.state` reports it queued. Read
+before the callback has left the ended epoch (within about one device
+period of the stop), a capture listing a launch of that epoch whose key
+is at or past what was played there is not as heard (`launch_unsettled`):
+whether it was heard is not known yet. Read again once the verdict is
+in, it is as heard and lists only what was heard (round 201).
+
 **The selector.** `render.mix`, `render.stems`, `render.dry-run` and
 `render.queue.add` take an optional `performance`, one of:
 - `"captured"`: the capture `EngineApp::launchCapture()` returns (the
@@ -2348,7 +2496,8 @@ refused. `tail_s`, `trim`,
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
-| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2) |
+| `launch_unsettled` | it lists a launch whose verdict was not in when read (its epoch ended before the callback left it), or a verdict came late or was taken as unheard while it ran (a renderer that went on before the callback left the epoch, a capture begun over the frames it rendered before it settled, a shift change inside a launch's lead window, an end no service read before it was reused): commit it again once the transport has settled, or capture again (§1.4.2) |
+| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2); a lost ack for a launch taken back unheard does not count |
 | `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
 | `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
 | `other_version` | the version rendered is not the capture's own |

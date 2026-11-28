@@ -419,7 +419,52 @@ instructions are in `docs/guides/installing.md`.
       while a device cycle is in flight, so a launch made while stopped,
       or a capture armed, in that moment starts that much early (review
       round 74 F3; the renderer waits for that cycle, the main thread's
-      reading does not).
+      reading does not);
+    - a launch applied ahead (by the anticipative renderer, or its early
+      half in callback) and not heard before a pause or seek is taken
+      back and placed again at the next play, and leaves the log
+      (ADR-0097, revision 2026-11-26); a capture read before the
+      callback has left the stopped epoch (about one device period) is
+      not as heard while it lists a launch of that epoch whose verdict is
+      not in (`launch_unsettled`), and so is one over a renderer leave
+      that came before the callback's (a timed-out wait), one begun over
+      the frames that renderer rendered before it settled, or one whose
+      epoch end no service read before its ring entry was reused (64
+      epochs without a service); a launch's verdict is made once, so a
+      heard launch stays heard however many epochs follow (round 203),
+      and a slot is free again once its launch is heard, so a long play
+      never runs out (round 205); a track's newest launch wins over any it
+      replaced, taken back or not, and taken-back launches settle in one
+      service (round 207); a renderer leave held late no longer loses a
+      launch the callback switched meanwhile (round 207), and holds before
+      a launch of its epoch instead of rendering past it, so a launch made
+      while stopped that starts the transport sounds from the play start
+      under load too (round 209); the GUI's
+      as-heard line does not word `launch_unsettled` yet (gui-lead). Open,
+      found by the seeded sequence test (rounds 205 and 207; ruled for
+      branch capture-start-state): a capture is as heard but its replay
+      differs when it begins (A) where a loop clip carried from before
+      plays before its anchor (after a seek back; live plays it by its
+      phase, the replay is silent), (B) at a play start inside a crossfade
+      carried from before the stop or from a clip the stop kept (the
+      replay fades from silence), (D) inside a sounding MIDI note while
+      playing (to be marked: an exact replay needs pre-roll from the
+      note's start with every instrument's state, the open pre-roll item),
+      or (E, in-callback) after being switched on while stopped and a seek
+      while stopped (it keeps the old start and spans the jump), or at a
+      play start before the callback has played the epoch (it starts where
+      the stop was, before the seeks while stopped); (F5, anticipative,
+      with a live input) a capture switched on while playing after a
+      relocation starts at its stream frame, not its song position. Also
+      open: (G) on a loop change while playing, or a pause and play with
+      no block between, the in-callback executor's instruments sound on
+      (a held MIDI note) where the anticipative executor and the replay
+      start silent; (H) in-callback, a live Notes feed's gate holds its
+      value from before a pause after the play, for the first block or
+      until a note sounding there ends. The sequence test compares each
+      epoch and capture after the frames its class covers. Not yet traced:
+      the executors' last 64 frames before a seek differed once (the
+      channel shift).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle

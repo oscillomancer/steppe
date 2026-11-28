@@ -977,6 +977,42 @@ struct LaunchAction {
 };
 // A crossfade's length at a switch: 5 ms of timeline samples.
 inline constexpr double kLaunchFadeSeconds = 0.005;
+// What one launch did to a node, or to one of its rack's Notes feeds, kept
+// until the listener has heard its switch (ADR-0097, dated 2026-11-26): the
+// state before, so that a stop or locate before the switch is heard takes
+// it back (takeBackLaunches). `key`: the launch's switch frame (its slot's
+// target plus its channel's shift), `epoch` the epoch it was applied in.
+struct LaunchUndo {
+    std::uint64_t epoch = 0;
+    std::int64_t key = 0;
+    int feed = -1;  // a Notes feed of the node's rack (by index; `feedId`), else the node
+    Id feedId;
+    LaunchState launch;  // the node's, or the feed's
+    LaunchAction next, warmNext;
+    bool nextValid = false, warmValid = false;
+    std::int64_t warmAt = 0;
+    std::int64_t nextKey = INT64_MIN, warmKey = INT64_MIN;  // their switch frames
+    bool releaseHeld = false, launchFresh = false, switchPending = false;
+    std::int64_t switchAt = INT64_MIN;
+    double switchPhase = std::numeric_limits<double>::quiet_NaN();
+    // applyLaunch rotated the node's readers (and swapped in reader 2's
+    // warm-up), to be rotated back.
+    bool rotated = false, warmSwapped = false;
+    // An early half's (prelaunch, prewarm): undone, it restores only what
+    // that half set (next, warm), not what a switch made after it set
+    // (review round 201 F1).
+    bool early = false;
+    // The launch slot it applies (an index into the engine's slots), and
+    // whether it applied there as a relocation in a later epoch than the
+    // slot's own. An executor judges each record once, at its leave of the
+    // epoch (the slot's verdict, or a relocation's frame against the end),
+    // and marks those to undo (round 203 F1).
+    int slot = -1;
+    std::uint64_t generation = 0;
+    bool relocated = false;
+    bool undo = false;
+};
+inline constexpr std::size_t kLaunchUndos = 16;
 
 // A take with its own FX chain or envelopes (gap log #22): the item plays
 // through it before it reaches the track's input. Its input runs `latency`
@@ -1195,6 +1231,18 @@ struct Node {
     bool launchSwitchPending = false;
     LaunchAction launchWarmNext;
     bool launchWarmValid = false;
+    // What the launches applied here did, oldest first, until a new epoch
+    // takes back those its listener did not hear (LaunchUndo); a full ring
+    // drops its oldest, whose key is kept in `launchUndoLostKey` (a take-back
+    // past it is not exact: warned, Engine::launchUndoLost_).
+    // The switch frames (LaunchUndo::key) of the launches launchNext and
+    // launchWarmNext hold, so a take-back drops an early half whose switch
+    // was heard.
+    std::int64_t launchNextKey = INT64_MIN, launchWarmKey = INT64_MIN;
+    std::array<LaunchUndo, kLaunchUndos> launchUndos;
+    std::size_t launchUndoCount = 0;
+    std::int64_t launchUndoLostKey = INT64_MIN;
+    std::uint64_t launchUndoLostEpoch = UINT64_MAX;
     // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
     // the most clip events in a block-long window, over the players.
     std::size_t clipVoices = 0, clipWindow = 0;
@@ -1682,7 +1730,8 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s);
 // Applies a launch at the start of the block where the channel's song
 // position is `a.anchorSample`: notes sounding end there, audio crossfades
 // from that song sample (LaunchState::fadeStart, launchClock).
-void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// `warmSwapped`, when given: set when reader 2's warm-up came in.
+void applyLaunch(Node& n, const LaunchAction& a, bool* warmSwapped = nullptr) SUPPLE_RT;
 // The node's player for `clip`, or -1.
 int playerOf(const Node& n, Id clip) SUPPLE_RT;
 // This block's arrangement gain (Node::arrangementGain; null when the
@@ -1708,6 +1757,28 @@ void launchRelocated(Node& n) SUPPLE_RT;
 // A plan swap: what the channel plays carries by clip id; a clip the new
 // plan lacks (or a node with no players) returns it to the arrangement.
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
+// --- Launches applied ahead of the listener (ADR-0097, dated 2026-11-26) ---
+// Notes what a launch is about to do to the node (`feed` < 0) or to its
+// rack's Notes feed `feed`, before the executor does it: its switch frame
+// `key`, in `epoch`. The record, to complete with the reader rotation; null
+// for none (offline, which hears everything it renders).
+LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t epoch,
+                           int slot = -1) SUPPLE_RT;
+// The executor left `epoch`, whose hearing ended at `heardEnd` (the frames
+// [0, heardEnd) reached the device callback): every record it marked to
+// undo (LaunchUndo::undo, from its slot's verdict) is undone, newest first,
+// an early half whose switch was heard (its key below `heardEnd`) dropped,
+// and the node (and its feeds) relocated again; the records are cleared.
+// Whether anything was undone; `inexact` set when a dropped record was
+// needed.
+bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
+                      bool* inexact = nullptr) SUPPLE_RT;
+// Forgets the node's records (a relocation without a take-back).
+inline void clearLaunchUndos(Node& n) SUPPLE_RT {
+    n.launchUndoCount = 0;
+    n.launchUndoLostKey = INT64_MIN;
+    n.launchUndoLostEpoch = UINT64_MAX;
+}
 // --- Clip chains (ADR-0097, amended 2026-11-20; clip_player.cpp) ---
 // A launch reaching the node Node::launchLead before it applies: its clip
 // chains' input (that much ahead) takes it from here.

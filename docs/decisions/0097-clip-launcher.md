@@ -1370,6 +1370,86 @@ or leaves the anticipative executor's live region without a continuous handoff i
 the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
 engine.md §1.4.2 has the rules.
 
+### Revision 2026-11-26: a launch applied ahead and unheard is taken back
+
+Review round 192 F6 found that a pause, a pause and return, or a seek before a launch's switch was
+heard left the anticipative renderer's apply in place: the track played the clip straight on at the
+next play, and the log claimed a launch never heard. The in-callback executor's early half (240
+frames of a modulated clip chain's input) had the same defect. Decided (the lead's plan, approved by
+the co-director with five additions): heard means handed to the device callback; each executor
+records undo records for each apply and, on leaving an epoch, takes back those at or past where
+hearing ended, newest first; the main thread removes their log entries, voids their slots and places
+them again in order at the next play. Every kind of slot is judged alike; a dropped ack for an
+unheard slot is not `launch_unlogged`; a stop exactly at the switch frame is unheard. engine.md
+§1.4.2 and §3.1 have the rules.
+
+Review round 201 (same date) found that an early half's record, undone, also undid a heard switch
+made after it, and that the executors and the main thread judged "heard" from different sources (an
+eight-entry ring read as "reused = heard", the renderer's own count after a timed-out wait, each
+side's plan for the shift). Decided: an early half's record restores only that half; one verdict per
+slot, from one end (the callback's, published per epoch in a ring of 64) and one key (set in the
+slot by the first executor to apply it); an end not known is taken as unheard, and a renderer whose
+wait timed out applies and takes back nothing until the callback's end is known; a capture that
+lists a launch whose verdict is not in, or that ran over such a late or taken-as-unheard verdict, is
+not as heard (`launch_unsettled`).
+
+Review round 203 (same date) found that the main thread judged a log entry again at every service,
+so 64 epochs after a heard launch its ring entry was reused and the launch was taken back as unheard.
+Decided: a verdict is made once and stored. The callback writes each slot's verdict as it leaves the
+epoch, before publishing the end; each executor takes back at its own leave by those verdicts; the
+main thread judges each entry once (a slot's by its verdict, a return by the end it copies at its
+first read) and never looks at a heard one again. "Unknown = unheard" is kept only for an epoch no
+service read in time. The key is the one set at the switch; a shift change between an early half and
+its switch, or between the executors' switches, marks the capture rather than being approximated, and
+so does a capture begun over the frames a late renderer leave rendered before it settled.
+
+Review round 205 (same date) found that waiting for a slot's log entries to be judged held every
+launch's slot until its epoch ended (the 257th launch in one play was refused), and that a slot whose
+ack was not read could be reused, dropping a heard launch. Decided, as the simpler lifetime: a slot is
+taken again only once its switch is known heard (in its epoch, played past; after it, by its verdict),
+the launch reads the acks first and settles the slot's entries as heard as it takes it; an unheard
+slot is voided and placed again, never reused. A seeded sequence test of launches, stops, seeks,
+services and captures on both executors holds these invariants (test_launch_sequence.cpp).
+
+Review round 207 (same date) found several unheard launches on one track, before the service that
+voided them, put back into the track's first waiting slot: a stale launch played before the user's
+newer one, leftovers drained one per service restarting their clip, and with no service slots piled up
+to `launch.queue`. Decided: after a take-back a track holds exactly what the in-callback executor would.
+The newest launch made on a track wins; one it replaced is dropped, not placed again; one placed again
+returns to its own slot, so all settle in one service; a launch takes back and voids what was judged
+unheard before choosing a slot. The sequence test, widened (both executors in lockstep, compared with
+each other; newest-wins; loops, scenes, stops, MIDI and a Notes feed, plan swaps, captures ended by
+relocations; reproducible from its seed), then found a renderer leave held late leaving a launch the
+callback had switched off the renderer's targets for good while judging it heard: such a block no
+longer counts as run, the launch is switched once the leave settles, `launch.state` calls it queued
+until then, and the late span is marked whenever the renderer passes such a launch.
+
+Round 209 (same date; found by the GUI journey probe under load): a launch made while stopped that
+starts the transport (`launch.scene`, answered started at beat 0) was logged a bar late, the first bar
+silent. The stop and seeks relocated the renderer before the callback's next cycle, its leave stayed
+pending, and it rendered the play start with nothing applied, passed the launch undecided, missed it,
+and service placed it at the next bar. Decided: a renderer whose leave is pending holds before any
+launch of its current epoch it has not switched, until the callback's next cycle settles the leave;
+the late span is marked only over frames it renders before settling. A hold that outlasts the
+renderer's lead while playing takes the existing fallback (silence for the frames the callback lacks,
+an anticipation miss counted, the capture not as heard), never a missed launch. Missing a launch
+placed at a play start is unreachable by design; a path that does so all the same is counted and
+marks the capture. Tracing a difference the sequence test found only on the new path showed an older
+fault the hold's timing exposed: a renderer leave settling with its end unknown (more epochs than the
+ring holds) took back a switch whose slot had since been reused, though reuse means it was heard;
+such a record now stays.
+
+Round 211 (2026-11-27): the play-start misses are counted on the path the journey's launch took, a
+committed launch passed and voided, besides the two the hold makes unreachable. A settle needs no
+locate of its own (the take-back relocates each node it restores). With the hold, round 207's
+handling of a launch the renderer passed while its leave was pending can no longer be reached and is
+kept as a fallback.
+
+Round 214 (same date): no fallback is left uncounted. A launch the renderer passes while its leave is
+pending, or switches late after the callback, is counted and marks the capture (expected 0, asserted
+by the tests); `launch.state` no longer lists an applied launch an executor has yet to switch, since
+under the hold none is heard first.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

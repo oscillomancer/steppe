@@ -197,6 +197,7 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
             if (f.liveInput) why.push_back("live_input");
             if (f.dropout) why.push_back("dropout");
             if (f.launchUnlogged) why.push_back("launch_unlogged");
+            if (f.launchUnsettled) why.push_back("launch_unsettled");
             if (f.pluginFailed) why.push_back("plugin_failed");
             if (c->endedBy != EngineApp::CaptureEnd::None) why.push_back("ended_by_engine");
             if (s.version != c->capture.version) why.push_back("other_version");
@@ -282,6 +283,9 @@ Error notAsHeard(const RenderPerformance& p) {
         : first == "dropout"          ? "capture again: the output dropped out during it"
         : first == "launch_unlogged"
             ? "restart the engine (Restart audio), then capture again: a launch was not logged"
+        : first == "launch_unsettled"
+            ? "commit or render it again once the transport has settled, or capture again: "
+              "whether a launch near its end was heard was not known"
         : first == "plugin_failed"   ? "capture again: a plug-in failed during it"
         : first == "ended_by_engine" ? "the engine stopped during it: capture again"
         : first == "from_launcher"
