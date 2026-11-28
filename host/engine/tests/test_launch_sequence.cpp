@@ -702,13 +702,9 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
         // in rounds 207 and 209, seeds 3 and 4.)
         const auto located = locate(g, c.capture.startSample, c.offset);
         // (F5, round 209: anticipative, with a live input, one switched on
-        // while playing after a relocation starts at its stream frame, not
-        // its song position; counted, not compared, until
-        // capture-start-state.)
-        if (!located && q.anticipative && q.liveFeed) {
-            ++n.faults["F5"];
-            continue;
-        }
+        // while playing after a relocation began at the previous epoch's
+        // count: the live render published the heard clock before the
+        // epoch's first chunk set its start.)
         CHECK(located.has_value());
         if (!located) continue;
         const std::int64_t offset = *located;

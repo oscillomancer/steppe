@@ -1688,3 +1688,40 @@ TEST_CASE(
         e.engine.stop();
     }
 }
+
+TEST_CASE(
+    "anticipative, with a live track, a capture switched on just after a seek while playing "
+    "begins at its song position (F5)" *
+    doctest::description("rt")) {
+    // tr_1 live (liveTrack): the callback renders it and publishes the heard
+    // clock, whose count is the epoch's start plus its stream frame. The
+    // start was set only by the consumed first chunk of the epoch, after
+    // the live render's publish: a capture placed in between began at the
+    // previous epoch's count (here the play from 0: its stream frame).
+    // Switched on 0 to 4 cycles after the seek to 2.5 s, it begins there.
+    constexpr std::int64_t kTo = 120000;
+    for (int k = 0; k <= 4; ++k) {
+        INFO("switched on " << k << " cycles after the seek");
+        Project p;
+        const model::Session s = liveTrack(p);
+        Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 8);
+        e.engine.play();
+        e.run(300);
+        e.engine.service();
+        REQUIRE(tr1Live(e.engine));
+        e.engine.seek(double(kTo) / 48000);
+        e.run(e.done + k);
+        REQUIRE(e.engine.captureLaunches(true));
+        std::optional<Engine::LaunchCapture> capture = e.engine.launchCapture();
+        for (int again = 0; again < 64 && !(capture && capture->placed); ++again) {
+            e.run(e.done + 1);
+            e.engine.service();
+            capture = e.engine.launchCapture();
+        }
+        REQUIRE(capture);
+        REQUIRE(capture->placed);
+        CHECK(capture->startSample >= kTo);
+        CHECK(capture->startSample < kTo + 48000);
+        e.engine.stop();
+    }
+}

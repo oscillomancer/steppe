@@ -447,11 +447,7 @@ instructions are in `docs/guides/installing.md`.
       Pre-roll, open: an exact replay of a capture begun while playing
       needs every instrument's and effect's state from before its start;
       without it the replay also misses a note's release tail and
-      effects' tails sounding there (marked only `began_mid_run`). Open,
-      found by the seeded sequence test (rounds 205 and 207; ruled for
-      branch capture-start-state): (F5, anticipative,
-      with a live input) a capture switched on while playing after a
-      relocation starts at its stream frame, not its song position. Both
+      effects' tails sounding there (marked only `began_mid_run`). Both
       executors start every transport epoch afresh, as its replay does (a
       loop change while playing and a pause and play with no block between
       included), resetting each plug-in once. Known behaviour, in both

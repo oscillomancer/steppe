@@ -3453,6 +3453,11 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         }
         livePos_ = playedPosition(rtEpoch_, epochStart_.load());
         liveStream_ = playedStream(rtEpoch_);
+        // The heard clock's count from the epoch's start (publishRateClock,
+        // unity): set here too, as the consumed first chunk sets it, which
+        // may come after this cycle's publish (F5, round 209: a capture
+        // placed meanwhile began at the previous epoch's count).
+        if (liveStream_ == 0) rateEpochStart_ = double(livePos_);
         // The first plan, or a new epoch, starts afresh; a plan taking over
         // from the renderer mid-epoch continues (adoptLive).
         detail::locateClass(p, livePos_, true, !liveEntered_);

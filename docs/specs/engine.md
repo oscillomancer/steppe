@@ -1565,7 +1565,11 @@ the same.*
   seek, before the anticipative renderer has relocated, the play position
   `transport()` reports (and so a launch's anchor and a capture's start)
   is where it will relocate: the seek's sample, else where it paused
-  (review round 70). The queue has
+  (review round 70). A capture switched on while playing begins at the
+  heard clock's song position, its count from the epoch's start; the
+  anticipative engine's live render sets that start when it takes the
+  epoch, as consuming its first chunk does (F5: a capture placed between
+  the two began at the previous epoch's count). The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
   Each slot's state word carries a generation, so a slot the main thread
