@@ -1312,9 +1312,17 @@ bool Engine::awaitRendered(std::int64_t frames, double timeoutSeconds) {
                 goal = std::max(goal, std::min<std::int64_t>(options_.renderBlock, aheadFrames_));
             goal = std::min(goal, holdFrom_.load(std::memory_order_acquire) - played);
             // A renderer waiting for room has rendered all it can hold.
+            // Held for its leave (round 209), unless the callback has entered
+            // an epoch since the renderer decided so: that entry records the
+            // end the hold waits for, and wakes it to settle and render (a
+            // manual backend's test, taking the old hold for full, played its
+            // pre-roll through and found the launch not yet logged: round 219
+            // F3).
             if (renderedStream_.load(std::memory_order_acquire) - played >= goal ||
                 rendererWakeAt_.load() != INT64_MAX ||
-                rendererLaunchHeld_.load(std::memory_order_acquire))  // held (round 209)
+                (rendererLaunchHeld_.load(std::memory_order_acquire) &&
+                 rendererHeldEntered_.load(std::memory_order_acquire) ==
+                     heardEndsEntered_.load(std::memory_order_acquire)))
                 return true;
         }
         if (std::chrono::steady_clock::now() > deadline) return false;
@@ -3160,7 +3168,11 @@ void Engine::rendererLoop(std::uint64_t seen) {
         // rendered ahead while playing, the callback plays silence for the
         // frames it lacks and counts an anticipation miss (the capture is
         // not as heard); the launch still switches at its frame.
+        // (Read before it decides: an entry after this read either settles
+        // the leave below or makes awaitRendered wait for another look.)
+        const std::uint64_t entered = heardEndsEntered_.load(std::memory_order_acquire);
         if (launchHeldByLeave(*plan_, seen, streamLocal_, streamLocal_ + block)) {
+            rendererHeldEntered_.store(entered, std::memory_order_release);
             rendererLaunchHeld_.store(true, std::memory_order_release);
             rt::waitUntil(rendererEvent_, event,
                           std::chrono::steady_clock::now() + rendererSafetyTimeout());

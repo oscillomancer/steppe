@@ -975,13 +975,15 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             const std::int64_t sample = std::int64_t(pick(12 * 128)) * 375;
             // The launch after a cycle, before any (fault E), or inside the
             // cycle that takes the seek (the in-callback executor's hook;
-            // round 216 F-C1: the anticipative one launches before it). With
-            // a late leave held, after a cycle (it stays unsettled through
-            // it: the hook): before one, the renderer thread's leave races
-            // the launch, and the frames it renders before settling (never
-            // as heard) differ from run to run.
-            const auto picked = pick(3);
-            const auto timing = b.lateLeave ? 0 : picked;
+            // round 216 F-C1: the anticipative one launches before it), a
+            // late leave held or not. (Before any cycle with one held, the
+            // renderer holds before the launch, released holds again, and
+            // the callback's first cycle records the end it waits for:
+            // awaitRendered took the hold decided before that for full, so
+            // the play ran its pre-roll through, the launch not yet logged
+            // and the audio a cycle or more late, as the machine's load
+            // decided; round 219 F3.)
+            const auto timing = pick(3);
             each([&](Sequence& q) { q.seek(sample); });
             std::vector<Engine::LaunchRequest> requests;
             if (const auto scene = pick(3); scene < 2) {

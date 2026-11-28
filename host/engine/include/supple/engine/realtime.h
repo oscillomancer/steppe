@@ -1510,6 +1510,11 @@ class Engine {
     bool launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
                            std::int64_t end) SUPPLE_RT;
     std::atomic<bool> rendererLaunchHeld_{false};  // holding so (awaitRendered: as full)
+    // The callback's newest epoch entry (heardEndsEntered_) as the renderer
+    // decided that hold: an entry since records the end the hold waits for,
+    // so the hold is no longer known until the renderer looks again (round
+    // 219 F3).
+    std::atomic<std::uint64_t> rendererHeldEntered_{0};
     // A launch placed at a play start that was missed all the same, by the
     // path that missed it: [0] publishing (a horizon past it), [1] an
     // executor passing it undecided, [2] an executor passing it committed,

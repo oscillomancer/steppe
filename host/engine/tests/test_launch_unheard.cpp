@@ -1725,3 +1725,70 @@ TEST_CASE(
         e.engine.stop();
     }
 }
+
+TEST_CASE(
+    "anticipative, a renderer holding for its leave counts as rendered only until the callback "
+    "enters an epoch after it held (round 219 F3)" *
+    doctest::description("rt")) {
+    // Playing with a launch heard, the renderer's leave held late (the test
+    // hook: as a timed-out wait leaves it), pause, a seek off the bar, an
+    // unquantized launch for the play start at once, play: the renderer
+    // holds before the launch. Released before the callback's first cycle,
+    // it holds again: the end it waits for is not recorded yet. The
+    // callback's first cycle records it, while the renderer is kept from
+    // looking (holdRenderer): the hold decided before that entry is not
+    // known any more, so awaitRendered does not take it for full (it did,
+    // and a test played its pre-roll through, the launch not yet logged).
+    // Then the launch is logged once at the play start, anchored at the
+    // seek.
+    Project p;
+    twoAudioClips(p, 300000);
+    const model::Session s = p.app->head();
+    Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 4);
+    e.engine.play();
+    e.run(40);
+    (void)e.place(request("tr_1", "cl_2"), model::LaunchQuantize::None);
+    e.run(340);
+    e.engine.service();
+    EngineTestAccess::rendererLeaveLate(e.engine, true);
+    e.engine.pause();
+    const std::int64_t to = 37500 + 375 * 7;  // off the bar
+    e.engine.seek(double(to) / 48000);
+    const Engine::LaunchRequest r = request("tr_1", "cl_1");
+    const auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+    REQUIRE(placed);
+    e.engine.play();
+    // Held for the launch (awaitRendered says so), then released, and held
+    // again: no cycle has run since the pause.
+    REQUIRE(e.engine.awaitRendered(4096));
+    REQUIRE(EngineTestAccess::rendererLaunchHeld(e.engine));
+    EngineTestAccess::rendererLeaveLate(e.engine, false);
+    REQUIRE(e.engine.awaitRendered(4096));
+    REQUIRE(EngineTestAccess::rendererLaunchHeld(e.engine));
+    CHECK(EngineTestAccess::playedStream(e.engine) == 0);
+    // Kept from looking again, the renderer cannot settle or render: the
+    // callback's cycle records the end, and the hold is no longer known.
+    e.engine.holdRenderer(true);
+    REQUIRE(e.engine.awaitRendererHeld());
+    e.backend.run(1);
+    ++e.done;
+    CHECK(EngineTestAccess::playedStream(e.engine) == 0);  // its pre-roll
+    // (Decided by state: the renderer renders nothing while held, so no
+    // bound makes this true.)
+    CHECK_FALSE(e.engine.awaitRendered(4096, 0.2));
+    e.engine.holdRenderer(false);
+    e.run(e.done + 200);
+    e.engine.service();
+    int entries = 0;
+    for (const LaunchLogEntry& le : e.engine.launchLog())
+        if (le.epoch == placed->epoch && le.clip == r.clip) {
+            ++entries;
+            CHECK(le.runningFrame == placed->stream);
+            CHECK(le.anchorSample == to);
+        }
+    CHECK(entries == 1);
+    CHECK(EngineTestAccess::playedStream(e.engine) > 0);
+    CHECK(EngineTestAccess::passedPending(e.engine) == 0);
+    CHECK(EngineTestAccess::playStartMissed(e.engine) == 0);
+    e.engine.stop();
+}

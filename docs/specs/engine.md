@@ -2323,7 +2323,13 @@ When driving a manual dummy backend, wait for `Engine::awaitPlan()` after
 publishing a plan before counting its output-settling callbacks. This wait
 ends after the renderer has adopted the plan and queued it for the callback.
 `awaitRendered()` waits for audio in the transport epoch, not for the latest
-plan; while stopped it can return immediately. Fast manual callbacks do not
+plan; while stopped it can return immediately. A renderer holding for its
+leave (round 209) counts as rendered only until the callback enters an epoch
+after the renderer decided to hold: that entry records the end it waits for,
+so the wait lasts until the renderer has looked again, settled and rendered
+or held anew (round 219 F3; taking the older hold for full, a test played its
+pre-roll through and found a launch placed for the play start not yet
+logged). Fast manual callbacks do not
 pace the renderer like a device clock does. Both waits belong on the
 test/model thread. Each is bounded by `awaitSeconds()`, 10 s unless a call
 passes its own bound: tests raise it to 60 s, as they do the transport's wait
