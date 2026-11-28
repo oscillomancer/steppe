@@ -28,6 +28,7 @@
 #include "mod_source.h"
 #include "plugin_browser.h"
 #include "plugin_drag.h"
+#include "rack_controls.h"
 #include "render_dialog.h"
 #include "side_browser.h"
 #include "side_panel.h"
@@ -44,6 +45,8 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 using namespace supple;
@@ -122,9 +125,9 @@ struct Fixture {
             return actions->key(e.key, e.mods, typing, gui::keySections(source));
         };
         gui::FxWindow::Hooks hooks;
-        // The parameter menu's "Show modulation source" rows, as the app gives them.
+        // The parameter menu's source and remove rows, as the app gives them.
         hooks.sourceItems = [this](const model::EnvTarget& target) {
-            return gui::modSourceItems(*actions, app->head(), nullptr, target);
+            return gui::modRouteItems(*actions, app->head(), nullptr, target);
         };
         fx = std::make_unique<gui::FxWindow>(*app, *dispatcher, *root, *panel, std::move(hooks),
                                              gui::Favourites::defaultFile(gui::test::slug()));
@@ -566,13 +569,36 @@ TEST_CASE("the render dialog: the launcher's Start and End are checked as one ra
 }
 
 TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words") {
-    // engine.md §3.1's table of reasons: each reads in words, never as its
-    // code (the fallback for one the dialog does not know); given and
-    // from_launcher say nothing on the line.
+    // engine.md §3.1's table of reasons, read from the spec so a new reason
+    // fails until it has words: each reads in words, never as its code (the
+    // fallback for one the dialog does not know); given and from_launcher
+    // say nothing on the line.
     using End = engine::EngineApp::CaptureEnd;
-    for (const char* reason :
-         {"began_mid_run", "edited_during", "playrate_changed", "live_input", "dropout",
-          "launch_unlogged", "plugin_failed", "ended_by_engine", "other_version"}) {
+    std::ifstream spec(std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR)
+                           .parent_path()
+                           .parent_path()
+                           .parent_path()
+                           .parent_path() /
+                       "docs" / "specs" / "engine.md");
+    REQUIRE(spec);
+    std::set<std::string> reasons;
+    bool inTable = false;
+    for (std::string line; std::getline(spec, line);) {
+        if (line.starts_with("| Reason | When |")) {
+            inTable = true;
+            continue;
+        }
+        if (!inTable || line.starts_with("|---") || line.starts_with("| ---")) continue;
+        if (!line.starts_with("| `")) break;  // the table's end
+        const std::size_t open = line.find('`') + 1;
+        reasons.insert(line.substr(open, line.find('`', open) - open));
+    }
+    CHECK(reasons.size() >= 12);
+    for (const char* plain : {"given", "from_launcher"}) {
+        CHECK(reasons.contains(plain));
+        reasons.erase(plain);
+    }
+    for (const std::string& reason : reasons) {
         INFO(reason);
         std::string asCode = reason;
         std::replace(asCode.begin(), asCode.end(), '_', ' ');
@@ -585,6 +611,9 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
     CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None) ==
           "a launch was lost from the log before or during it (a new capture after Restart audio "
           "in Edit > Audio device starts clean)");
+    // Always listed after began_mid_run, so the line reads on from it.
+    CHECK(gui::RenderDialog::reasonWords("began_in_note", End::None) ==
+          "a note was already sounding where it began (the render leaves that note out)");
     CHECK(gui::RenderDialog::reasonWords("given", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("from_launcher", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("something_new", End::None) == "something new");
@@ -2659,6 +2688,31 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     REQUIRE_MESSAGE(env, "modulate added the envelope that carries the route");
     f.fx->tick();
     f.frame();
+    // Its row carries the mixer slot's modulation mark after the name, in
+    // signal-cv; dimmed while every route is off (gui.md §4.5).
+    // The rows are on the chain tab: the name's accessible text there.
+    std::string plain;  // the name as drawn
+    const auto mark = [&]() -> std::string {
+        f.fx->showChainTab();
+        f.frame();
+        std::string out;
+        if (const auto* name = dynamic_cast<ui::Label*>(f.uiRoot().find("fx.name." + fx.str()))) {
+            plain = name->text();
+            out = name->valueText();
+        }
+        f.fx->showParamsTab();
+        f.frame();
+        return out;
+    };
+    REQUIRE_FALSE(mark().empty());
+    CHECK(mark() == plain + " (modulated)");
+    const std::string route = s.modulations.begin()->id.str();
+    REQUIRE(f.run("modulation.set", f.args({{"modulation", route}, {"enabled", false}})));
+    f.fx->tick();
+    CHECK(mark() == plain + " (modulation off)");
+    REQUIRE(f.run("modulation.set", f.args({{"modulation", route}, {"enabled", true}})));
+    f.fx->tick();
+    f.frame();
     // It plays: no idle row. The route's source is a row away (gui.md §2).
     menu = openMenu();
     REQUIRE(menu);
@@ -2683,7 +2737,31 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     std::string rows;
     for (const std::string& l : labels(menu)) rows += l + " | ";
     CHECK_MESSAGE(said, "menu rows: " << rows);
+    // Remove modulation: <source> removes the route, one undo step, and
+    // leaves the envelope that carried it (gui.md §2).
+    std::function<void()> remove;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation: ")) {
+            CHECK_FALSE(remove);  // one route: one row
+            remove = item.run;
+        }
+    REQUIRE_MESSAGE(remove, "menu rows: " << rows);
     f.uiRoot().closePopup();
+    remove();
+    CHECK(f.app->head().modulations.size() == 0);
+    CHECK(f.app->head().envelopes.find(*env));
+    f.fx->tick();
+    f.frame();
+    CHECK(mark() == plain);  // nothing modulated: no mark
+    menu = openMenu();
+    REQUIRE(menu);
+    for (const std::string& l : labels(menu)) {
+        CHECK_FALSE(l.starts_with("Remove modulation"));
+        CHECK_FALSE(l.starts_with("Show modulation source"));
+    }
+    f.uiRoot().closePopup();
+    REQUIRE(f.run("history.undo", json::Value::object()));
+    CHECK(f.app->head().modulations.size() == 1);
 }
 
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {
@@ -5503,6 +5581,177 @@ TEST_CASE(
     CHECK(automated);
 }
 
+TEST_CASE("a Rack device's refusals are in the GUI's words, never the engine's") {
+    Fixture f;
+    if (!f.ok) return;
+    f.fx = std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel,
+                                           gui::FxWindow::Hooks{},
+                                           gui::Favourites::defaultFile(gui::test::slug()));
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    json::Value made = exec("rack.add", R"({"name":"Lead"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    const std::string filter =
+        exec("module.add",
+             R"({"rack":")" + rack + R"(","type":"filter","label":"Filter"})")["module"]
+            .asString();
+    const std::string macro =
+        exec("module.add",
+             R"({"rack":")" + rack + R"(","type":"macro","label":"Performance"})")["module"]
+            .asString();
+    exec("cable.add", R"({"from":")" + macro + R"(.out_1","to":")" + filter + R"(.cutoff"})");
+    exec("module.learn.set",
+         R"({"module":")" + macro +
+             R"(","param":"macro_1","midi":{"kind":"cc","channel":1,"number":21}})");
+    REQUIRE(f.fx->open(*model::Id::parse(track)));
+    f.frame();
+    // The knob's menu, then `row` run after another client (an agent) has
+    // done what it does: the engine refuses, and the status line says so.
+    const auto runAfter = [&](const std::string& row, const char* command,
+                              const std::string& args) {
+        auto devices = f.fx->rackDevices();
+        REQUIRE(devices.size() == 1);
+        const auto knob = devices.front()->knobAt("Filter cutoff");
+        REQUIRE(knob);
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, *knob, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, *knob, 3});
+        f.frame();
+        const ui::Node* menu = f.root->popupOpen() ? f.root->find("fx.rack.menu")
+                                                   : f.panel->root().find("fx.rack.menu");
+        REQUIRE(menu);
+        std::function<void()> run;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == row) run = item.run;
+        REQUIRE(run);
+        f.panel->root().closePopups();
+        f.root->closePopups();
+        exec(command, args);
+        run();
+        return f.fxStatus();
+    };
+    // Show lane, the knob's lane made meanwhile (env.exists).
+    std::string said = runAfter(
+        "Show lane", "env.add",
+        R"({"module":")" + macro + R"(","param":"macro_1","points":[{"beat":0,"value":10}]})");
+    CHECK(said == "The knob's lane could not be shown: the knob already has a lane.");
+    CHECK(said.find("automates") == std::string::npos);  // the engine's message
+    CHECK(said.find("env.") == std::string::npos);
+    // Remove MIDI learn, removed meanwhile (module.learn_unknown).
+    f.frame();
+    said = runAfter("Remove MIDI learn", "module.learn.remove",
+                    R"({"module":")" + macro + R"(","param":"macro_1"})");
+    CHECK(said ==
+          "The knob's MIDI learn could not be removed: the knob has no MIDI controller now.");
+    CHECK(said.find("macro_1") == std::string::npos);
+    CHECK(said.find("module.") == std::string::npos);
+}
+
+TEST_CASE("every refusal a rack knob's commands declare or answer has the GUI's words") {
+    Fixture f;
+    if (!f.ok) return;
+    const model::Session& s = f.app->head();
+    const std::string text = "the engine's message", hint = "the engine's hint";
+    // What their runs answer for the arguments the GUI gives (a module or
+    // a lane gone, a type gone, a value, a binding or a lane changed by
+    // another client, a frozen channel), beside what the registry declares.
+    const std::set<std::string> answered{
+        "module.unknown",       "mo.unknown", "rack.unknown_module", "en.unknown",
+        "rack.unknown_type",    "rack.param", "params.out_of_range", "env.value",
+        "module.learn_unknown", "env.exists", "env.param",           "track.frozen"};
+    std::size_t walked = 0, declared = 0;
+    for (std::string_view name : gui::racks::kKnobCommands) {
+        const cmd::CommandInfo* command = f.registry.find(name);
+        REQUIRE_MESSAGE(command, std::string(name));
+        ++walked;
+        std::set<std::string> codes = answered;
+        for (const cmd::ErrorSpec& e : command->errors) {
+            codes.insert(e.code);
+            ++declared;
+        }
+        for (const std::string& code : codes)
+            for (const char* path : {"", "/args/module", "/args/param", "/args/params/macro_1",
+                                     "/args/env", "/args/visible", "/args/source"}) {
+                INFO(name << " " << code << " at " << path);
+                const std::string words =
+                    gui::racks::knobRefusalWords(s, name, Error(code, text, path, hint));
+                CHECK_FALSE(words.empty());
+                CHECK(words.find(text) == std::string::npos);
+                CHECK(words.find(hint) == std::string::npos);
+                CHECK(words.find(code) == std::string::npos);  // worded, not the last resort
+                for (std::string_view other : gui::racks::kKnobCommands)
+                    CHECK(words.find(other) == std::string::npos);
+                CHECK(words.find("/args") == std::string::npos);
+                CHECK(words.ends_with("."));
+            }
+    }
+    CHECK(walked == 5);
+    CHECK(declared >= 1);  // module.set's modulation.cycle (its Notes source)
+    // A code with no words of its own (one the GUI's arguments never meet)
+    // says what was being done and the code, never the engine's message.
+    const std::string last =
+        gui::racks::knobRefusalWords(s, "module.set", Error("schema.type", text, "/args", hint));
+    CHECK(last == "The knob could not be set (schema.type).");
+    CHECK(gui::racks::knobRefusalWords(s, "env.set", Error("made.up", text, "", hint)) ==
+          "The knob's lane could not be shown or hidden (made.up).");
+}
+
+TEST_CASE("a rack knob's rack.param refusal is worded by the argument it is refused at") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string rack = exec("rack.add", R"({"name":"Lead"})")["rack"].asString();
+    const auto add = [&](const char* type) {
+        return exec("module.add",
+                    R"({"rack":")" + rack + R"(","type":")" + type + R"("})")["module"]
+            .asString();
+    };
+    const std::string filter = add("filter"), adsr = add("adsr");
+    // The engine's own refusal of `args`, worded.
+    const auto refused = [&](const char* command, const std::string& args, const std::string& at) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "rack.param");
+        CHECK(r.error().path.ends_with(at));
+        const std::string words = gui::racks::knobRefusalWords(f.app->head(), command, r.error());
+        CHECK(words.find(r.error().message) == std::string::npos);
+        return words;
+    };
+    // A knob the module does not have, and a value or choice key a knob
+    // does not take, are refused at the same argument (/params/<key>): one
+    // sentence true for both.
+    const std::string either =
+        "The knob could not be set: the knob does not take that value, or "
+        "its module no longer has that knob.";
+    CHECK(refused("module.set", R"({"module":")" + filter + R"(","params":{"nope":1}})",
+                  "/params/nope") == either);
+    CHECK(refused("module.set", R"({"module":")" + adsr + R"(","params":{"mode":"sideways"}})",
+                  "/params/mode") == either);
+    CHECK(refused("module.set", R"({"module":")" + filter + R"(","params":{"cutoff":"loud"}})",
+                  "/params/cutoff") == either);
+    // MIDI learn names the knob apart (/param): only a knob it lacks.
+    CHECK(refused("module.learn.set",
+                  R"({"module":")" + filter +
+                      R"(","param":"nope","midi":{"kind":"cc","channel":1,"number":21}})",
+                  "/param") ==
+          "The knob's MIDI controller could not be set: its module no longer has that knob.");
+    // Every knob at once (a type not installed, a plug-in's module) and a
+    // plug-in's module for learn, as the engine names them.
+    const model::Session& s = f.app->head();
+    CHECK(gui::racks::knobRefusalWords(s, "module.set", Error("rack.param", "x", "/params")) ==
+          "The knob could not be set: its module's type is not installed, or its knobs are a "
+          "plug-in's.");
+    CHECK(
+        gui::racks::knobRefusalWords(s, "module.learn.set", Error("rack.param", "x", "/module")) ==
+        "The knob's MIDI controller could not be set: its knobs are a plug-in's.");
+}
+
 TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs follow playback") {
     Fixture f;
     if (!f.ok) return;
@@ -5553,4 +5802,1001 @@ TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs fo
     CHECK(value < 70);
     f.snapshot("fx-rack-playing.png");
     f.app->stopEngine();
+}
+
+TEST_CASE("a modulated row's mark dims on a frozen track, as the mixer slot's does") {
+    // gui.md §2: the mark is drawn dimmed while every route is off or its
+    // track is frozen; the accessible text keeps "(modulated)".
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id track = f.addTrack("Keys");
+    REQUIRE(f.run("item.add",
+                  f.args({{"track", track.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}})));
+    auto made =
+        f.run("fx.add", f.args({{"track", track.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    json::Value args = json::Value::object();
+    args["target"] = std::move(target);
+    args["source"] = "lfo";
+    REQUIRE(f.run("modulate", args));
+    REQUIRE(f.fx->open(track));
+    f.fx->tick();
+    f.frame();
+    auto name = [&] { return dynamic_cast<ui::Label*>(f.uiRoot().find("fx.name." + fx.str())); };
+    REQUIRE(name());
+    CHECK(name()->mark() == views::kModMark);
+    CHECK(name()->markColor() == "signal-cv");
+    REQUIRE(f.run("track.freeze", f.args({{"track", track.str()}})));
+    f.fx->tick();
+    f.frame();
+    REQUIRE(name());
+    CHECK(name()->markColor() == "ink-faint");
+    CHECK(name()->valueText().ends_with(" (modulated)"));
+}
+
+TEST_CASE("a take's FX: Modulate leaves out its own track, and an unheard take's route says why") {
+    // ADR-0096 M5: a take FX's track is its item's; a follower of that track
+    // would close a cycle, so the menu does not offer it. A route into the
+    // FX of a take the plan does not play is inert "take" (modulation.list),
+    // worded from the model: another take heard, or the item muted.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    (void)f.addTrack("Pad");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    auto openMenu = [&]() -> std::vector<ui::MenuItem> {
+        REQUIRE(f.fx->openTake(take));
+        f.fx->select(fx);
+        f.fx->showParamsTab();
+        f.fx->tick();
+        f.frame();
+        ui::Node* name = f.uiRoot().find("fx.param.name." + key);
+        REQUIRE(name);
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        ui::Node* menu = f.uiRoot().find("fx.param.menu");
+        REQUIRE(menu);
+        std::vector<ui::MenuItem> rows;
+        for (const auto& row : ui::menuItems(*menu)) rows.push_back(row);
+        return rows;
+    };
+    std::function<void()> modulate;
+    for (const auto& row : openMenu())
+        if (row.label.starts_with("Modulate: ")) {
+            CHECK(row.enabled);
+            modulate = row.run;
+        }
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::vector<std::string> labels;
+    std::function<void()> lfo;
+    for (const auto& row : ui::menuItems(*sources)) {
+        labels.push_back(row.label);
+        if (row.label == "LFO") lfo = row.run;
+    }
+    CHECK(std::count(labels.begin(), labels.end(), "Follower: Pad") == 1);
+    CHECK(std::count(labels.begin(), labels.end(), "Follower: Keys") == 0);
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target == model::EnvTarget{fx, key});
+    auto idleRow = [&] {
+        std::string out;
+        for (const auto& row : openMenu())
+            if (row.label.starts_with("Modulation idle: ")) out = row.label;
+        f.uiRoot().closePopup();
+        return out;
+    };
+    CHECK(idleRow().empty());  // its take plays
+    // Another take heard: the first take's route sends nothing.
+    auto second = f.run("take.add", f.args({{"item", item}, {"from", take.str()}}));
+    REQUIRE(second);
+    REQUIRE(f.run("take.activate", f.args({{"item", item}, {"take", (*second)["id"].asString()}})));
+    CHECK(idleRow() == "Modulation idle: another take of its item plays");
+    // Heard again but its item muted.
+    REQUIRE(f.run("take.activate", f.args({{"item", item}, {"take", take.str()}})));
+    REQUIRE(f.run("item.set", f.args({{"item", item}, {"mute", true}})));
+    CHECK(idleRow() == "Modulation idle: its item is muted");
+}
+
+TEST_CASE("modulation words: each M5 code a command the GUI runs declares has the GUI's words") {
+    // gui.md §2, "Modulation words" (ADR-0096 M5): the registry gives each
+    // command's declared codes; every one among modulation.limit,
+    // modulation.cycle and item.heal_fx on a command the GUI runs has words
+    // keyed on the command and the code, with no engine message,
+    // hint, code, command name, path or id. A command that declares one and
+    // is in neither list fails here until it is placed in one. The cycle's
+    // words are walked by session-model's table of the edits that can close
+    // one, row by row (round 199).
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    // The commands the GUI runs that copy, move or join takes, each with the
+    // argument a copy's limit refusal is at (session-model, "the argument
+    // that names what a command copies").
+    const std::map<std::string, std::string> runs{{"item.paste", "/items"},
+                                                  {"item.duplicate", "/item"},
+                                                  {"item.split", "/item"},
+                                                  {"item.consolidate", "/items"},
+                                                  {"item.add", "/clip"},
+                                                  {"clip.add", "/item"},
+                                                  {"clip.duplicate", "/clip"},
+                                                  {"clip.move", ""},
+                                                  {"scene.capture", "/region"},
+                                                  {"scene.insert", "/scene"},
+                                                  {"arrangement.build", "/sequence"},
+                                                  {"track.duplicate", "/tracks"},
+                                                  {"launch.commit", "/performance"},
+                                                  {"item.move", ""},
+                                                  {"take.extract", ""},
+                                                  {"item.explode-takes", ""},
+                                                  {"item.heal", ""},
+                                                  {"fx.move", ""},
+                                                  {"route.add", ""},
+                                                  {"route.set", ""},
+                                                  {"track.move", ""},
+                                                  {"track.set", ""},
+                                                  {"module.add", ""},
+                                                  {"module.set", ""},
+                                                  {"rack.set", ""},
+                                                  {"rack.paste", ""},
+                                                  {"rack.preset.load", ""},
+                                                  {"track.remove", ""}};
+    // Those that declare one and the GUI does not run with routes to copy:
+    // take.add {from} only in the --generate demo, the consolidation's commit
+    // inside its job (its refusal is the job's, said as item.consolidate's),
+    // rack.patch (an agent's: the rack window adds modules one by one), and
+    // the route commands, which keep their own words.
+    const std::set<std::string> notRun{"take.add", "item.consolidate.commit", "rack.patch",
+                                       "modulate", "modulation.add",          "modulation.set"};
+    const std::set<std::string> m5{"modulation.limit", "modulation.cycle", "item.heal_fx"};
+    const char* text = "engine text tr_3 it_4";
+    const char* hint = "a hint for command callers";
+    const model::Session s = f.app->head();
+    // A command not known here keeps its caller's words for every M5 code
+    // (round 196 F1: a generic verb worded a send as a take's move).
+    for (const char* code : {"modulation.limit", "modulation.cycle", "item.heal_fx"})
+        for (const char* other : {"track.add", "route.remove", "item.merge", "clip.remove"}) {
+            INFO(other << " " << code);
+            CHECK_FALSE(views::modulationRefusalWords(s, other, Error(code, text, "", hint)));
+        }
+    std::set<std::string> worded;
+    for (const cmd::CommandInfo* command : f.registry.all()) {
+        bool declares = false;
+        for (const cmd::ErrorSpec& e : command->errors) declares |= m5.contains(e.code);
+        if (!declares) continue;
+        INFO(command->name);
+        const bool runByGui = runs.contains(command->name);
+        CHECK((runByGui || notRun.contains(command->name)));
+        if (!runByGui) continue;
+        for (const cmd::ErrorSpec& e : command->errors) {
+            // The cycle by the table's rows, below.
+            if (!m5.contains(e.code) || e.code == "modulation.cycle") continue;
+            const std::string path =
+                e.code == "modulation.limit" ? runs.at(command->name) : "/items";
+            INFO(e.code << " at " << path);
+            const auto words = views::modulationRefusalWords(
+                s, command->name, Error(e.code, text, "/args" + path, hint));
+            REQUIRE(words);
+            CHECK_FALSE(words->empty());
+            CHECK(words->find("engine text") == std::string::npos);
+            CHECK(words->find(hint) == std::string::npos);
+            CHECK(words->find("modulation.") == std::string::npos);  // no code or command
+            CHECK(words->find(command->name) == std::string::npos);
+            CHECK(words->find("/args") == std::string::npos);
+            CHECK(words->find("tr_") == std::string::npos);
+            CHECK(words->find("it_") == std::string::npos);
+            // The remedy names what the GUI offers.
+            CHECK(words->find("Remove modulation") != std::string::npos);
+            // modulationRefusal puts the words in and takes the hint out.
+            const Error said = views::modulationRefusal(s, command->name,
+                                                        Error(e.code, text, "/args" + path, hint));
+            CHECK(said.message == *words);
+            CHECK(said.hint.empty());
+            worded.insert(command->name + " " + e.code);
+        }
+    }
+    // Every copy declares the limit, the join its own.
+    for (const char* copy :
+         {"item.paste", "item.duplicate", "item.split", "item.consolidate", "item.add", "clip.add",
+          "clip.duplicate", "scene.capture", "scene.insert", "arrangement.build", "track.duplicate",
+          "launch.commit"})
+        CHECK_MESSAGE(worded.contains(std::string(copy) + " modulation.limit"), copy);
+    CHECK(worded.contains("item.heal item.heal_fx"));
+    // The edits that can close a modulation cycle: session-model's table,
+    // which the engine's test holds to its rows in code (detail::kCycleRows)
+    // and the registry. Each row's refusal, at its argument, has words, or
+    // the row is listed here as one the GUI does not dispatch; so a new row
+    // fails until it is one or the other. The route commands' rows keep
+    // their own words.
+    const std::filesystem::path specs = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR)
+                                            .parent_path()
+                                            .parent_path()
+                                            .parent_path()
+                                            .parent_path() /
+                                        "docs" / "specs";
+    std::ifstream table(specs / "session-model.md");
+    REQUIRE(table);
+    const std::map<std::pair<std::string, std::string>, std::string> notDispatched{
+        {{"route.set", "/to"},
+         "the routing matrix sets a send's tap, polarity, mute, pan and "
+         "channels, never its ends"},
+        {{"route.set", "/from"}, "as /to"},
+        {{"route.set", "/fx"}, "as /to"},
+        {{"module.add", "/source"}, "Add module gives no source (the module plays its home)"},
+        {{"rack.patch", "/modules"}, "the rack window never patches; it adds modules one by one"}};
+    const std::set<std::string> takeMoves{"item.move", "clip.move", "take.extract",
+                                          "item.explode-takes"};
+    std::map<std::string, std::set<std::string>> argumentsOf, wordsOf;
+    std::size_t rows = 0;
+    bool inTable = false;
+    for (std::string line; std::getline(table, line);) {
+        if (line.starts_with("| Edge | Command | Argument | Refused at | Hint |")) {
+            inTable = true;
+            continue;
+        }
+        if (!inTable || line.starts_with("|---")) continue;
+        if (!line.starts_with("| ")) break;  // the table's end
+        std::vector<std::string> cells;
+        for (std::size_t at = 1, bar; (bar = line.find('|', at)) != std::string::npos;
+             at = bar + 1) {
+            std::string cell = line.substr(at, bar - at);
+            std::erase(cell, '`');
+            while (!cell.empty() && cell.front() == ' ') cell.erase(cell.begin());
+            while (!cell.empty() && cell.back() == ' ') cell.pop_back();
+            cells.push_back(cell);
+        }
+        REQUIRE(cells.size() >= 5);
+        const std::string& command = cells[1];
+        const std::string& at = cells[3];
+        ++rows;
+        INFO("cycle row " << command << " at " << at);
+        if (command == "modulate" || command.starts_with("modulation.")) continue;
+        const auto words = views::modulationRefusalWords(
+            s, command, Error("modulation.cycle", text, "/args" + at, hint));
+        CHECK((words || notDispatched.contains({command, at})));
+        if (!words) continue;
+        CHECK(words->find("loop") != std::string::npos);
+        CHECK(words->find("engine text") == std::string::npos);
+        CHECK(words->find(hint) == std::string::npos);
+        CHECK(words->find("modulation.") == std::string::npos);
+        CHECK(words->find(command) == std::string::npos);
+        CHECK(words->find("tr_") == std::string::npos);
+        CHECK(words->find("Remove modulation") != std::string::npos);
+        // A take is named only where a take moves (round 196 F1).
+        CHECK((takeMoves.contains(command) || words->find("take") == std::string::npos));
+        argumentsOf[command].insert(at);
+        wordsOf[command].insert(*words);
+    }
+    CHECK(rows >= 29);
+    // Each argument of a command reads apart (track.set's parent send is not
+    // its rack's Out; route.add's send is not its key route).
+    for (const auto& [command, arguments] : argumentsOf) {
+        INFO(command);
+        CHECK(wordsOf[command].size() == arguments.size());
+    }
+    // The lists against the GUI's sources (round 194): a file that names a
+    // declaring command runs it through the words (it includes
+    // modulation_words.h) or is listed here with the path it runs it by; a
+    // command listed as not run is named only where that holds. What this
+    // cannot see: a call through a variable command name, or a listed file
+    // whose words skip one of its call sites.
+    const std::filesystem::path gui =
+        std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR).parent_path().parent_path();
+    const std::map<std::string, std::string> through{
+        {"item_gestures.cpp", "ItemGestures::run (main's runner) and runLauncher"},
+        {"launcher.cpp", "ArrangeView::runLauncher"},
+        {"generate.cpp", "the --generate demo, whose project has no routes"},
+        {"file_actions.cpp", "item.add of a media file, which copies no route"},
+        {"render_dialog.cpp", "item.add of a rendered file, which copies no route"},
+        {"tcp.cpp", "Shell::commit (a reorder) and the shell's addSend refusal"},
+        {"rack_device.cpp", "its exec hook, which the FX window words (racks::knobRefusalWords)"},
+        {"rack_controls.h", "racks::kKnobCommands, which racks::knobRefusalWords words (its .cpp)"},
+    };
+    // Where a command listed as not run may be named.
+    const std::map<std::string, std::set<std::string>> notRunAt{
+        {"take.add", {"generate.cpp"}}, {"item.consolidate.commit", {}}, {"rack.patch", {}}};
+    std::size_t scanned = 0;
+    for (const char* dir : {"app", "views/src"})
+        for (const auto& entry : std::filesystem::directory_iterator(gui / dir)) {
+            const std::string file = entry.path().filename().string();
+            if (!file.ends_with(".cpp") && !file.ends_with(".h")) continue;
+            if (file == "modulation_words.cpp") continue;  // the words, by command name
+            std::ifstream in(entry.path());
+            const std::string source((std::istreambuf_iterator<char>(in)),
+                                     std::istreambuf_iterator<char>());
+            ++scanned;
+            const bool words = source.find("supple/views/modulation_words.h") != std::string::npos;
+            for (const auto& [name, path] : runs) {
+                // track.set raises modulation.cycle only for its parent_send
+                // and record_rack, which the next check follows; its other
+                // fields are many.
+                if (name == "track.set") continue;
+                if (source.find("\"" + name + "\"") == std::string::npos) continue;
+                INFO(file << " names " << name);
+                CHECK((words || through.contains(file)));
+            }
+            for (const char* field : {"parent_send", "record_rack"})
+                if (source.find("[\"" + std::string(field) + "\"] =") != std::string::npos) {
+                    INFO(file << " sets track.set's " << field);
+                    CHECK(words);
+                }
+            for (const auto& [name, at] : notRunAt)
+                if (source.find("\"" + name + "\"") != std::string::npos) {
+                    INFO(file << " names " << name << ", listed as not run");
+                    CHECK(at.contains(file));
+                }
+        }
+    CHECK(scanned > 50);
+    // Any other code keeps its caller's words; so do the route commands.
+    CHECK_FALSE(
+        views::modulationRefusalWords(s, "item.paste", Error("item.locked", text, "/args")));
+    CHECK_FALSE(views::modulationRefusalWords(s, "modulate",
+                                              Error("modulation.cycle", text, "/args/target")));
+    CHECK(
+        views::modulationRefusal(s, "item.paste", Error("item.locked", text, "/args", hint)).hint ==
+        hint);
+}
+
+TEST_CASE("modulation words: the warnings say which route and why, from the model") {
+    // gui.md §2 (ADR-0096 M5): warnings have no registry; session-model
+    // lists modulation.not_copied, modulation.stacked and
+    // modulation.removed. The first and the last have words at their path
+    // for every copying command (stacked is a route command's, which keep
+    // their own words), and the note says the first in full and counts the
+    // rest.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    auto routed = f.run("modulate", f.args({{"target", target}, {"source", "lfo"}}));
+    REQUIRE(routed);
+    const std::string route = (*routed)["modulation"].asString();
+    const model::Session s = f.app->head();
+    // The take's plug-in is named by its item, and so is the route.
+    CHECK(views::objectName(s, fx) ==
+          "Hickory on " + views::objectName(s, *model::Id::parse(item)));
+    const auto plain = [](const std::string& words) {
+        CHECK(words.find("tr_") == std::string::npos);
+        CHECK(words.find("it_") == std::string::npos);
+        CHECK(words.find("fx_") == std::string::npos);
+        CHECK(words.find("mr_") == std::string::npos);
+        CHECK(words.find("md_") == std::string::npos);
+        CHECK(words.find("modulation.") == std::string::npos);
+        CHECK(words.find("/modulations") == std::string::npos);
+    };
+    for (const char* command :
+         {"item.paste", "item.duplicate", "item.split", "item.consolidate", "item.add", "clip.add",
+          "clip.duplicate", "scene.capture", "scene.insert", "arrangement.build", "track.duplicate",
+          "launch.commit"}) {
+        INFO(command);
+        // The cause is the warning's reason, never read from the model: the
+        // route here, with its rack, reads as each reason says.
+        const std::string at = "/modulations/" + route;
+        const std::map<std::string, std::string> notCopied{
+            {"cycle", "would loop"},
+            {"source", "its rack is not where the copy is"},
+            {"limit", "the project holds the most routes it can (4096)"},
+            {"", "was not copied. Modulate the copy again"},
+            {"later_cause", "was not copied. Modulate the copy again"}};
+        for (const auto& [reason, says] : notCopied) {
+            INFO("not_copied, reason " << reason);
+            const auto words =
+                views::modulationWarningWords(s, command, "modulation.not_copied", at, reason);
+            REQUIRE(words);
+            CHECK(words->starts_with("The modulation of the "));
+            CHECK(words->find("Hickory on ") != std::string::npos);
+            CHECK(words->find(says) != std::string::npos);
+            plain(*words);
+        }
+        // A route `s` does not hold (a retained version's) is "A modulation".
+        const auto gone = views::modulationWarningWords(s, command, "modulation.not_copied",
+                                                        "/modulations/mr_999", "source");
+        REQUIRE(gone);
+        CHECK(gone->starts_with("A modulation was not copied: its rack is not where"));
+        plain(*gone);
+        const std::map<std::string, std::string> removedSays{
+            {"source_removed", "A modulation route went with it."},
+            {"target_removed", "A modulation route went with it."},
+            {"", "A modulation route went with it."},
+            {"source_unfit",
+             "A modulation route was removed: its rack's output can no longer "
+             "modulate."},
+            {"target_unfit",
+             "A modulation route was removed: what it modulated can no longer "
+             "be modulated (a send turned MIDI, for instance)."}};
+        for (const auto& [reason, says] : removedSays) {
+            INFO("removed, reason " << reason);
+            const auto removed = views::modulationWarningWords(s, command, "modulation.removed",
+                                                               "/modulations/mr_998", reason);
+            REQUIRE(removed);
+            CHECK(*removed == says);
+            plain(*removed);
+        }
+        CHECK_FALSE(views::modulationWarningWords(s, command, "modulation.stacked", "/target"));
+        CHECK_FALSE(views::modulationWarningWords(s, command, "take.comp_short", "/spans/0"));
+    }
+    // The note: the first not copied in full, then the count; the removed
+    // counted; another command's warnings left to it.
+    json::Value result = json::Value::object(), warnings = json::Value::array();
+    auto warn = [&](const char* code, const std::string& path, const char* reason = "") {
+        json::Value w = json::Value::object();
+        w["code"] = code;
+        w["message"] = "engine text";
+        w["path"] = path;
+        if (*reason) w["reason"] = reason;
+        warnings.push_back(std::move(w));
+    };
+    CHECK(views::modulationNote(s, "item.paste", result).empty());
+    warn("take.comp_short", "/spans/0");
+    result["warnings"] = warnings;
+    CHECK(views::modulationNote(s, "item.paste", result).empty());
+    for (int i = 0; i < 3; ++i) warn("modulation.not_copied", "/modulations/" + route, "cycle");
+    warn("modulation.removed", "/modulations/mr_998");
+    warn("modulation.removed", "/modulations/mr_997");
+    result["warnings"] = warnings;
+    const std::string note = views::modulationNote(s, "item.paste", result);
+    CHECK(note.starts_with(*views::modulationWarningWords(s, "item.paste", "modulation.not_copied",
+                                                          "/modulations/" + route, "cycle")));
+    CHECK(note.find("would loop") != std::string::npos);  // the note reads the reason
+    CHECK(note.find("And 2 more modulations were not copied.") != std::string::npos);
+    CHECK(note.find("2 modulation routes went with it.") != std::string::npos);
+    CHECK(note.find("engine text") == std::string::npos);
+    plain(note);
+}
+
+TEST_CASE("modulation words: a delete that takes routes with it names them in a note") {
+    // gui.md §2, "Modulation words" (ADR-0096): a delete whose object a
+    // route reaches removes the route with it (modulation.removed); the
+    // note names the route from the session before the delete, at each
+    // delete path: here the FX window's Remove and Item: remove selected.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto modulatable = [&](model::Id fx) {
+        auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+        REQUIRE(described);
+        std::string key;
+        if ((*described)["params"].isObject())
+            for (const auto& m : (*described)["params"].asObject())
+                if (const json::Value* mod = m.value.find("modulatable");
+                    key.empty() && mod && mod->asBool())
+                    key = m.key;
+        return key;
+    };
+    auto modulate = [&](model::Id fx, const std::string& key) {
+        json::Value target = json::Value::object();
+        target["fx"] = fx.str();
+        target["param"] = key;
+        auto routed = f.run("modulate", f.args({{"target", target}, {"source", "lfo"}}));
+        REQUIRE(routed);
+        return *model::Id::parse((*routed)["modulation"].asString());
+    };
+    // A track's plug-in, removed from the FX window.
+    auto made = f.run("fx.add", f.args({{"track", keys.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = modulatable(fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    const model::Id route = modulate(fx, key);
+    const std::string named = views::objectName(f.app->head(), route);
+    REQUIRE(f.fx->open(keys));
+    f.frame();
+    REQUIRE(f.click("fx.remove." + fx.str()));
+    f.frame();
+    CHECK_FALSE(f.app->head().fx.find(fx));
+    CHECK_FALSE(f.app->head().modulations.find(route));
+    std::string first = named;
+    first[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(first[0])));
+    CHECK(f.fxStatus() == first + " went with it.");
+    CHECK(f.fxStatus().find("mr_") == std::string::npos);
+    CHECK(f.fxStatus().find("fx_") == std::string::npos);
+    // An item whose take's plug-in two routes reach, removed by the action.
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto onTake =
+        f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(onTake);
+    const model::Id takeFx = *model::Id::parse((*onTake)["fx"].asString());
+    (void)modulate(takeFx, key);
+    (void)modulate(takeFx, key);  // stacked: a second route
+    std::vector<std::string> notes;
+    f.actions->onNotice = [&](const std::string& note) { notes.push_back(note); };
+    f.ui.selectedItems = {item};
+    REQUIRE(f.actions->run("item.remove:selected"));
+    CHECK(f.app->head().modulations.size() == 0);
+    REQUIRE_FALSE(notes.empty());
+    CHECK(notes.back() == "2 modulation routes went with it.");
+    // A track whose plug-in a route reaches, removed by Track: delete
+    // selected (a builtin action: its steps' warnings, collected).
+    const model::Id pad = f.addTrack("Pad");
+    auto onPad = f.run("fx.add", f.args({{"track", pad.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(onPad);
+    const model::Id padFx = *model::Id::parse((*onPad)["fx"].asString());
+    const model::Id padRoute = modulate(padFx, key);
+    std::string padNamed = views::objectName(f.app->head(), padRoute);
+    padNamed[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(padNamed[0])));
+    notes.clear();
+    f.ui.selectedTracks = {pad.str()};
+    REQUIRE(f.actions->run("track.remove:selected"));
+    CHECK_FALSE(f.app->head().tracks.find(pad));
+    REQUIRE_FALSE(notes.empty());
+    CHECK(notes.back() == padNamed + " went with it.");
+    // The words: a route the session still holds is named, else said plainly.
+    const model::Session now = f.app->head();
+    CHECK(*views::modulationWarningWords(now, "fx.remove", "modulation.removed",
+                                         "/modulations/" + route.str()) ==
+          "A modulation route went with it.");
+}
+
+TEST_CASE("names: a copy of a named take reads apart from the original") {
+    // gui.md §4.1 (round 194 G1): take.add {from} keeps the take's name, so
+    // a name two takes of one item share adds each one's place, wherever a
+    // take is named: its plug-in's name, the take FX lane's note, the label.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const model::Id item = *model::Id::parse((*added)["item"].asString());
+    const model::Id take = *f.app->head().items.find(item)->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value points = json::Value::array(), point = json::Value::object();
+    point["beat"] = 0.0;
+    point["value"] = 0.5;
+    points.push_back(point);
+    REQUIRE(f.run("env.add", f.args({{"fx", fx.str()}, {"param", key}, {"points", points}})));
+    REQUIRE(f.run("take.set", f.args({{"take", take.str()}, {"name", "Stabs"}})));
+    // Alone, the name is the name.
+    CHECK(views::takeLabel(f.app->head(), take) == "Stabs");
+    REQUIRE(f.run("take.add", f.args({{"item", item.str()}, {"from", take.str()}})));
+    const model::Session s = f.app->head();
+    const model::Item& it = *s.items.find(item);
+    REQUIRE(it.takes.size() == 2);
+    const model::Id copy = it.takes[1];
+    CHECK(s.takes.find(copy)->name == "Stabs");
+    CHECK(views::takeLabel(s, take) == "Stabs, take 1");
+    CHECK(views::takeLabel(s, copy) == "Stabs, take 2");
+    CHECK(views::objectName(s, copy) == "Stabs, take 2");
+    const model::Id copyFx = s.takes.find(copy)->chain.front();
+    CHECK(views::objectName(s, fx) != views::objectName(s, copyFx));
+    CHECK(views::objectName(s, fx).starts_with("Hickory on Stabs, take 1 of "));
+    CHECK(views::objectName(s, copyFx).starts_with("Hickory on Stabs, take 2 of "));
+    std::vector<std::string> notes;
+    for (const auto& e : s.envelopes)
+        if (e.value->target.param == key && e.value->target.object.kind == model::Kind::Fx)
+            notes.push_back(views::laneTitle(*e.value, s).note);
+    std::sort(notes.begin(), notes.end());
+    CHECK(notes == std::vector<std::string>{"(take: Stabs, take 1)", "(take: Stabs, take 2)"});
+}
+
+TEST_CASE("modulation words: a built-in action's own words stand on the action path") {
+    // Round 194 G3: a built-in action (Track: duplicate selected) words its
+    // M5 refusal with the verb of what it ran; AppActions must not word it
+    // again with no command ("The copy would…"). (A bound action, with a
+    // command of its own, is worded by it: the walk's words, per command.)
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    const std::string own =
+        "Duplicating the track would make more than 4096 modulation routes, the most a "
+        "project holds.";
+    actions::Action builtin;
+    builtin.id = "test.duplicate";
+    builtin.name = "Test: duplicate";
+    builtin.builtin = [own](const actions::Context&) -> Result<json::Value> {
+        return Error("modulation.limit", own, "/args/tracks");
+    };
+    f.actions->registry().add(builtin);
+    auto r = f.actions->run("test.duplicate");
+    REQUIRE_FALSE(r);
+    CHECK(r.error().message == own);
+    REQUIRE(said.size() == 1);
+    CHECK(said.back() == "Test: duplicate: " + own);
+    CHECK(said.back().find("The copy") == std::string::npos);
+}
+
+TEST_CASE(
+    "modulation words: a plug-in moved where its rack hears it is refused in the GUI's words") {
+    // gui.md §2 (round 193 R2): fx.move of a modulated track plug-in onto a
+    // track its rack hears is refused (modulation.cycle); the GUI says it
+    // as a plug-in's move, not a take's.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    const model::Id drums = f.addTrack("Drums");
+    auto made = f.run("fx.add", f.args({{"track", keys.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    std::string key;
+    if ((*described)["params"].isObject())
+        for (const auto& m : (*described)["params"].asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                key.empty() && mod && mod->asBool())
+                key = m.key;
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    REQUIRE(f.run("modulate",
+                  f.args({{"target", target}, {"source", "follower"}, {"from", drums.str()}})));
+    const auto version = f.app->head().version;
+    auto moved = f.run("fx.move", f.args({{"fx", fx.str()}, {"track", drums.str()}, {"index", 0}}));
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "modulation.cycle");
+    CHECK(f.app->head().version == version);
+    const Error said = views::modulationRefusal(f.app->head(), "fx.move", moved.error());
+    INFO(said.message);
+    CHECK(said.message.starts_with("Moving the plug-in there would loop its modulation"));
+    CHECK(said.message.find("take") == std::string::npos);
+    CHECK(said.message.find("fx_") == std::string::npos);
+    CHECK(said.hint.empty());
+}
+
+namespace {
+// The first modulatable parameter of `fx`, "" when it has none.
+std::string firstModulatable(Fixture& f, model::Id fx) {
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    if (!described || !(*described)["params"].isObject()) return {};
+    for (const auto& m : (*described)["params"].asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+            return m.key;
+    return {};
+}
+}  // namespace
+
+TEST_CASE("modulation words: a send or a track move that would loop says so as itself") {
+    // Round 196 F1: route.add and track.move answer modulation.cycle when the
+    // edit closes a loop; the GUI says it as a send's or a track's move,
+    // never a take's (the mixer, the routing matrix and the track panel run
+    // them). From the engine's real refusals.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    auto buss = f.run("track.add", f.args({{"name", "Listened"}, {"type", "buss"}}));
+    REQUIRE(buss);
+    const std::string listened = (*buss)["track"].asString();
+    auto made = f.run("fx.add", f.args({{"track", keys.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = firstModulatable(f, fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    REQUIRE(f.run("modulate",
+                  f.args({{"target", target}, {"source", "follower"}, {"from", listened}})));
+    struct Edit {
+        json::Value args;
+        std::string at, says;
+    };
+    const std::map<std::string, Edit> edits{
+        {"route.add",
+         {f.args({{"from", keys.str()}, {"to", listened}}), "/to", "The send would loop"}},
+        {"track.move",
+         {f.args({{"track", keys.str()}, {"parent", listened}}), "/parent",
+          "Moving the track there would loop"}}};
+    for (const auto& [command, edit] : edits) {
+        INFO(command);
+        auto r = f.run(command.c_str(), edit.args);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path.ends_with(edit.at));  // declared, at its argument (round 195 F2)
+        const Error said = views::modulationRefusal(f.app->head(), command, r.error());
+        INFO(said.message);
+        CHECK(said.message.starts_with(edit.says));
+        CHECK(said.message.find("take") == std::string::npos);
+        CHECK(said.message.find("mr_") == std::string::npos);
+        CHECK(said.message.find("tr_") == std::string::npos);
+    }
+}
+
+TEST_CASE("modulation words: a macro's refused step is worded by the step's command") {
+    // Round 196 F2: a macro words nothing itself, so its refused step is
+    // worded by the command that refused it (actions::Runner::
+    // refusedCommand); a built-in's own words stand, alone or as a step.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id keys = f.addTrack("Keys");
+    const model::Id drums = f.addTrack("Drums");
+    auto added = f.run(
+        "item.add", f.args({{"track", keys.str()}, {"bar", 1}, {"notation", "voice v; 1: E4:w"}}));
+    REQUIRE(added);
+    const std::string item = (*added)["item"].asString();
+    const model::Id take = *f.app->head().items.find(*model::Id::parse(item))->activeTake;
+    auto made = f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Hickory")}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    const std::string key = firstModulatable(f, fx);
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    json::Value target = json::Value::object();
+    target["fx"] = fx.str();
+    target["param"] = key;
+    REQUIRE(f.run("modulate",
+                  f.args({{"target", target}, {"source", "follower"}, {"from", drums.str()}})));
+    actions::Action move;  // a bound move with its track given, as a keymap binds one
+    move.id = "test.move_to_drums";
+    move.name = "Item: move to Drums";
+    move.command = "item.move";
+    move.args = json::Value::object();
+    move.args["item"] = "$selection.item";
+    move.args["track"] = drums.str();
+    f.actions->registry().add(move);
+    actions::Action macro;
+    macro.id = "macro:send_over";
+    macro.name = "Send over";
+    macro.steps = {"test.move_to_drums"};
+    f.actions->registry().add(macro);
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    const std::string words = "Moving the item there would loop its modulation";
+    for (const char* id : {"test.move_to_drums", "macro:send_over"}) {
+        INFO(id);
+        said.clear();
+        f.ui.selectedItems = {item};
+        const auto version = f.app->head().version;
+        auto r = f.actions->run(id);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().message.starts_with(words));
+        REQUIRE(said.size() == 1);
+        INFO(said.back());
+        CHECK(said.back().find(words) != std::string::npos);
+        CHECK(said.back().find("mr_") == std::string::npos);
+        CHECK(said.back().find("tr_") == std::string::npos);
+        CHECK(f.app->head().version == version);
+    }
+    // A built-in as a macro's step keeps its own words.
+    const std::string own =
+        "Duplicating the track would make more than 4096 modulation routes, the most a "
+        "project holds.";
+    actions::Action builtin;
+    builtin.id = "test.duplicate_step";
+    builtin.name = "Test: duplicate";
+    builtin.builtin = [own](const actions::Context&) -> Result<json::Value> {
+        return Error("modulation.limit", own, "/args/tracks");
+    };
+    f.actions->registry().add(builtin);
+    actions::Action wrapping;
+    wrapping.id = "macro:duplicate";
+    wrapping.name = "Duplicate macro";
+    wrapping.steps = {"test.duplicate_step"};
+    f.actions->registry().add(wrapping);
+    auto wrapped = f.actions->run("macro:duplicate");
+    REQUIRE_FALSE(wrapped);
+    CHECK(wrapped.error().message == own);
+}
+
+TEST_CASE("modulation words: every route warning reason has its own words") {
+    // Round 196 F3, round 195 F4: a warning's reason has words of its own,
+    // never the plain fallback, for every reason the engine has
+    // (model::kRouteWarningReasons, the one list its emitters and the
+    // record.warning schema use), so a reason added there fails here until
+    // it is worded.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Session s = f.app->head();
+    std::size_t checked = 0;
+    for (const auto& [reason, word] : model::kRouteWarningReasons) {
+        // Source, Cycle and Limit are modulation.not_copied's; the rest
+        // modulation.removed's (session.h).
+        const bool notCopied = reason == model::RouteWarningReason::Source ||
+                               reason == model::RouteWarningReason::Cycle ||
+                               reason == model::RouteWarningReason::Limit;
+        const char* code = notCopied ? "modulation.not_copied" : "modulation.removed";
+        INFO(code << " reason " << word);
+        const auto with =
+            views::modulationWarningWords(s, "item.paste", code, "/modulations/mr_1", word);
+        const auto without =
+            views::modulationWarningWords(s, "item.paste", code, "/modulations/mr_1", "");
+        REQUIRE(with);
+        REQUIRE(without);
+        // removed's two "removed" reasons share the plain "went with it" on
+        // purpose: the route went with what the delete took.
+        if (reason == model::RouteWarningReason::SourceRemoved ||
+            reason == model::RouteWarningReason::TargetRemoved)
+            CHECK(*with == *without);
+        else
+            CHECK(*with != *without);
+        ++checked;
+    }
+    CHECK(checked >= 7);
+}
+
+TEST_CASE("modulation words: deleting a track a Notes module plays, when that would loop") {
+    // Round 199 (the table's track.remove row): a Notes module that played
+    // the deleted track then plays its rack's channel; when a MIDI send from
+    // what the rack modulates reaches that channel, the delete is refused.
+    // Track: delete selected says so in the GUI's words.
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Id alpha = f.addTrack("Alpha");
+    const model::Id bravo = f.addTrack("Bravo");
+    json::Value target = json::Value::object();
+    target["track"] = alpha.str();
+    target["param"] = "volume";
+    auto made = f.run("modulate", f.args({{"target", target}, {"source", "lfo"}}));
+    REQUIRE(made);
+    const std::string rack = (*made)["rack"].asString();
+    const std::string home = f.app->head().racks.find(*model::Id::parse(rack))->track.str();
+    REQUIRE(
+        f.run("module.add", f.args({{"rack", rack}, {"type", "notes"}, {"source", bravo.str()}})));
+    REQUIRE(f.run("route.add",
+                  f.args({{"from", alpha.str()}, {"to", home}, {"midi", json::Value::object()}})));
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    f.ui.selectedTracks = {bravo.str()};
+    const auto version = f.app->head().version;
+    auto r = f.actions->run("track.remove:selected");
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "modulation.cycle");
+    CHECK(f.app->head().version == version);
+    REQUIRE(said.size() == 1);
+    INFO(said.back());
+    CHECK(said.back().find("Deleting the track would loop its modulation") != std::string::npos);
+    for (const char* raw : {"tr_", "mr_", "rk_", "mo_", "modulation."})
+        CHECK(said.back().find(raw) == std::string::npos);
 }

@@ -12,12 +12,13 @@
 #include "supple/model/objects.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 namespace supple::gui {
 
 Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
-                    const std::vector<std::string>& tracks) {
+                    const std::vector<std::string>& tracks, json::Value* warnings) {
     // Deepest first: a folder can go once its children have.
     std::vector<std::pair<int, model::Id>> order;
     for (const std::string& text : tracks) {
@@ -38,7 +39,10 @@ Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
             json::Value args = json::Value::object();
             args["track"] = id.str();
             auto one = dispatcher.execute({"track.remove", std::move(args), origin});
-            if (!one) return one;
+            // Its Notes modules left playing their rack's channel would loop
+            // a modulation: said in the GUI's words.
+            if (!one) return views::modulationRefusal(session, "track.remove", one.error());
+            if (warnings) views::collectWarnings(*warnings, *one);
         }
         return json::Value::object();
     });
@@ -48,7 +52,8 @@ Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
 
 Result<std::vector<std::string>> duplicateTracks(cmd::Dispatcher& dispatcher,
                                                  const model::Session& session,
-                                                 const std::vector<std::string>& tracks) {
+                                                 const std::vector<std::string>& tracks,
+                                                 std::string* note) {
     json::Value ids = json::Value::array();
     for (const std::string& text : tracks) {
         const auto id = model::Id::parse(text);
@@ -61,7 +66,8 @@ Result<std::vector<std::string>> duplicateTracks(cmd::Dispatcher& dispatcher,
     args["tracks"] = std::move(ids);
     auto r = dispatcher.execute(
         {"track.duplicate", std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
-    if (!r) return std::move(r).error();
+    if (!r) return views::modulationRefusal(session, "track.duplicate", r.error());
+    if (note) *note = views::modulationNote(session, "track.duplicate", *r);
     for (const json::Value& id : (*r)["tracks"].asArray()) copies.push_back(id.asString());
     return copies;
 }
@@ -149,12 +155,14 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
         copied.size() > 1 ? "Duplicate " + std::to_string(copied.size()) + " tracks" : "Duplicate";
     m.enabled = !copied.empty();  // masters are not duplicated
     m.run = [this, copied] {
-        auto r = duplicateTracks(dispatcher, app.head(), copied);
+        std::string note;
+        auto r = duplicateTracks(dispatcher, app.head(), copied, &note);
         if (!r) {
             if (onError) onError(r.error().message);
-        } else if (select) {
-            select(std::move(*r));
+            return;
         }
+        if (select) select(std::move(*r));
+        if (!note.empty() && onNotice) onNotice(note);
     };
     items.push_back(std::move(m));
     std::erase(doomed, model::kMaster.str());
@@ -162,8 +170,16 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
     m.label = doomed.size() > 1 ? "Delete " + std::to_string(doomed.size()) + " tracks" : "Delete";
     m.enabled = !doomed.empty();  // the main master stays
     m.run = [this, doomed] {
-        if (auto r = removeTracks(dispatcher, app.head(), doomed); !r && onError)
-            onError(r.error().message);
+        // A route that went with them is named from the session before.
+        const model::Session before = app.head();
+        json::Value warnings = json::Value::object();
+        if (auto r = removeTracks(dispatcher, before, doomed, &warnings); !r) {
+            if (onError) onError(r.error().message);
+            return;
+        }
+        if (const std::string note = views::modulationNote(before, "track.remove", warnings);
+            !note.empty() && onNotice)
+            onNotice(note);
     };
     items.push_back(std::move(m));
     root.openPopup(

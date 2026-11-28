@@ -54,7 +54,9 @@ struct UiState {
 };
 
 // Removes clips in one undo step (the launcher's Delete).
-Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips);
+// `warnings` (when given) collects the steps' warnings (views::collectWarnings).
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips,
+                   json::Value* warnings = nullptr);
 
 // Pastes the launcher's clipboard from a cell (gui.md §4.15): each clip lands
 // as far from (track, scene) as it was from the copied clips' top-left cell,
@@ -63,13 +65,15 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
 // last channel or scene, or an occupied one refuses the whole paste. With
 // `move` (after a cut) the clips themselves move there (clip.move), front
 // first, so new cells that overlap the old ones are free in time. The pasted
-// clips' ids, in the clipboard's order.
+// clips' ids, in the clipboard's order. A modulation refusal is in the
+// GUI's words, and `note` (when given) gets the modulation warnings' note
+// (views::modulationRefusal, views::modulationNote; ADR-0096 M5).
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher,
                                             const model::Session& session,
                                             const std::vector<std::string>& clips,
                                             const std::string& track, const std::string& scene,
                                             const std::vector<std::string>& channels,
-                                            bool move = false);
+                                            bool move = false, std::string* note = nullptr);
 
 // A click on a track in a view that lists `order` (its row or strip order):
 // plain selects it alone, Ctrl toggles it, Shift extends from the anchor
@@ -179,6 +183,8 @@ class AppActions {
                     actions::SoftTakeover takeover = actions::SoftTakeover::None);
 
   private:
+    void sayModulation(const actions::Action& action, const model::Session& before,
+                       Result<json::Value>& r);
     std::uint64_t learnSerial_ = 0, learnOwner_ = 0;
     std::function<void()> closeLearn_;
     actions::ActionRegistry registry_;

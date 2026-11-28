@@ -84,6 +84,7 @@ struct LauncherFixture {
         REQUIRE(fonts);
         engine::AppOptions options;
         options.workdir = dir;
+        options.pluginPath = {std::filesystem::path(SUPPLE_CLAP_DIR)};  // the stock plug-ins only
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -1546,6 +1547,138 @@ TEST_CASE("launcher: a device restart while capturing commits the take; nothing 
     REQUIRE(said.size() == 1);
     CHECK(said[0].rfind("The audio device restarted during the capture: its take (", 0) == 0);
     CHECK(f.errors.empty());
+}
+
+namespace {
+// Round 221 F1: Kit A launched at bar 2 and Drums back to the arrangement at
+// bar 3, a capture switched on 128 frames after that switch, inside its
+// crossfade, by the pane or by an agent (launch.capture). The capture lists
+// what the crossfade fades from (Kit A) and the return, at its frame 0:
+// nothing to lay down. With `launched`, Kit A is launched again inside it
+// (bar 4): one launch to write. The manual backend plays frame by frame
+// (in-callback), so where it begins never depends on the machine's timing;
+// the engine then stops, ending it.
+void captureFromCrossfade(LauncherFixture& f, gui::CaptureControl& capture, bool byPane,
+                          bool launched) {
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    constexpr std::uint32_t block = 128;
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block},
+                               {.anticipative = false, .workers = 0}));
+    // A failed check stops the engine before its backend goes with this frame.
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() {
+            if (app.engine()) app.stopEngine();
+        }
+    } stop{*f.app};
+    std::int64_t cycles = 0;
+    const auto until = [&](std::int64_t frame) {
+        if (const std::int64_t n = frame / block - cycles; n > 0) {
+            backend.run(n);
+            cycles += n;
+        }
+        f.app->tick();
+        capture.service();
+    };
+    REQUIRE(f.app->transport("play"));
+    until(20 * block);
+    CHECK(f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble() == 4);  // bar 2
+    until(96000 + 4000);
+    const json::Value back = f.exec("launch.arrangement", R"({"track":"tr_1"})");
+    REQUIRE(back.find("beat"));
+    CHECK(back.find("beat")->asDouble() == 8);  // bar 3
+    until(192000 + block);
+    if (byPane)
+        REQUIRE(capture.set(true));
+    else
+        f.exec("launch.capture", R"({"on":true})");
+    if (launched) CHECK(f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble() == 12);
+    until(launched ? 288000 + 48000 : 192000 + 48000);
+    const auto view = f.app->launchCapture();
+    REQUIRE(view);
+    // The crossfade's entries are there: the pane's old count saw them.
+    std::size_t clips = 0;
+    for (const auto& e : view->capture.launches)
+        clips += e.action == engine::LaunchLogEntry::Action::Clip;
+    INFO("launches: " << view->capture.launches.size() << ", clips " << clips);
+    REQUIRE(clips == (launched ? 2u : 1u));
+    REQUIRE(view->capture.launches.size() >= (launched ? 3u : 2u));
+    f.exec("engine.stop", "{}");  // ends it at the heard position, kept
+}
+}  // namespace
+
+TEST_CASE(
+    "launcher: a capture holding only a return's crossfade is no kept take and no commit, by "
+    "the pane or an agent (round 221 F1)") {
+    for (const bool byPane : {true, false}) {
+        INFO((byPane ? "armed by the pane" : "an agent's launch.capture"));
+        LauncherFixture f;
+        f.song();
+        gui::CaptureControl capture(*f.app, *f.dispatcher);
+        std::vector<Error> refused;
+        std::vector<std::string> said;
+        capture.onError = [&](const Error& e) { refused.push_back(e); };
+        capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+        captureFromCrossfade(f, capture, byPane, false);
+        const std::uint64_t before = f.app->head().version;
+        REQUIRE(f.app->launchCapture());
+        CHECK_FALSE(f.app->launchCapture()->holdsPerformance);
+        CHECK(f.app->launchCapture()->held == 0);
+        CHECK_FALSE(f.app->captureUncommitted());
+        for (int pass = 0; pass < 2; ++pass) capture.service();
+        // Nothing said committed, nothing written; no kept take for the
+        // cell, the question before another project, or what it would lose.
+        CHECK(said.empty());
+        CHECK(refused.empty());
+        CHECK(f.app->head().version == before);
+        CHECK_FALSE(capture.kept());
+        CHECK(capture.keptLine().empty());
+        CHECK(capture.takeKey().empty());
+        CHECK(capture.lostLine(true).empty());
+        CHECK_FALSE(capture.lit());
+        CHECK(f.errors.empty());
+    }
+}
+
+TEST_CASE(
+    "launcher: a capture with one launch beside a crossfade's entries says 1 launch (round 221 "
+    "F1)") {
+    for (const bool byPane : {true, false}) {
+        INFO((byPane ? "armed by the pane" : "an agent's launch.capture"));
+        LauncherFixture f;
+        f.song();
+        gui::CaptureControl capture(*f.app, *f.dispatcher);
+        std::vector<Error> refused;
+        std::vector<std::string> said;
+        capture.onError = [&](const Error& e) { refused.push_back(e); };
+        capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+        captureFromCrossfade(f, capture, byPane, true);
+        const std::uint64_t before = f.app->head().version;
+        REQUIRE(f.app->launchCapture());
+        CHECK(f.app->launchCapture()->held == 1);
+        CHECK(f.app->captureUncommitted());
+        if (byPane) {
+            // The pane armed it: its next pass commits it and says so.
+            capture.service();
+            CHECK(refused.empty());
+            CHECK(f.app->head().version == before + 1);
+            REQUIRE(said.size() == 1);
+            INFO(said[0]);
+            CHECK(said[0].rfind("The engine stopped during the capture: its take (bar", 0) == 0);
+            CHECK(said[0].find(", 1 launch) is committed.") != std::string::npos);
+        } else {
+            // An agent's: kept, shown in the cell, counted as the app does.
+            CHECK(capture.kept());
+            const std::string line = capture.keptLine();
+            INFO(line);
+            CHECK(line.rfind("A take is kept, not committed: bar", 0) == 0);
+            CHECK(line.find(", 1 launch.") != std::string::npos);
+            CHECK_FALSE(capture.takeKey().empty());
+            CHECK(said.empty());
+            CHECK(f.app->head().version == before);
+        }
+        CHECK(f.errors.empty());
+    }
 }
 
 TEST_CASE(
@@ -3315,4 +3448,141 @@ TEST_CASE("launcher: a fader drag asks for the refusals once a frame while shown
     agreeWithEngine(f, "shown again after a hidden drag");
     CHECK(f.errors.empty());
     f.exec("engine.stop", "{}");
+}
+
+TEST_CASE("launcher: a clip whose active take's FX is modulated carries the mark") {
+    // gui.md §4.13 (ADR-0096 M5; views::takeNameMark): the mark after the
+    // clip's name, dimmed while every route is off.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.view->launcherShown());
+    views::LauncherPane& pane = f.view->launcherPane();
+    auto marks = [&] {
+        f.sync();
+        f.root->damageAll();
+        f.root->frame(false);
+        return pane.stats.marks;
+    };
+    CHECK(marks() == std::vector<std::string>{"", "", ""});
+    const std::string take = f.app->head().clips.find(*model::Id::parse("cl_3"))->activeTake->str();
+    const std::string fx =
+        f.exec("fx.add", R"({"take":")" + take + R"(","plugin":"Hickory"})")["fx"].asString();
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    std::string param;
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    CHECK(marks() == std::vector<std::string>{"", "", ""});  // a plug-in alone: no mark
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    // Drawn only while views::kTakeNameMarksShown is on (off by default).
+    const auto clipTake = f.app->head().clips.find(*model::Id::parse("cl_3"))->activeTake;
+    const std::string shown = views::kTakeNameMarksShown ? "signal-cv" : "";
+    CHECK(marks() == std::vector<std::string>{"", "", shown});
+    CHECK(views::takeNameMark(f.app->head(), clipTake).mark == views::kModMark);
+    CHECK(pane.stats.names == std::vector<std::string>{"Kit A", "Kit B", "Root"});
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    CHECK(marks() ==
+          std::vector<std::string>{"", "", views::kTakeNameMarksShown ? "ink-faint" : ""});
+    CHECK_FALSE(views::takeNameMark(f.app->head(), clipTake).on);
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    marks();
+    f.snapshot("launcher-modulated-clip.png");
+}
+
+TEST_CASE(
+    "launcher: a copy or a move that would loop a clip's modulation says so in the GUI's words") {
+    // gui.md §2, "Modulation words" (ADR-0096 M5): onto the track a
+    // follower modulating the clip's take FX hears, a copy goes ahead
+    // without the route (modulation.not_copied, a note) and a move is
+    // refused (modulation.cycle), each in the GUI's words through
+    // runLauncher.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.view->launcherShown());
+    const model::Id clipId = *model::Id::parse("cl_3");
+    const model::Clip& clip = *f.app->head().clips.find(clipId);
+    const std::string take = clip.activeTake->str();
+    // Drums, and a scene where its cell is empty.
+    const model::Session at = f.app->head();
+    std::string drums, scene;
+    for (const auto& t : at.tracks)
+        if (t.value->name == "Drums") drums = t.id.str();
+    REQUIRE_FALSE(drums.empty());
+    for (const auto& sc : at.scenes) {
+        bool taken = false;
+        for (const auto& c : at.clips)
+            taken |= c.value->track.str() == drums && c.value->scene == sc.id;
+        if (!taken) scene = sc.id.str();
+    }
+    REQUIRE_FALSE(scene.empty());
+    const std::string fx =
+        f.exec("fx.add", R"({"take":")" + take + R"(","plugin":"Hickory"})")["fx"].asString();
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    std::string param;
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    // A follower listening to Drums: its rack hears Drums.
+    (void)f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + param +
+                                 R"("},"source":"follower","from":")" + drums + R"("})");
+    const std::string home = drums;
+    f.notices.clear();
+    f.errors.clear();
+    // A copy there: made, without the route, and the note says why.
+    auto copied = f.view->runLauncher(
+        "clip.duplicate",
+        json::parse(R"({"clip":"cl_3","track":")" + home + R"(","scene":")" + scene + R"("})")
+            .value());
+    if (!copied) {
+        MESSAGE("the copy was refused: " << copied.error().toString());
+        FAIL("clip.duplicate onto the rack's track");
+    }
+    REQUIRE_FALSE(f.notices.empty());
+    INFO(f.notices.back());
+    CHECK(f.notices.back().find("was not copied") != std::string::npos);
+    CHECK(f.notices.back().find("would loop") != std::string::npos);
+    CHECK(f.notices.back().find("mr_") == std::string::npos);
+    CHECK(f.notices.back().find("fx_") == std::string::npos);
+    // A move there: refused, in the GUI's words, nothing changed.
+    f.exec("history.undo", "{}");
+    const auto version = f.app->head().version;
+    auto moved = f.view->runLauncher("clip.move", json::parse(R"({"clip":"cl_3","track":")" + home +
+                                                              R"(","scene":")" + scene + R"("})")
+                                                      .value());
+    CHECK_FALSE(moved);
+    REQUIRE_FALSE(f.errors.empty());
+    INFO(f.errors.back().message);
+    CHECK(f.errors.back().code == "modulation.cycle");
+    CHECK(f.errors.back().message.starts_with("Moving the clip there would loop its modulation"));
+    CHECK(f.errors.back().hint.empty());
+    CHECK(f.app->head().version == version);
+    // Delete the clip's scene (the scene menu's Delete): the route goes with
+    // the clip, named from the session before the delete (round 196; the
+    // layout's session is the one before until the next frame, so this pins
+    // the naming, not which session runLauncher reads).
+    const model::Session prior = f.app->head();
+    REQUIRE(prior.modulations.size() == 1);
+    const std::string named = views::objectName(prior, prior.modulations.begin()->id);
+    f.notices.clear();
+    json::Value gone = json::Value::object();
+    gone["scene"] = prior.clips.find(clipId)->scene.str();
+    REQUIRE(f.view->runLauncher("scene.remove", std::move(gone)));
+    REQUIRE_FALSE(f.notices.empty());
+    INFO(f.notices.back());
+    CHECK(f.notices.back().find(named.substr(1) + " went with it.") != std::string::npos);
+    CHECK(f.notices.back().find("A modulation route") == std::string::npos);
 }

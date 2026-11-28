@@ -19,6 +19,8 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 #include "supple/views/track_layout.h"
 
@@ -406,6 +408,30 @@ class PresetMenu : public ui::List {
     Hooks hooks_;
     std::vector<Entry> rows_;
     std::optional<std::size_t> hoverDelete_, pressedDelete_;
+};
+
+// A chain row's plug-in name. When a parameter of it is modulated
+// (ADR-0096), the mixer slot's mark follows the name (ui::Label::setMark),
+// dimmed as the slot's is: while every route is off, or on a frozen track.
+// The accessible text says so as the slot's does.
+class RowName : public ui::Label {
+  public:
+    RowName(std::string id, std::string text, std::string color)
+        : Label(std::move(id), std::move(text), ui::Font::Ui, "small", std::move(color)) {}
+    void setModulation(bool modulated, bool on, bool frozen) {
+        modulated_ = modulated;
+        on_ = on;
+        setMark(modulated ? std::string(views::kModMark) : std::string(),
+                on && !frozen ? "signal-cv" : "ink-faint");
+    }
+    std::string valueText() const override {
+        return text() + (!modulated_ ? std::string()
+                         : on_       ? std::string(" (modulated)")
+                                     : std::string(" (modulation off)"));
+    }
+
+  private:
+    bool modulated_ = false, on_ = true;
 };
 
 ui::Node& line(ui::Node& row, const std::string& id) {
@@ -865,7 +891,11 @@ Status FxWindow::dispatch(const char* command, json::Value args) {
     const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}, gesture_};
     auto result = dispatcher_.execute({command, std::move(args), origin});
     if (!result) {
-        setStatus(std::string(command) + ": " + result.error().message);
+        // A refusal changes nothing, so the head is the session it ran on.
+        if (auto words = views::modulationRefusalWords(app_.head(), command, result.error()))
+            setStatus(*words);  // fx.move's loop (gui.md §2, "Modulation words")
+        else
+            setStatus(std::string(command) + ": " + result.error().message);
         return std::move(result).error();
     }
     return {};
@@ -1205,7 +1235,9 @@ void FxWindow::buildChain(ui::Node& body) {
         rh.exec = [this](const std::string& command, json::Value args, const std::string& gesture) {
             const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}, gesture};
             auto r = dispatcher_.execute({command, std::move(args), origin});
-            if (!r) setStatus(command + ": " + r.error().message);
+            // In the GUI's words, never the engine's (a refusal changes
+            // nothing, so the head is the session it ran on).
+            if (!r) setStatus(racks::knobRefusalWords(app_.head(), command, r.error()));
         };
         rh.learn = [this](LearnRequest request) {
             if (hooks_.openLearn) hooks_.openLearn(std::move(request));
@@ -1286,9 +1318,12 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         std::snprintf(number, sizeof number, "%zu.", index + 1);
         l1.emplace<ui::Label>(prefix + "number." + id, number, ui::Font::Mono, "caption",
                               "ink-quiet");
-        auto& name = l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small",
-                                           isDisabled ? "ink-quiet" : "ink");
+        auto& name = l1.emplace<RowName>(prefix + "name." + id, nameOf(fx),
+                                         isDisabled ? "ink-quiet" : "ink");
         name.layout.width = ui::SizeRule::fixed(110);
+        const model::Track* owner = app_.head().tracks.find(track_);
+        name.setModulation(views::fxModulated(app_.head(), fx),
+                           views::fxModulationOn(app_.head(), fx), owner && owner->freeze);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
         latency.layout.width = ui::SizeRule::fixed(64);
@@ -1344,13 +1379,17 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
           }).enabled = !isDisabled;
         auto& remove = l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
             const std::vector<model::Id> each = targets(fx);
+            const model::Session before = app_.head();  // names a route that goes with it
+            json::Value warnings = json::Value::object();
             auto removed = dispatcher_.transact(
                 each.size() > 1 ? "Remove effects" : "Remove effect", kUiOrigin,
                 [&]() -> Result<json::Value> {
                     for (const model::Id& one : each) {
                         json::Value args = json::Value::object();
                         args["fx"] = one.str();
-                        SUPPLE_TRY(dispatcher_.execute({"fx.remove", std::move(args), kUiOrigin}));
+                        auto r = dispatcher_.execute({"fx.remove", std::move(args), kUiOrigin});
+                        if (!r) return r;
+                        views::collectWarnings(warnings, *r);
                     }
                     return json::Value::object();
                 });
@@ -1363,6 +1402,9 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 if (selected_ == one) selected_ = {};
             }
             refresh();
+            if (const std::string note = views::modulationNote(before, "fx.remove", warnings);
+                !note.empty())
+                setStatus(note);
         });
         remove.quiet = isDisabled;  // Enable is the one boxed button of a disabled row
     }

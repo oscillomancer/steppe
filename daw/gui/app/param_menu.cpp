@@ -96,7 +96,7 @@ struct Builder {
         if (auto idle = inertItem(actions.dispatcher(), s, {object, param}))
             items.push_back(std::move(*idle));
         const auto catalog = racks::catalog(actions.app());
-        for (auto& item : modSourceItems(actions, s, catalog.get(), {object, param}))
+        for (auto& item : modRouteItems(actions, s, catalog.get(), {object, param}))
             items.push_back(std::move(item));
     }
     // Show or hide the parameter's lane, as the lanes decide it: through

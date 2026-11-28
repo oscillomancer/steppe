@@ -27,6 +27,7 @@
 #include "audio_device.h"
 #include "meter_feed.h"
 #include "mixer.h"
+#include "mod_source.h"
 #include "preferences.h"
 #include "selection_edit.h"
 #include "supple/base/files.h"
@@ -3685,6 +3686,12 @@ TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on it
         }
     CHECK(sources == std::vector<std::string>{"Show modulation source"});
     REQUIRE(run);
+    // Then one Remove row, by source (gui.md §2).
+    std::vector<std::string> removes;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation")) removes.push_back(item.label);
+    REQUIRE(removes.size() == 1);
+    CHECK(removes[0].starts_with("Remove modulation: LFO ("));
     f.root->closePopups();
     run();
     CHECK(shown == std::vector<std::string>{route});
@@ -3709,7 +3716,49 @@ TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on it
     REQUIRE(sources.size() == 2);
     CHECK(sources[0].starts_with("Show modulation source: LFO ("));
     CHECK(sources[1].starts_with("Show modulation source: Mod 4 ("));
+    // One Remove row each, after the source rows; the second removes only
+    // its own route, as one undo step.
+    std::vector<std::string> labels;
+    std::function<void()> removeSecond;
+    for (const auto& item : ui::menuItems(*menu)) {
+        labels.push_back(item.label);
+        if (item.label.starts_with("Remove modulation: Mod 4 (")) removeSecond = item.run;
+    }
+    const auto at = [&](const std::string& prefix) {
+        return std::find_if(labels.begin(), labels.end(),
+                            [&](const std::string& l) { return l.starts_with(prefix); }) -
+               labels.begin();
+    };
+    CHECK(at("Remove modulation: LFO (") > at("Show modulation source: Mod 4 ("));
+    CHECK(at("Remove modulation: Mod 4 (") == at("Remove modulation: LFO (") + 1);
+    REQUIRE(removeSecond);
     f.root->closePopups();
+    const std::size_t steps = f.exec("history.list", "{}")["versions"].size();
+    removeSecond();
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);
+    const model::Session after = f.app->head();
+    REQUIRE(after.modulations.size() == 1);
+    CHECK(after.modulations.find(*model::Id::parse(route)));
+    f.exec("history.undo", "{}");
+    CHECK(f.app->head().modulations.size() == 2);
+    // Random is an LFO too: two rows that would read the same also name
+    // their Mod Out input, so each says which route it removes.
+    f.exec("modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"random"})");
+    f.refresh();
+    menu = menuAt(f.centre(f.strip(a).fader));
+    REQUIRE(menu);
+    removes.clear();
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Remove modulation: ")) removes.push_back(item.label);
+    f.root->closePopups();
+    REQUIRE(removes.size() == 3);
+    CHECK(removes[0].starts_with("Remove modulation: LFO ("));
+    CHECK(removes[0].ends_with(") \u00b7 Mod 1"));
+    CHECK(removes[1].starts_with("Remove modulation: Mod 4 ("));
+    CHECK(removes[1].find("\u00b7") == std::string::npos);
+    CHECK(removes[2].starts_with("Remove modulation: LFO ("));
+    CHECK_FALSE(removes[2].ends_with(") \u00b7 Mod 1"));
+    CHECK(removes[2].find(") \u00b7 Mod ") != std::string::npos);
 }
 
 TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {
@@ -4198,4 +4247,103 @@ TEST_CASE("preferences: malformed MIDI records do not block GUI startup") {
     CHECK_FALSE(loaded->midiInputs.contains("Bad"));
     CHECK_FALSE(engine::midiPortSettings(loaded->midiOutputs, "Good").enabled);
     CHECK(engine::midiPortSettings(loaded->midiInputs, "Good").offsetMs == 5);
+}
+
+TEST_CASE("mixer: route rows from two racks that read the same still differ") {
+    // gui.md §2: no two rows of a menu of routes are alike. Two racks may
+    // carry one name (rack.set takes any), and their first routes both use
+    // their Mod Out's in_1: each rack's place among racks of that name.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const std::string first = made["rack"].asString();
+    const std::string name = model::rackLabel(f.app->head(), *model::Id::parse(first));
+    const std::string second =
+        f.exec("rack.add", R"({"track":")" + a + R"(","name":")" + name + R"("})")["rack"]
+            .asString();
+    const std::string modOut =
+        f.exec("module.add", R"({"rack":")" + second + R"(","type":"mod_out"})")["module"]
+            .asString();
+    json::Value lfo = f.exec("module.add", R"({"rack":")" + second + R"(","type":"lfo"})");
+    f.exec("cable.add", R"({"from":")" + lfo["module"].asString() + "." +
+                            lfo["outputs"].asArray().front().asString() + R"(","to":")" + modOut +
+                            R"(.in_1"})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_1"},"target":{"track":")" + a +
+                                 R"(","param":"volume"},"depth":2})");
+    std::vector<std::string> removes;
+    for (const auto& item :
+         gui::modRemoveItems(*f.actions, f.app->head(), nullptr, {*model::Id::parse(a), "volume"}))
+        removes.push_back(item.label);
+    REQUIRE(removes.size() == 2);
+    CHECK(removes[0] != removes[1]);
+    CHECK(removes[0].ends_with(" · Mod 1 · rack 1"));
+    CHECK(removes[1].ends_with(" · Mod 1 · rack 2"));
+    // Renamed apart, the names alone tell them apart again.
+    f.exec("rack.set", R"({"rack":")" + second + R"(","name":"Second"})");
+    removes.clear();
+    for (const auto& item :
+         gui::modRemoveItems(*f.actions, f.app->head(), nullptr, {*model::Id::parse(a), "volume"}))
+        removes.push_back(item.label);
+    REQUIRE(removes.size() == 2);
+    CHECK(removes[0].find("·") == std::string::npos);
+    CHECK(removes[1].ends_with(" (Second)"));
+}
+
+TEST_CASE("mixer: a frozen print's route cannot be removed; refusals read in the GUI's words") {
+    // gui.md §2: the Remove row of a route in a frozen track's print is
+    // greyed (the engine refuses it, track.frozen); a fader's route acts
+    // after the print and stays removable. A refusal names no id.
+    Fixture f;
+    if (!f.ok) return;
+    const auto keys = f.addTrack("channel", "Keys");
+    const auto fx = f.addFx(keys, "Hickory");
+    const std::string param = modulatableParam(f, fx);
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.exec("modulate", R"({"target":{"track":")" + keys + R"(","param":"volume"},"source":"lfo"})");
+    const model::EnvTarget fxTarget{*model::Id::parse(fx), param};
+    const model::EnvTarget fader{*model::Id::parse(keys), "volume"};
+    auto rows = [&](const model::EnvTarget& target) {
+        return gui::modRemoveItems(*f.actions, f.app->head(), nullptr, target);
+    };
+    REQUIRE(rows(fxTarget).size() == 1);
+    CHECK(rows(fxTarget).front().enabled);
+    f.exec("item.add", R"({"track":")" + keys + R"(","bar":1,"notation":"voice v; 1: E4:w"})");
+    f.exec("track.freeze", R"({"track":")" + keys + R"("})");
+    REQUIRE(f.app->head().tracks.find(*model::Id::parse(keys))->freeze);
+    auto frozenRows = rows(fxTarget);
+    REQUIRE(frozenRows.size() == 1);
+    CHECK_FALSE(frozenRows.front().enabled);
+    // Run anyway (an agent's freeze after the menu opened): the refusal in
+    // words, the route kept.
+    f.errors.clear();
+    frozenRows.front().run();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors.back() == "Keys is frozen: unfreeze it to change its modulation");
+    CHECK(f.app->head().modulations.find(*model::Id::parse(route)));
+    // The fader's route is not in the print: its row stays, and removes it.
+    auto faderRows = rows(fader);
+    REQUIRE(faderRows.size() == 1);
+    CHECK(faderRows.front().enabled);
+    faderRows.front().run();
+    CHECK(f.errors.size() == 1);
+    CHECK(rows(fader).empty());
+    // A row whose route went another way while the menu was open.
+    f.exec("track.unfreeze", R"({"track":")" + keys + R"("})");
+    auto stale = rows(fxTarget);
+    REQUIRE(stale.size() == 1);
+    REQUIRE(stale.front().enabled);
+    f.exec("modulation.remove", R"({"modulation":")" + route + R"("})");
+    stale.front().run();
+    REQUIRE(f.errors.size() == 2);
+    CHECK(f.errors.back() == "That modulation is already gone");
+    for (const std::string& e : f.errors) CHECK(e.find("_") == std::string::npos);  // no ids
 }

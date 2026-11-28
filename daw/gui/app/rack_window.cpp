@@ -21,6 +21,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 namespace supple::gui {
@@ -817,7 +818,10 @@ Result<json::Value> RackWindow::exec(const std::string& command, json::Value arg
     cmd::Origin origin = kOrigin;
     origin.gesture = gesture;
     auto r = dispatcher_.execute({command, std::move(args), origin});
-    if (!r) report(r.error());
+    // A Notes source, Hear MIDI sends, a Notes module added, a patch loaded
+    // or a rack's home that would loop a modulation, in the GUI's words
+    // (gui.md §2).
+    if (!r) report(views::modulationRefusal(app_.head(), command, r.error()));
     return r;
 }
 
@@ -1760,7 +1764,7 @@ Status RackWindow::addWired(const std::string& type, ui::Point sp,
         args["x"] = std::round(x);
         args["y"] = std::round(py - 20);
         auto added = dispatcher_.execute({"module.add", std::move(args), kOrigin});
-        if (!added) return added;
+        if (!added) return views::modulationRefusal(app_.head(), "module.add", added.error());
         made = *added;
         if (key.empty()) return made;
         model::CableEnd end{*model::Id::parse(str(made, "module")), key};
@@ -1818,7 +1822,9 @@ Status RackWindow::paste(ui::Point sp) {
     args["x"] = std::round(static_cast<double>(sp.x));
     args["y"] = std::round(static_cast<double>(sp.y));
     auto r = dispatcher_.execute({"rack.paste", std::move(args), kOrigin});
-    if (!r) return std::move(r).error();
+    // A pasted Notes module that would loop a modulation, in the GUI's
+    // words (gui.md §2); the callers report it.
+    if (!r) return views::modulationRefusal(app_.head(), "rack.paste", std::move(r).error());
     std::set<model::Id> made;
     if (const auto* ids = r->find("modules"); ids && ids->isArray())
         for (const auto& x : ids->asArray())
@@ -1835,17 +1841,32 @@ Status RackWindow::paste(ui::Point sp) {
 void RackWindow::deleteSelected() {
     if (!space_ || space_->selection().empty()) return;
     const auto ids = space_->selection();
+    const model::Session before = app_.head();  // names a route that goes with them
+    json::Value warnings = json::Value::object();
     auto r = dispatcher_.transact(
         ids.size() == 1 ? "Remove module" : "Remove modules", kOrigin,
         [&]() -> Result<json::Value> {
             for (model::Id id : ids) {
                 json::Value args = json::Value::object();
                 args["module"] = id.str();
-                SUPPLE_TRY(dispatcher_.execute({"module.remove", std::move(args), kOrigin}));
+                auto one = dispatcher_.execute({"module.remove", std::move(args), kOrigin});
+                if (!one) return one;
+                views::collectWarnings(warnings, *one);
             }
             return json::Value::object();
         });
-    if (!r) report(r.error());
+    if (!r) return report(r.error());
+    noteRemoved(before, "module.remove", warnings);
+}
+
+// The routes a removal took with it (ADR-0096 M5, modulation.removed), in the
+// window's status and the app's (views::modulationNote).
+void RackWindow::noteRemoved(const model::Session& before, std::string_view command,
+                             const json::Value& result) {
+    const std::string note = views::modulationNote(before, command, result);
+    if (note.empty()) return;
+    if (status_) status_->setText(note);
+    if (actions_.onNotice) actions_.onNotice(note);
 }
 
 void RackWindow::tidyUp() {
@@ -2430,7 +2451,9 @@ void RackWindow::tabMenu(model::Id rack, ui::Point at) {
     items.push_back({"Remove rack", "", [this, rack] {
                          json::Value args = json::Value::object();
                          args["rack"] = rack.str();
-                         (void)exec("rack.remove", std::move(args));
+                         const model::Session before = app_.head();
+                         if (auto removed = exec("rack.remove", std::move(args)))
+                             noteRemoved(before, "rack.remove", *removed);
                      }});
     root().openPopup(
         ui::makeMenu("rack.tab.menu", std::move(items), [this] { root().closePopup(); }),

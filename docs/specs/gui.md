@@ -291,13 +291,20 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   (`EngineApp::modulationOffsets`, read each pass; a control redraws only
   when it moves). An inert route (`modulation.list`'s `inert`: nothing
   cabled into its source, the envelope that carries it off or gone, a
-  target that cannot take it, or a latency change) draws idle, its span
+  target that cannot take it, a latency change, or a take FX whose take
+  the plan does not play) draws idle, its span
   without a live value, on the rings, bars and lanes alike
   (`gui::LiveModulation` leaves its offset out; `modulation.list` runs only
   while something plays, and again when the model, the project or the
   reported routes change); the parameter menu under Modulate names the
   reason in a greyed row ("Modulation idle: nothing is cabled into its
-  source"). A drag on its bar edits the depth of the first
+  source"). For `take` (ADR-0096 M5) the reason is the engine's and the
+  model only chooses the words (`gui::takeIdleWords`): "its item is muted"
+  when the item's heard take is the route's, else "another take of its
+  item plays" (or "… of its clip plays"). The FX window's menu on a take's
+  FX (`FxWindow::openTake`) takes the track of the take's item or clip as
+  the plug-in's: the Follower list leaves that track out, and its freeze
+  greys Modulate (`model::trackOfTakeFx`). A drag on its bar edits the depth of the first
   enabled one through
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
@@ -306,7 +313,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `signal-cv` says that a plug-in parameter is modulated, by any route,
   enabled or not (`views::fxModulated`): at the right of the plug-in's slot
   in a mixer strip (the name centred in the room left of it; the slot's
-  accessible text ends "(modulated)"), and after "fx" in the track panel and
+  accessible text ends "(modulated)"), right after the plug-in's name in
+  the FX window's chain list (`ui::Label::setMark`: inside the name's
+  column, so the columns stay put, and a long name elides before it; its
+  accessible text ends as the slot's), and after "fx" in the track panel and
   the mixer strip alike when a plug-in in the track's chain or input chain
   is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
   static: what moves is the controls' bars and the lane's curve. A strip's
@@ -314,6 +324,8 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   its target is off (the plug-in's, the chain's), the mark is drawn dimmed
   in `ink-faint` (`views::fxModulationOn`, `chainModulationOn`; the slot's
   accessible text ends "(modulation off)"); one route on draws it normal.
+  On a frozen track the slot's and the FX window row's marks are dimmed
+  too, their accessible text unchanged.
 - **The source.** A route's source is the module cabled into its Mod Out
   input (the first cable by id), named as the rack window titles it, else
   "Mod N" (`gui::modSourceName`). The app action `ui.modulation.source
@@ -326,7 +338,121 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   right-click menu (the strips' menu in the track panel and the mixer, the
   FX window's parameter menu) has **Show modulation source** for one route
   and one row per route for several ("Show modulation source: LFO
-  (Modulators)"; `gui::modSourceItems`).
+  (Modulators)"; `gui::modSourceItems`), then **Remove modulation: LFO
+  (Modulators)**, one row per route by source, each one
+  `modulation.remove` and one undo step (`gui::modRemoveItems`). The row
+  of a route in a frozen track's print is greyed (`model::frozenOwner` of
+  the route, the engine's rule); a fader's route acts after the print and
+  stays removable. A refusal shows in the status line in the GUI's own
+  words, with no id (`gui::removeRefusalWords`): `track.frozen` reads
+  "Keys is frozen: unfreeze it to change its modulation", `mr.unknown` at
+  `/args/modulation` (the route went another way while the menu was open)
+  "That modulation is already gone", anything else "The modulation could
+  not be removed". Both menus take the rows from `gui::modRouteItems`, so
+  they list the same. In any menu of routes (these and a lane's **mod**),
+  no two rows read the same: two sources that would (two LFOs in one rack;
+  `modulate`'s Random is an LFO) each add their Mod Out input, "LFO
+  (Modulators) · Mod 2", and two racks that read the same (a name given
+  twice, two unnamed racks on one track) then add each rack's place among
+  the racks so named, "· Mod 1 · rack 2".
+  **Modulation words** (ADR-0096 M5, `views::modulation_words.h`). What M5
+  adds to the commands that copy, move or join takes reaches the user in
+  the GUI's own words, keyed on the command and the code, a cycle refusal
+  also on the argument it is refused at, and a warning also on its `reason` (command-bus.md; its path only names the route),
+  never the engine's message, its hint, a command's name or an id
+  (`views::modulationRefusal`, `views::modulationNote`). The refusals:
+  `modulation.limit` from a copy ("Pasting would make more than 4096
+  modulation routes, the most a project holds. Remove some first (Remove
+  modulation in the plug-in parameter's menu); a copied chain brings its
+  routes with it.", the verb by command), `modulation.cycle` from a move
+  ("Moving the item there would loop its modulation: that track feeds the
+  rack that modulates the take's plug-ins. Choose another track, or remove
+  the modulation first (…)"; for **Explode takes** onto new tracks it
+  offers exploding in sequence; a track's plug-in moved, `fx.move`, "Moving
+  the plug-in there would loop its modulation: that track feeds the rack
+  that modulates the plug-in. …", where the FX window and the mixer run
+  it, though their moves stay on one track, which cannot loop; a send,
+  `route.add`, "The send would loop its modulation: where it goes feeds, or
+  plays a Notes module in, the rack that modulates the sending track. …"
+  (a key route its own), a track moved into a folder or buss,
+  `track.move`, "Moving the track there would loop its modulation: it
+  would feed the rack that modulates it. …", the parent send turned on,
+  `track.set` `parent_send`, "The parent send would loop its modulation:
+  the parent feeds the rack that modulates the track. …", and a rack's Out
+  picked as a channel's input, `track.set` `record_rack`, "Taking that
+  rack's Out as the input would loop its modulation: …", where the mixer,
+  the routing matrix, the track panel and the input menu run them
+  (`route.set` as `route.add`); the rack window's Notes gestures, a
+  Notes module's Plays track (`module.set` `source`: "Playing that track
+  would loop its modulation: a MIDI send from what the rack modulates
+  reaches it. …"), Hear MIDI sends (`source_sends`), Add module Notes
+  (`module.add`, playing the rack's channel), the tab's Home:
+  (`rack.set`), Paste (`rack.paste`: "A pasted Notes module would loop its
+  modulation: it would hear a MIDI send from what the rack modulates.
+  Paste into another rack or remove that MIDI send, …") and a patch's Load
+  into rack (`rack.preset.load`); and Track: delete selected or the track menu's Delete
+  (`track.remove`) when a Notes module that played the track would then
+  play its rack's channel and hear what the rack modulates. Each row of
+  session-model's table of the edits that can close a cycle has words, by
+  its command and argument, the argument the engine picks by the edge the
+  edit made (`track.set` with the parent send turned off and a rack's Out
+  is the rack's Out's); any other command keeps its own words), and `item.heal_fx` from **Heal splits**
+  ("The pieces' take plug-ins differ (…), so they cannot be joined. Make
+  them match (…), or consolidate them instead."). The warnings, which have
+  no registry (session-model lists them), go to the status line as a note
+  after the command went ahead: `modulation.not_copied` names the route
+  and says why from its reason (`cycle`: "The modulation of the cutoff of
+  Filter on Bass's item at bar 9 was not copied: the copy's track feeds the
+  rack that makes it, so it would loop. …"; `source`: its rack is not where
+  the copy is; `limit`: the project holds the most routes it can; none:
+  "… was not copied. Modulate the copy again if it needs it."), the first in full
+  and then "And 2 more modulations were not copied."; `modulation.removed`
+  names the route from the session before the command ("The modulation of
+  Hickory's gain went with it."; "A modulation route went with it." where
+  that session no longer holds it; reason `source_unfit` "… was removed:
+  its rack's output can no longer modulate.", `target_unfit` "… was
+  removed: what it modulated can no longer be modulated (a send turned
+  MIDI, for instance)."), or counts them ("*N* modulation routes
+  went with it."). `modulation.stacked` is a route command's warning
+  (`modulate`, `modulation.add`), whose words are their own, so it has none
+  here. They are
+  said where the GUI runs those commands: the timeline's gestures (one
+  runner for every item edit), the launcher (`ArrangeView::runLauncher`)
+  and Capture as scene, the bound actions (Item: split, explode takes) and
+  a macro's bound steps (worded by the step's command; a built-in, alone
+  or as a step, words its own),
+  track duplication, the clip paste, the capture's commit and the
+  consolidation's job; and where it deletes what a route reaches: the FX
+  window's and the mixer's Remove (a plug-in), the mixer's and the routing
+  matrix's send removals, Track: delete selected and the track menu's
+  Delete, the launcher's clip deletes (its menu and the Delete key) and scene
+  Delete, Item: delete the
+  heard take, render with FX deleting FX, and the rack window's module and
+  rack removals, each gesture noted once (`views::collectWarnings`); and the
+  routes a recording's copy drops (an overdub at record stop is never
+  refused at the limit: its `record.warning` events, worded from their
+  code, path and reason in `Shell::engineEvents`, once per batch, never their
+  text). The
+  route commands (`modulate`, `modulation.*`) keep their own words. A test walks the registry: every code among
+  `modulation.limit`, `modulation.cycle` and `item.heal_fx` that a command
+  the GUI runs declares has words, and every command declaring one is
+  either such a command or listed as one the GUI does not run. It then
+  scans the GUI's sources: a file that names such a command includes the
+  words or is listed with the path it runs it by (the gestures through
+  their runner, the launcher through `runLauncher`, and the files whose
+  `item.add` copies no route; `track.set` is followed by where it sets
+  `parent_send` or `record_rack`, its fields that can loop), and a command listed as
+  not run is named only where that holds (`take.add` in the demo
+  generator). A command named through a variable, a listed file that
+  skips the words at one call site, or a code a command raises without
+  declaring it, it cannot see. The cycle refusals it walks by
+  session-model's table, row by row: each row has words that name no take
+  unless a take moves, the rows of one command read apart, and a row the
+  GUI does not dispatch (`route.set`'s ends, `module.add` with a source,
+  `rack.patch`, which the GUI never runs) is listed as such, so a new row fails until it is one or the other.
+  Another test takes every reason in
+  `model::kRouteWarningReasons` and checks each has words other than the
+  plain sentence.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
@@ -441,13 +567,13 @@ everywhere:
 | Scene | "Scene *N*", by its place in the launcher pane |
 | Clip | "*track*'s clip in *scene*" |
 | Item | "*track*'s item at bar *N*", with ", beat *B*" when another item of the track starts in that bar (named by its take or file, §4.3) |
-| Take | as its item or clip |
+| Take | as its item or clip; a name another take of its item or clip shares (a copy keeps it) adds its place, "Stabs, take 2", there and in `views::takeLabel` |
 | Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
 | Automation item | "*envelope* item at bar *N*" |
 | Section or range | "the section (range) at bar *N*" |
 | Marker | "the marker at bar *N*" |
 | Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
-| Plug-in | its plug-in's name |
+| Plug-in | its plug-in's name; a take's (named or not) then "on" its item or clip, "Filter on Bass's item at bar 9", or "Filter on Take 2 of Riff" when it has several takes (ADR-0096 M5), so a copy's reads apart from the original's |
 | Send | "the send from *track* to *track*" |
 | Group | "Group *N*", by its place among the groups: also on the mixer's group tab (the number alone, "2", when the tab is too narrow for "Group 2"; a named group's tab elides), the VCA strip, a group envelope's lane title and MIDI learn ("Group 2 VCA"); the rename field starts empty |
 | Rack, module | its rack's label; its plug-in's or type's name |
@@ -996,12 +1122,23 @@ another track. It plays only over the item (`model::itemSpan`), while its
 take is the active one: the lane is washed with `ground` at 0.55 elsewhere
 (all of it while another take is active), as a held track's items are
 dimmed, its title clear (`Lanes::dimmedLaneSpans`,
-`TrackLayout::takeFxOwner`). Points there are edited as anywhere; the
+`TrackLayout::takeFxOwner`). A modulation route into a take FX (ADR-0096
+M5) asks for its lane with `lane` as any route does, with the band and
+**mod**, washed the same way. The item's name carries no mark for it by
+default: on a coloured name bar the mark does not read, so the lane and the
+inspector's Modulation row carry it. `views::takeNameMark` decides it, and
+with `views::kTakeNameMarksShown` on, the name carries it right after it
+(the name elides before it), dimmed while every route onto those FX is off
+or the track is frozen (`Lanes::Stats::marks`). Points there are edited as anywhere; the
 engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the
-track has the same effect's same parameter. A clip's take FX have none here: their envelopes are in clip
+track has the same effect's same parameter, and its own take ("(take: Take
+2)", by name or place in the item's take list) when another take of the item
+has it, as a copy of the take does (`take.add {from}` copies its envelopes;
+by `views::takeLabel`, so a copy of a named take reads "(take: Stabs, take
+2)"). A clip's take FX have none here: their envelopes are in clip
 time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
@@ -1533,7 +1670,17 @@ device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's
 menu (MIDI learn… and Remove MIDI learn, Show or Hide lane, Reset to its
-default, `racks::knobMenu`, shared with the rack window). The
+default, `racks::knobMenu`, shared with the rack window). A refusal of
+any of these (`racks::kKnobCommands`: `module.set`, `module.learn.set`,
+`module.learn.remove`, `env.add`, `env.set`) is said in the status line in
+the GUI's words, from the command, the code and the argument
+(`racks::knobRefusalWords`; a modulation cycle by the Modulation words,
+§2): what was being done, then why ("The knob's lane could not be shown:
+the knob already has a lane."), never the engine's message, its hint, a
+command's name or an id. Each code the commands declare or answer for the
+GUI's arguments has its words, a test walks them; a code with none (one
+the GUI's arguments never meet) says what was being done and the code:
+"The knob could not be set (schema.type)." The
 knobs follow their Macro's telemetry, so automation moves them as it
 plays: the window reads the shown Macros' telemetry every 33 ms
 (`FxWindow::nextDeadline`) and watches only those modules. Telemetry
@@ -2061,13 +2208,29 @@ edited in its roll, not on the timeline. For a MIDI clip:
   start and past its end the lane is dimmed as the roll is, and the curve
   holds its end value there, dashed. Clip time takes no writing mode and no
   automation items, so a lane has no read/write cell;
+- a take FX parameter a modulation route shows (`lane`, ADR-0096 M5) has
+  its lane there too, after its effect's envelopes. Without an envelope on
+  it the lane draws the parameter's value as a line in the curve's colour
+  (`views::targetValue`) and takes no press but **hide**; a hidden envelope
+  on it gives the lane its curve, as on the timeline. On every lane whose
+  parameter is modulated, the band and the live value are drawn as on the
+  timeline's lanes (§4.3: `views::modulationBand` around the base in faint
+  `signal-cv`, the bright stroke and dot at the playhead from the engine's
+  offsets), from the arrange's feed (`MidiEditor::setModulation`: its
+  unipolar test and live offsets); the lanes redraw when the offsets or the
+  playhead move. Hiding a modulated parameter's lane, by **hide** or the
+  menus, turns its envelope's `visible` and every route's `lane` off in one
+  undo step (`gui::setLaneShown`, as the parameter menus do, §2);
 - the Lanes menu adds Take volume, Take pan and Take mute (disabled, with a
   row saying why, while the take FX hold no instrument: `env.take_midi`),
-  then for each take effect its envelopes and **parameters…**, the list of
+  then for each take effect its envelopes, its modulation-only lanes (ticked;
+  unticking hides them), and **parameters…**, the list of
   the parameters it describes (`fx.describe`; a plain plug-in describes
-  none, as on the timeline). Ticking one without an envelope makes one with
+  none, as on the timeline), ticked while an envelope or a route shows its
+  lane. Ticking one without an envelope or a route makes an envelope with
   a point at the clip's start at the parameter's value now (a take
-  envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
+  envelope's: 0 dB, centre, unmuted); a modulated one shows its route's
+  lane instead; unticking hides it. Refusals go to the
   status line.
 
 **An audio clip's pane** (mock 93). An audio clip opens in the same panel
@@ -2111,7 +2274,8 @@ Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
 beats", "a clip-time lane selects points, moves them together, shapes
 them", "a clip-time lane takes a marquee, and copies, cuts and pastes
-points", and the CC lane case.
+points", "a modulated clip take FX parameter gets its lane, band and live
+value", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
@@ -2272,16 +2436,25 @@ project is drawn in the quiet ink, with "from your default" on hover.
       the capture Render would play.
     - **As heard** (Last capture): the dry run's `as_heard` shows under the
       range, "As heard" or "Not as heard: " and the reasons in the dialog's
-      words (the capture began while playing; the session or a clip it
+      words (the capture began while playing; a note was already sounding
+      where it began (the render leaves that note out), `began_in_note`,
+      always after the first; the session or a clip it
       played changed during it, an edit or a clip's return to the
       arrangement; the playback rate changed during it; live input was heard;
       audio dropped out during it; a plug-in failed before or during it; a
       launch was lost from the log before or during it (a new capture after
       Restart audio in Edit > Audio device starts clean: every engine stop
       drops the engine that holds the loss, and a capture kept across it
-      keeps the reason), `launch_unlogged`; the engine
+      keeps the reason), `launch_unlogged`; whether a launch was heard
+      was not known in time (let the transport settle, then capture
+      again), `launch_unsettled`: read just after a stop or seek, before
+      the engine knows whether a launch was heard (once it does, the
+      capture's facts change and the line follows), or a verdict that came
+      late, which only a new capture clears; the engine
       stopped, or the audio device restarted, during it, from the capture's
-      `endedBy`; an unknown reason as its code in words). After a render
+      `endedBy`; an unknown reason as its code in words). A test reads
+      engine.md's table of reasons, so a new one fails until it has words.
+      After a render
       the results start with the same line, from the render's own result,
       and the status line adds ", as heard" or ", not as heard". The dialog
       never sends `as_heard: true`.
@@ -3162,6 +3335,7 @@ inspector adds no command:
 | Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (the crossfade handle or the Crossfade field on the group brings it back in step; other comp gestures leave a differing seam as it is) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Modulation (`inspector.item.modulation`), one item only, and only while a route reaches an FX of its heard take (ADR-0096 M5; `gui::modRoutesOfTake`) | As a track's Modulation row: a line per route ("Cutoff · Hickory (take)" and "~ LFO"), "N routes" past four | A click shows the route's source (§2) | — |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
 | Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable), and the changes of key the item plays counted, "E minor, 2 changes": over the context beats its notes read, from its content start for its length × playrate with repeats unrolled, so points a split part or a left trim keeps outside that span are not counted (the roll's take row names them) | Read only | |
 
@@ -3315,9 +3489,16 @@ same heights, scroll and colours.
   3–18, 2 launches) is committed." ("The audio device restarted during the
   capture" for a device restart). Nothing arms by itself after an engine
   stop: the cell goes dark. What is uncommitted is the app's answer
-  (`captureUncommitted`, the view's `commit`), not the pane's copy, so a
+  (`captureUncommitted`: the view's `holdsPerformance` and `commit`), not
+  the pane's copy, so a
   click after a restart commits the kept take, never the new engine's empty
-  capture, and a click never arms over an uncommitted take.
+  capture, and a click never arms over an uncommitted take. The launches
+  the pane counts are the app's too (the view's `held`, what
+  `launch.commit` lays down): a capture begun inside a crossfade does not
+  count what the crossfade faded from, and one holding only a return's
+  crossfade has nothing to commit, so the pane shows no kept take, says no
+  commit at an engine stop and asks nothing before another project opens
+  (round 221 F1).
 - **A kept take shows.** While a take is kept uncommitted (its commit
   refused, or one an agent's capture left), the cell is dark with its dot
   drawn in outline in `armed` (`ArrangeView::setCaptureKept`,
@@ -3436,7 +3617,10 @@ same heights, scroll and colours.
   "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
   body, under the preview, with "→" before it in full ink when the clip
   follows the key or the chords, in quiet ink when it plays as written; a
-  body lower than two strips shows no key. An audio clip's own fades
+  body lower than two strips shows no key. A modulated FX of its active
+  take (ADR-0096 M5) marks the name only with `views::kTakeNameMarksShown`
+  on, as an item's (off by default): the mark after the name, alone where
+  the clip has none (`LauncherPane::Stats::marks`). An audio clip's own fades
   (`fade_in`, `fade_out`, schema 2.22) shape every pass, so the cell draws
   one pass's over its body as an item's are drawn (`views::drawFadeCurve`,
   shared with `Lanes::drawFades`): the gain curve from the period's start
@@ -3626,7 +3810,9 @@ same heights, scroll and colours.
   clip shows neither row), Plays (Loop / Once), Launch (the
   project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
   ADR-0098: Key and Chords are disabled, their labels saying why, unless the
-  clip is MIDI with a key at its start) and Mute. Several clips show only
+  clip is MIDI with a key at its start) and Mute, then while a route
+  reaches an FX of its active take the Modulation row
+  (`inspector.clip.modulation`, as an item's; ADR-0096 M5). Several clips show only
   their count. A refusal (a negative fade, say) goes to the status line and
   the field shows the clip's value again.
 - **Status line.** It counts scenes beside tracks only when there are some

@@ -27,6 +27,7 @@
 #include "supple/ui/widgets.h"
 #include "supple/views/control_names.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -951,6 +952,9 @@ Mixer::Mixer(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                      args["track"] = track.str();
                      if (auto r = actions_.run(*a, args); !r && actions_.onError)
                          actions_.onError(r.error().message);
+                 },
+                 [this](const std::string& note) {
+                     if (actions_.onNotice) actions_.onNotice(note);
                  }} {
     actions_.addUi("ui.mixer", "View: mixer", [this] { toggle(); });
 }
@@ -1942,9 +1946,14 @@ void Mixer::duplicateFx(model::Id fx) {
 void Mixer::removeFx(model::Id fx) {
     json::Value args = json::Value::object();
     args["fx"] = fx.str();
-    if (auto r = dispatcher_.execute({"fx.remove", std::move(args), kOrigin});
-        !r && actions_.onError)
-        actions_.onError("mixer: " + r.error().message);
+    const model::Session before = app_.head();  // names a route that goes with it
+    auto r = dispatcher_.execute({"fx.remove", std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError("mixer: " + r.error().message);
+    } else if (const std::string note = views::modulationNote(before, "fx.remove", *r);
+               !note.empty() && actions_.onNotice) {
+        actions_.onNotice(note);
+    }
 }
 
 // A send's own menu (a right-click on it under the chain).
@@ -1962,9 +1971,14 @@ void Mixer::openSendMenu(model::Id route, ui::Point at) {
 void Mixer::removeSend(model::Id route) {
     json::Value args = json::Value::object();
     args["route"] = route.str();
-    if (auto r = dispatcher_.execute({"route.remove", std::move(args), kOrigin});
-        !r && actions_.onError)
-        actions_.onError("mixer: " + r.error().message);
+    const model::Session before = app_.head();  // names a route that goes with it
+    auto r = dispatcher_.execute({"route.remove", std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError("mixer: " + r.error().message);
+    } else if (const std::string note = views::modulationNote(before, "route.remove", *r);
+               !note.empty() && actions_.onNotice) {
+        actions_.onNotice(note);
+    }
 }
 
 // A name for this instance over its slot; an empty one goes back to the
@@ -2104,7 +2118,10 @@ void Mixer::endDrag(bool commit) {
                 }
                 return json::Value::object();
             });
-        if (!r && actions_.onError) actions_.onError(std::string("mixer: ") + r.error().message);
+        if (!r && actions_.onError)
+            actions_.onError(
+                std::string("mixer: ") +
+                views::modulationRefusal(app_.head(), "track.move", r.error()).message);
         return;
     } else if (done.kind == DragView::Kind::Strip) {
         command = "track.move";
@@ -2135,7 +2152,8 @@ void Mixer::endDrag(bool commit) {
         args["index"] = static_cast<std::int64_t>(done.index);
     }
     if (auto r = dispatcher_.execute({command, std::move(args), kOrigin}); !r && actions_.onError)
-        actions_.onError(std::string("mixer: ") + r.error().message);
+        actions_.onError(std::string("mixer: ") +
+                         views::modulationRefusal(app_.head(), command, r.error()).message);
 }
 
 std::optional<views::ControlModulation> Mixer::modulationOf(const model::Session& s,

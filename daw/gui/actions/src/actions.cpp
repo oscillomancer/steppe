@@ -218,15 +218,21 @@ Result<json::Value> Runner::step(const Action& a, const Context& c, const json::
             json::Value one = *args;
             one[key] = id;
             auto r = dispatcher_.execute({a.command, std::move(one), kOrigin});
-            if (!r) return r;
+            if (!r) {
+                refused_ = a.command;
+                return r;
+            }
             results.push_back(std::move(*r));
         }
         return results;
     }
-    return dispatcher_.execute({a.command, std::move(*args), kOrigin});
+    auto r = dispatcher_.execute({a.command, std::move(*args), kOrigin});
+    if (!r) refused_ = a.command;
+    return r;
 }
 
 Result<json::Value> Runner::run(const Action& a, const Context& c, const json::Value& prompted) {
+    refused_.clear();
     bool many = !a.steps.empty();
     if (a.args.isObject())
         for (const auto& m : a.args.asObject())

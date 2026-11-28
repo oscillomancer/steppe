@@ -2629,3 +2629,144 @@ TEST_CASE("modulation: the GUI's signal range agrees with modulation.list on rea
     CHECK(ranges == std::map<std::string, std::string>{
                         {"in_1", "bipolar"}, {"in_2", "unipolar"}, {"in_3", "bipolar"}});
 }
+
+namespace {
+// A track whose volume an LFO rack modulates (Alpha), two more channels,
+// and the rack's window: the Notes gestures that would make a MIDI send
+// from Alpha reach the rack close a modulation cycle (round 199 F1).
+struct NotesLoop {
+    Fixture f;
+    std::string a, b, c, rack, home;
+    bool ok = false;
+    NotesLoop() {
+        if (!f.ok) return;
+        a = f.exec("track.add", R"({"type":"channel","name":"Alpha"})")["track"].asString();
+        b = f.exec("track.add", R"({"type":"channel","name":"Bravo"})")["track"].asString();
+        c = f.exec("track.add", R"({"type":"channel","name":"Charlie"})")["track"].asString();
+        json::Value made = f.exec(
+            "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+        rack = made["rack"].asString();
+        home = f.app->head().racks.find(*model::Id::parse(rack))->track.str();
+        ok = true;
+    }
+    void midiSend(const std::string& to) {
+        f.exec("route.add", R"({"from":")" + a + R"(","to":")" + to + R"(","midi":{}})");
+    }
+    void open() {
+        f.racks->open(*model::Id::parse(rack));
+        f.frame();
+    }
+    bool moduleMenu(model::Id module) {
+        f.r().closePopups();
+        f.frame();
+        const auto at = f.racks->space()->bodyAt(module);
+        if (!at) return false;
+        f.pointer(ui::PointerEvent::Type::Down, *at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, *at, 3);
+        return f.r().find("rack.module.menu") != nullptr;
+    }
+    // The window's status, after a refusal that changed nothing.
+    void refused(std::uint64_t version, const std::string& words) {
+        CHECK(f.app->head().version == version);
+        const std::string said = f.racks->status();
+        INFO(said);
+        CHECK(said.find(words) != std::string::npos);
+        CHECK(said.find("In module") == std::string::npos);  // the engine's hint, not this edge
+        for (const char* raw : {"tr_", "mr_", "rk_", "mo_", "modulation."})
+            CHECK(said.find(raw) == std::string::npos);
+    }
+};
+}  // namespace
+
+TEST_CASE("racks: a Notes gesture that would loop a modulation is refused in the GUI's words") {
+    // gui.md §2 (round 199 F1, round 200): module.set's source and
+    // source_sends, module.add (a Notes module playing its home), rack.set's
+    // track, rack.paste and rack.preset.load each answer modulation.cycle at
+    // their argument; the rack window says which, in the GUI's words,
+    // through its own menus.
+    {
+        NotesLoop p;  // Plays track > Charlie, which hears Alpha's MIDI send
+        if (!p.ok) return;
+        p.midiSend(p.c);
+        const model::Id notes =
+            *model::Id::parse(p.f.add(p.rack, "notes", 100, 300, R"(,"source":")" + p.b + "\""));
+        p.open();
+        REQUIRE(p.moduleMenu(notes));
+        REQUIRE(p.f.pick("rack.module.menu", "Plays track"));
+        const auto version = p.f.app->head().version;
+        REQUIRE(p.f.pick("rack.notes.source", "Charlie"));
+        p.refused(version, "Playing that track would loop its modulation");
+    }
+    {
+        NotesLoop p;  // Hear MIDI sends on, its source Charlie
+        if (!p.ok) return;
+        const model::Id notes =
+            *model::Id::parse(p.f.add(p.rack, "notes", 100, 300, R"(,"source":")" + p.c + "\""));
+        p.f.exec("module.set", R"({"module":")" + notes.str() + R"(","source_sends":false})");
+        p.midiSend(p.c);
+        p.open();
+        REQUIRE(p.moduleMenu(notes));
+        REQUIRE(p.f.pick("rack.module.menu", "Plays track"));
+        const auto version = p.f.app->head().version;
+        REQUIRE(p.f.pick("rack.notes.source", "Hear MIDI sends"));
+        p.refused(version, "Hearing MIDI sends would loop its modulation");
+    }
+    {
+        NotesLoop p;  // Add module Notes, Alpha's MIDI send into the rack's home
+        if (!p.ok) return;
+        p.midiSend(p.home);
+        p.open();
+        const auto version = p.f.app->head().version;
+        CHECK_FALSE(p.f.racks->addModule("notes"));
+        p.refused(version, "A Notes module here would loop its modulation");
+    }
+    {
+        NotesLoop p;  // the tab's Home: Charlie, with a Notes module playing its home
+        if (!p.ok) return;
+        p.midiSend(p.c);
+        p.f.add(p.rack, "notes", 100, 300);
+        p.open();
+        const ui::Node* tabs = p.f.r().find("rack.tabs");
+        REQUIRE(tabs);
+        const ui::Rect t = tabs->bounds();
+        const ui::Point at{t.x + 30, t.y + t.h / 2};
+        p.f.pointer(ui::PointerEvent::Type::Down, at, 3);
+        p.f.pointer(ui::PointerEvent::Type::Up, at, 3);
+        REQUIRE(p.f.r().find("rack.tab.menu"));
+        const auto version = p.f.app->head().version;
+        REQUIRE(p.f.pick("rack.tab.menu", "Home: Charlie"));
+        p.refused(version, "Moving the rack's home there would loop its modulation");
+    }
+    {
+        NotesLoop p;  // the space's Paste: a Notes module playing Charlie, from Bravo's rack
+        if (!p.ok) return;
+        p.midiSend(p.c);
+        const std::string keys =
+            p.f.exec("rack.add", R"({"track":")" + p.b + R"("})")["rack"].asString();
+        const std::string notes = p.f.add(keys, "notes", 100, 300, R"(,"source":")" + p.c + "\"");
+        p.f.exec("module.copy", R"({"modules":[")" + notes + R"("]})");
+        p.open();
+        const ui::Rect b = p.f.racks->space()->bounds();
+        const ui::Point empty{b.x + 20, b.y + 20};
+        p.f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+        p.f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+        const auto version = p.f.app->head().version;
+        REQUIRE(p.f.pick("rack.space.menu", "Paste"));
+        p.refused(version, "A pasted Notes module would loop its modulation");
+    }
+    {
+        NotesLoop p;  // Load into rack: a patch whose Notes module plays its rack's channel
+        if (!p.ok) return;
+        const std::string keys =
+            p.f.exec("rack.add", R"({"track":")" + p.b + R"("})")["rack"].asString();
+        p.f.add(keys, "notes", 100, 300);
+        p.f.exec("rack.preset.save", R"({"rack":")" + keys + R"(","name":"Keys"})");
+        p.midiSend(p.home);
+        p.open();
+        const ui::Rect b = p.f.racks->space()->bounds();
+        p.f.racks->browserMenu("preset:Keys", {b.x + 40, b.y + 40});
+        const auto version = p.f.app->head().version;
+        REQUIRE(p.f.pick("rack.browser.menu", "Load into rack"));
+        p.refused(version, "The patch's Notes module would loop its modulation");
+    }
+}

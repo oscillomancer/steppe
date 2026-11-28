@@ -141,6 +141,11 @@ std::string captureRangeLine(double first, double last, double seconds, bool loo
 // is not a capture. An unknown reason reads as its code in words.
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
+    // Always after began_mid_run: a note a clip or the arrangement held over
+    // the capture's start, which live heard and the render, starting inside
+    // it, never starts (an exact replay needs pre-roll).
+    if (reason == "began_in_note")
+        return "a note was already sounding where it began (the render leaves that note out)";
     // An edit, or a clip's return to the arrangement (removed, frozen or
     // over the memory budget) during it.
     if (reason == "edited_during") return "the session or a clip it played changed during it";
@@ -157,6 +162,17 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     if (reason == "launch_unlogged")
         return "a launch was lost from the log before or during it (a new capture after Restart "
                "audio in Edit > Audio device starts clean)";
+    // A launch whose heard-or-not verdict was not in when the capture was
+    // read (just after a stop or seek, round 201), or came late (a renderer
+    // or shift change it could not follow, round 203; frames the renderer
+    // rendered before it settled, or a launch an executor passed or missed
+    // at a play start, counted and expected never, rounds 209 and 214): in
+    // the first case the capture's facts change once it is in and
+    // followCapture redoes the line; in the others only a new capture is as
+    // heard.
+    if (reason == "launch_unsettled")
+        return "whether a launch was heard was not known in time (let the transport settle, "
+               "then capture again)";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"

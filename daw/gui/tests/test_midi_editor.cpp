@@ -4066,6 +4066,161 @@ TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, i
     f.editor->setPeaks(nullptr);
 }
 
+TEST_CASE("MIDI editor: a modulated clip take FX parameter gets its lane, band and live value") {
+    // gui.md §4.7 (ADR-0096 M5): a route's lane on a clip's take FX is in
+    // clip time, as its envelopes are; without an envelope it draws the
+    // parameter's value and the band, takes no press, and hides with its
+    // header.
+    Fixture f({SUPPLE_CLAP_DIR});  // the stock plug-ins only
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff",)"
+                               R"("notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w"})")
+            .find("clip")
+            ->asString();
+    const model::Id take = *f.app->head().clips.find(*model::Id::parse(clip))->activeTake;
+    auto added = f.dispatcher->execute(
+        {"fx.add", json::parse(R"({"take":")" + take.str() + R"(","plugin":"Hickory"})").value(),
+         kTest});
+    if (!added) {
+        MESSAGE("skipped: no Hickory in this build");
+        return;
+    }
+    const std::string fx = (*added)["fx"].asString();
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    std::string key, name;
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject()) {
+            const json::Value* mod = m.value.find("modulatable");
+            auto desc = params::fromDescription(m.key, m.value);
+            if (key.empty() && mod && mod->asBool() && desc &&
+                (*desc)->spec.type == params::Type::Float) {
+                key = m.key;
+                name = (*desc)->name.empty() ? m.key : (*desc)->name;
+            }
+        }
+    if (key.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable float parameter in this build");
+        return;
+    }
+    // The feed the app gives from the arrange: no source is 0..1 here, and
+    // the live offsets as the engine would report them.
+    const views::UnipolarSource unipolar;
+    std::map<model::Id, double> live;
+    f.editor->setModulation(&unipolar, &live);
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    CHECK(s.envLanes.empty());
+    const std::string route =
+        f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + key +
+                               R"("},"source":"lfo","depth":0.2})")["modulation"]
+            .asString();
+    f.frame();
+    REQUIRE(s.envLanes.size() == 1);
+    const gui::RollEnvLane lane = s.envLanes[0];
+    CHECK(lane.modOnly);
+    CHECK(lane.target == model::EnvTarget{*model::Id::parse(fx), key});
+    CHECK(lane.key() == "midi.mod." + fx + "." + key);
+    ui::Node* node = f.root->find(lane.key());
+    REQUIRE(node);
+    CHECK(node->visible);
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(s.lanesBanded.contains(lane.key()));
+    CHECK_FALSE(s.lanesLive.contains(lane.key()));  // stopped: no live value
+    // The Lanes menu lists it, checked; so does the effect's parameter list.
+    {
+        REQUIRE(f.root->click("midi.lanes"));
+        f.root->frame(false);
+        ui::Node* menu = f.root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        bool listed = false;
+        for (const auto& m : ui::menuItems(*menu))
+            if (m.label == "Hickory · " + name) listed = m.checked;
+        f.root->closePopup();
+        CHECK(listed);
+    }
+    // Playing: the live value at the playhead (the engine's offset there).
+    live[*model::Id::parse(route)] = 0.1;
+    s.playheadBeat = s.itemPosition + 2;
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(s.lanesLive.contains(lane.key()));
+    f.snapshot("midi-editor-clip-mod-lane.png");
+    live.clear();
+    s.playheadBeat = -1;
+    // The parameter list has it checked.
+    auto paramRow = [&]() -> std::pair<std::function<void()>, bool> {
+        f.pickLane("Hickory: parameters…");
+        ui::Node* params = f.root->find("midi.lanes.params");
+        REQUIRE(params);
+        std::pair<std::function<void()>, bool> row{nullptr, false};
+        for (const auto& item : ui::menuItems(*params))
+            if (item.label == name) row = {item.run, item.checked};
+        f.root->closePopup();
+        return row;
+    };
+    CHECK(paramRow().second);
+    // A press there (a click, a drag) adds nothing and asks for nothing:
+    // there is no envelope to add a point to.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    const auto s0 = steps();
+    const ui::Rect r = node->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {f.at(4, 60).x, r.y + r.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {f.at(4, 60).x, r.y + r.h / 2});
+    f.drag({f.at(2, 60).x, r.y + r.h / 2}, {f.at(5, 60).x, r.y + 20});
+    CHECK(steps() == s0);
+    CHECK(f.app->head().envelopes.size() == 0);
+    CHECK(said.empty());
+    // Its header's hide turns the route's lane off, one undo step; the route
+    // plays on.
+    f.pointer(ui::PointerEvent::Type::Down, {r.x + 8, r.y + 10});
+    f.pointer(ui::PointerEvent::Type::Up, {r.x + 8, r.y + 10});
+    CHECK(steps() == s0 + 1);
+    const model::Modulation* m = f.app->head().modulations.find(*model::Id::parse(route));
+    REQUIRE(m);
+    CHECK_FALSE(m->lane);
+    CHECK(m->enabled);
+    CHECK(s.envLanes.empty());
+    CHECK(f.root->find(lane.key()) == nullptr);
+    // Shown again from the parameter list: the route's lane, no envelope.
+    auto [pick, checked] = paramRow();
+    REQUIRE(pick);
+    CHECK_FALSE(checked);
+    pick();
+    f.frame();
+    CHECK(said.empty());
+    CHECK(f.app->head().modulations.find(*model::Id::parse(route))->lane);
+    CHECK(f.app->head().envelopes.size() == 0);
+    REQUIRE(s.envLanes.size() == 1);
+    CHECK(s.envLanes[0].modOnly);
+    // With an envelope on it too (made from the timeline's side, say), the
+    // lane is the envelope's, with the band under its curve; hiding it hides
+    // both, so no modulation-only lane is left behind.
+    f.exec("env.add",
+           R"({"fx":")" + fx + R"(","param":")" + key + R"(","points":[{"beat":0,"value":0.5}]})");
+    f.frame();
+    REQUIRE(s.envLanes.size() == 1);
+    CHECK_FALSE(s.envLanes[0].modOnly);
+    const std::string envKey = s.envLanes[0].key();
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(s.lanesBanded.contains(envKey));
+    ui::Node* envNode = f.root->find(envKey);
+    REQUIRE(envNode);
+    const ui::Rect er = envNode->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {er.x + 8, er.y + 10});
+    f.pointer(ui::PointerEvent::Type::Up, {er.x + 8, er.y + 10});
+    CHECK_FALSE(f.app->head().modulations.find(*model::Id::parse(route))->lane);
+    CHECK(s.envLanes.empty());
+}
+
 TEST_CASE("MIDI editor: an audio clip's Lanes menu and clip-time lanes are in seconds") {
     Fixture f({SUPPLE_CLAP_DIR});  // the stock plug-ins only
     if (!f.ok) return;

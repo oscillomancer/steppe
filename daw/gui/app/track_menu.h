@@ -19,14 +19,18 @@ namespace supple::gui {
 
 // Removes the tracks (a selection) as one undo step: the main master stays,
 // children go before their folders, and any refusal rolls the whole step back.
+// `warnings` (when given) collects the steps' warnings (views::collectWarnings).
 Status removeTracks(cmd::Dispatcher& dispatcher, const model::Session& session,
-                    const std::vector<std::string>& tracks);
+                    const std::vector<std::string>& tracks, json::Value* warnings = nullptr);
 
 // Duplicates the tracks (a selection; masters are left out) as one undo step
-// (track.duplicate); the copies' ids, each right after its original.
+// (track.duplicate); the copies' ids, each right after its original. A
+// modulation refusal is in the GUI's words, and `note` (when given) gets
+// the modulation warnings' note (ADR-0096 M5).
 Result<std::vector<std::string>> duplicateTracks(cmd::Dispatcher& dispatcher,
                                                  const model::Session& session,
-                                                 const std::vector<std::string>& tracks);
+                                                 const std::vector<std::string>& tracks,
+                                                 std::string* note = nullptr);
 
 struct TrackMenu {
     ui::Root& root;
@@ -39,6 +43,8 @@ struct TrackMenu {
     std::function<void(std::vector<std::string>)> select;
     // Runs a UI action with {"track": id} (a channel's Show rack, Add rack).
     std::function<void(const char* action, const model::Id& track)> action;
+    // A note for the status line (a copy's modulation warnings).
+    std::function<void(const std::string&)> onNotice;
 
     // `rename` starts the view's own rename (the TCP edits in place); empty:
     // a small rename field opens at the anchor (the mixer).

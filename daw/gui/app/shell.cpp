@@ -31,6 +31,7 @@
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 #include "transport_bar.h"
 
@@ -47,6 +48,7 @@ void Shell::recordingError(const json::Value& payload) {
 
 void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>& events) {
     std::string warnings;
+    json::Value routes = json::Value::object();  // the modulation warnings, said once
     bool failed = false;
     for (const auto& [topic, payload] : events) {
         if (topic == "record.error") {
@@ -54,12 +56,26 @@ void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>&
             failed = true;
         }
         if (topic != "record.warning") continue;
+        // A recording's copy drops its routes past the limit rather than
+        // being refused (ADR-0096 M5): said in the GUI's words from the
+        // warning's code and path, never its text (views::modulationNote).
+        if (const json::Value* code = payload.isObject() ? payload.find("code") : nullptr;
+            code && code->isString() && code->asString().starts_with("modulation.")) {
+            json::Value one = json::Value::object();
+            one["warnings"] = json::Value::array();
+            one["warnings"].push_back(payload);
+            views::collectWarnings(routes, one);
+            continue;
+        }
         const json::Value* message = payload.isObject() ? payload.find("message") : nullptr;
         if (!message || !message->isString() || message->asString().empty()) continue;
         if (warnings.find(message->asString()) != std::string::npos) continue;  // once each
         if (!warnings.empty()) warnings += "; ";
         warnings += message->asString();
     }
+    if (const std::string said = views::modulationNote(app_.head(), "record", routes);
+        !said.empty())
+        warnings += (warnings.empty() ? "" : "; ") + said;
     // An error in the same batch comes first: the warnings follow it, never replace it.
     if (!warnings.empty()) setStatus(failed ? editStatus_ + "; " + warnings : warnings);
 }
@@ -265,7 +281,8 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
             json::Value args = json::Value::object();
             args["track"] = track.str();
             if (auto r = actions_->run(*a, args); !r && onError) onError(r.error().message);
-        }});
+        },
+        [this](const std::string& note) { setStatus(note); }});
     tcp.mixer = [&actions] { (void)actions.run("ui.mixer"); };
     tcp.menu = [this](const model::Id& track, const ui::Rect& anchor,
                       std::function<void()> rename) {
@@ -292,8 +309,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
         return dispatcher_.execute(
             {"route.add", std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
     };
-    tcp.onError = [this](const Error& error) {
-        if (onError)
+    tcp.onError = [this](const Error& error) {  // addSend's refusal
+        if (const auto words = views::modulationRefusalWords(app_.head(), "route.add", error);
+            words && onError)
+            onError(*words);
+        else if (onError)
             onError(error.toString());
         else
             std::fprintf(stderr, "send refused: %s\n", error.toString().c_str());
@@ -1034,7 +1054,12 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
         const bool input =
             args.find("record_input") || args.find("record_midi") || args.find("record_rack");
         if (auto r = selectionEdit_.set(std::move(args), gesture); !r) {
-            if (onError) onError(r.error().message);
+            // A parent send or a rack's Out as the input that would loop a
+            // modulation in the GUI's words; any other refusal with names.
+            if (onError)
+                onError(views::objectNames(app_.head(), views::modulationRefusal(
+                                                            app_.head(), "track.set", r.error()))
+                            .message);
         } else if (input && !selectionEdit_.inputReplacement().empty())
             setStatus(selectionEdit_.inputReplacement());
         return;
@@ -1043,7 +1068,8 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
     cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     origin.gesture = std::move(gesture);
     auto r = dispatcher_.execute({std::string(command), std::move(args), std::move(origin)});
-    if (!r && onError) onError(r.error().message);
+    // A refusal changes nothing: the head is the session it ran on.
+    if (!r && onError) onError(views::modulationRefusal(app_.head(), command, r.error()).message);
 }
 
 }  // namespace supple::gui

@@ -20,11 +20,13 @@
 #include "supple/ui/node.h"
 #include "supple/ui/root.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
 
-Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips) {
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips,
+                   json::Value* warnings) {
     if (clips.empty()) return {};
     const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     auto r = dispatcher.transact(
@@ -34,6 +36,7 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
                 args["clip"] = id;
                 auto one = dispatcher.execute({"clip.remove", std::move(args), origin});
                 if (!one) return one;
+                if (warnings) views::collectWarnings(*warnings, *one);
             }
             return json::Value::object();
         });
@@ -56,7 +59,8 @@ const std::vector<std::string>& ClipClipboard::in(std::uint64_t projectGeneratio
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
                                             const std::vector<std::string>& clips,
                                             const std::string& track, const std::string& scene,
-                                            const std::vector<std::string>& channels, bool move) {
+                                            const std::vector<std::string>& channels, bool move,
+                                            std::string* note) {
     if (clips.empty())
         return Error("clip.paste", "no clips are copied", "", "select clips and copy them first");
     std::vector<std::string> scenes;
@@ -129,9 +133,13 @@ Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const m
                 args["clip"] = c.clip;
                 args["track"] = channels[c.row];
                 args["scene"] = scenes[c.column];
-                auto one = dispatcher.execute(
-                    {move ? "clip.move" : "clip.duplicate", std::move(args), origin});
-                if (!one) return one;
+                const char* command = move ? "clip.move" : "clip.duplicate";
+                auto one = dispatcher.execute({command, std::move(args), origin});
+                if (!one) return views::modulationRefusal(s, command, one.error());
+                if (note)
+                    if (const std::string said = views::modulationNote(s, command, *one);
+                        !said.empty())
+                        *note += (note->empty() ? "" : " ") + said;
                 if (move) continue;
                 if (const json::Value* id = one->find("id"); id && id->isString())
                     made.push_back(id->asString());
@@ -355,6 +363,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.selectedItems.empty()) return Error("action.selection", "select items first");
         return dispatcher_.transact("Render items", kOrigin, [&]() -> Result<json::Value> {
             const model::Session s = app_.head();
+            json::Value out = json::Value::object();  // the steps' warnings
             std::vector<model::Id> tracks;
             for (const std::string& text : ui_.selectedItems) {
                 const auto id = model::Id::parse(text);
@@ -372,8 +381,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                         auto r =
                             dispatcher_.execute({"fx.remove", obj({{"fx", fx.str()}}), kOrigin});
                         if (!r) return r;
+                        views::collectWarnings(out, *r);
                     }
-            return json::Value::object();
+            return out;
         });
     };
     registry_.add(dropFx);
@@ -385,6 +395,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.selectedItems.empty()) return Error("action.selection", "select items first");
         return dispatcher_.transact("Delete take", kOrigin, [&]() -> Result<json::Value> {
             const model::Session s = app_.head();
+            json::Value out = json::Value::object();  // the steps' warnings
             for (const std::string& text : ui_.selectedItems) {
                 const auto id = model::Id::parse(text);
                 const model::Item* it = id ? s.items.find(*id) : nullptr;
@@ -392,8 +403,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                 auto r = dispatcher_.execute(
                     {"take.remove", obj({{"take", it->activeTake->str()}}), kOrigin});
                 if (!r) return r;
+                views::collectWarnings(out, *r);
             }
-            return json::Value::object();
+            return out;
         });
     };
     registry_.add(dropTake);
@@ -403,8 +415,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     removeTracks.description = "Delete every selected track (not the main master), one undo step.";
     removeTracks.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.selectedTracks.empty()) return Error("action.selection", "select tracks first");
-        SUPPLE_TRY(gui::removeTracks(dispatcher_, app_.head(), ui_.selectedTracks));
-        return json::Value::object();
+        json::Value out = json::Value::object();  // the steps' warnings
+        SUPPLE_TRY(gui::removeTracks(dispatcher_, app_.head(), ui_.selectedTracks, &out));
+        return out;
     };
     registry_.add(removeTracks);
     actions::Action duplicateTracks;
@@ -415,9 +428,11 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         "one undo step; the copies become the selection.";
     duplicateTracks.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.selectedTracks.empty()) return Error("action.selection", "select tracks first");
-        auto copies = gui::duplicateTracks(dispatcher_, app_.head(), ui_.selectedTracks);
+        std::string note;
+        auto copies = gui::duplicateTracks(dispatcher_, app_.head(), ui_.selectedTracks, &note);
         if (!copies) return std::move(copies).error();
         if (!copies->empty()) ui_.selectedTracks = std::move(*copies);
+        if (!note.empty() && onNotice) onNotice(note);
         return json::Value::object();
     };
     registry_.add(duplicateTracks);
@@ -433,8 +448,9 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         if (ui_.envelopeFocused) return run("ui.env.points.delete");
         if (ui_.clipsFocused) {  // a launcher cell was clicked last: clips or nothing
             const std::vector<std::string> clips = std::exchange(ui_.selectedClips, {});
-            if (auto r = removeClips(dispatcher_, clips); !r) return std::move(r).error();
-            return json::Value::object();
+            json::Value out = json::Value::object();  // the steps' warnings
+            if (auto r = removeClips(dispatcher_, clips, &out); !r) return std::move(r).error();
+            return out;
         }
         return run(ui_.tracksFocused && !ui_.selectedTracks.empty() ? "track.remove:selected"
                                                                     : "item.remove:selected");
@@ -737,8 +753,36 @@ actions::Context AppActions::context(std::vector<std::string> sections) const {
     return c;
 }
 
+// What ADR-0096 M5 adds to a bound copy or move (Item: split, explode takes,
+// …) in the GUI's words: a refusal's, or the warnings' note.
+void AppActions::sayModulation(const actions::Action& action, const model::Session& before,
+                               Result<json::Value>& r) {
+    if (!r) {
+        // A built-in words its own refusals, with the verb of what it ran:
+        // they stand. A bound action's, or a macro step's, is worded by the
+        // command that refused it.
+        if (action.builtin) return;
+        if (const std::string& command = runner_.refusedCommand(); !command.empty())
+            r = views::modulationRefusal(before, command, r.error());
+        return;
+    }
+    // Worded on the session from before, so a route a delete took with it
+    // is named; a builtin action returns its steps' warnings (collectWarnings).
+    std::string note;
+    auto add = [&](const json::Value& one) {
+        views::appendModulationNote(note, before, action.command, one);
+    };
+    if (r->isArray())  // once per selected id
+        for (const json::Value& one : r->asArray()) add(one);
+    else
+        add(*r);
+    if (!note.empty() && onNotice) onNotice(note);
+}
+
 Result<json::Value> AppActions::run(const actions::Action& action, const json::Value& prompted) {
+    const model::Session before = app_.head();
     auto r = runner_.run(action, context(), prompted);
+    sayModulation(action, before, r);
     if (!r && onError) onError(action.name + ": " + r.error().message);
     return r;
 }
@@ -750,7 +794,9 @@ Result<json::Value> AppActions::run(std::string_view id) {
 }
 
 void AppActions::invoke(const actions::Action& action) {
+    const model::Session before = app_.head();
     auto r = runner_.run(action, context());
+    sayModulation(action, before, r);
     if (!r && r.error().code == "action.prompt" && onPrompt) {
         onPrompt(action);
         return;

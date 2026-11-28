@@ -15,7 +15,8 @@
 //   `modulate` makes; greyed where the parameter takes no modulation (a
 //   switch, a dual pan's bars, a VCA, a frozen track);
 // - Show modulation source when a route reaches the control (one row per
-//   route when there are several; gui::modSourceItems).
+//   route when there are several), then Remove modulation: <source>, one
+//   row per route (gui::modRouteItems).
 // A channel's or buss's pan then adds its mode, its law and gain
 // compensation; a master's pan is a balance and has none of those.
 #pragma once

@@ -93,6 +93,7 @@ struct Fixture {
         fonts = *f;
         engine::AppOptions options;
         options.workdir = dir;
+        options.pluginPath = {std::filesystem::path(SUPPLE_CLAP_DIR)};  // the stock plug-ins only
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -594,6 +595,40 @@ TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' 
     f.ui.selectedTracks = {bass, keys};
     f.pass();
     CHECK_FALSE(f.inView("inspector.row.track.modulation"));
+}
+
+TEST_CASE("inspector: a track's Modulation row lists its input chain's routes") {
+    // gui.md §4.14: "its effects' parameters (chain and input chain)".
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string fx =
+        f.exec("fx.add", R"({"track":")" + bass + R"(","plugin":"Hickory","chain":"input"})")["fx"]
+            .asString();
+    std::string param;
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable");
+                param.empty() && mod && mod->asBool())
+                param = m.key;
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.pass();
+    REQUIRE(f.inView("inspector.row.track.modulation"));
+    auto* line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO");
 }
 
 TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the bar's meter") {
@@ -1654,4 +1689,97 @@ TEST_CASE("inspector: a grouped comp piece that differs from its group names the
     CHECK(f.app->head().items.find(*model::Id::parse(roomPieces()[1].second))->fadeIn.length ==
           doctest::Approx(0.02));
     CHECK_FALSE(f.inView("inspector.group"));
+}
+
+TEST_CASE("inspector: an item's and a clip's Modulation rows list their heard take's routes") {
+    // gui.md §4.14 (ADR-0096 M5): one item or clip shows the routes into its
+    // active take's FX, as a track's row does: a line per route to its source.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string item =
+        f.exec("item.add",
+               R"({"track":")" + bass + R"(","bar":1,"notation":"voice v; 1: E4:w"})")["item"]
+            .asString();
+    const std::string take = f.app->head().items.find(*model::Id::parse(item))->activeTake->str();
+    auto modulatedFx = [&](const std::string& onTake) -> std::pair<std::string, std::string> {
+        const std::string fx =
+            f.exec("fx.add", R"({"take":")" + onTake + R"(","plugin":"Hickory"})")["fx"].asString();
+        const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+        std::string param;
+        if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+            for (const auto& m : ps->asObject())
+                if (const json::Value* mod = m.value.find("modulatable");
+                    param.empty() && mod && mod->asBool())
+                    param = m.key;
+        if (param.empty()) return {};
+        return {fx, f.exec("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + param +
+                                           R"("},"source":"lfo"})")["modulation"]
+                        .asString()};
+    };
+    std::vector<std::string> shown;
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            shown.push_back(v.asString());
+                            return {};
+                        });
+    f.side->show("inspector");
+    f.ui.selectedItems = {item};
+    f.pass();
+    REQUIRE(f.inView("inspector.item"));
+    CHECK_FALSE(f.inView("inspector.row.item.modulation"));  // nothing modulated: no row
+    const auto [fx, route] = modulatedFx(take);
+    if (route.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    f.pass();
+    REQUIRE(f.inView("inspector.row.item.modulation"));
+    auto* line = dynamic_cast<ui::Button*>(f.node("inspector.item.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO");
+    f.root->click(line->id());
+    CHECK(shown == std::vector<std::string>{route});
+    // Another take heard (a copy, with its routes removed): no row; the
+    // first heard again: its line again.
+    const std::string second =
+        f.exec("take.add", R"({"item":")" + item + R"(","from":")" + take + R"("})")["id"]
+            .asString();
+    f.exec("take.activate", R"({"item":")" + item + R"(","take":")" + second + R"("})");
+    for (const auto& m : f.app->head().modulations)
+        if (m.id.str() != route)
+            f.exec("modulation.remove", R"({"modulation":")" + m.id.str() + R"("})");
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.item.modulation"));
+    f.exec("take.activate", R"({"item":")" + item + R"(","take":")" + take + R"("})");
+    f.pass();
+    CHECK(f.inView("inspector.row.item.modulation"));
+    // The track's own row leaves take FX out (they are the item's).
+    f.ui.selectedItems.clear();
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));
+    // A launcher clip: its active take's routes, the same row.
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string scene = f.app->head().scenes.begin()->id.str();
+    json::Value clip = f.exec("clip.add", R"({"track":")" + bass + R"(","scene":")" + scene +
+                                              R"(","notation":"1: C4:w"})");
+    const std::string clipId = clip["clip"].asString();
+    const std::string clipTake =
+        f.app->head().clips.find(*model::Id::parse(clipId))->activeTake->str();
+    f.ui.tracksFocused = false;
+    f.ui.selectedTracks.clear();
+    f.ui.selectedClips = {clipId};
+    f.ui.clipsFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.clip"));
+    CHECK_FALSE(f.inView("inspector.row.clip.modulation"));
+    const auto [clipFx, clipRoute] = modulatedFx(clipTake);
+    REQUIRE_FALSE(clipRoute.empty());
+    f.pass();
+    REQUIRE(f.inView("inspector.row.clip.modulation"));
+    auto* clipLine = dynamic_cast<ui::Button*>(f.node("inspector.clip.modulation." + clipRoute));
+    REQUIRE(clipLine);
+    CHECK(clipLine->mark() == std::string(views::kModMark) + " LFO");
 }

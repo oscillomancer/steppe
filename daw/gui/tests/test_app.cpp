@@ -66,6 +66,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "tap_tempo_button.h"
 #include "transport_bar.h"
 #include "ui_persistence.h"
@@ -6449,4 +6450,119 @@ TEST_CASE("a scene inserted from the launcher says in the status line what its c
                                       "as written: its key C minor differs "
                                       "from D minor at bar 1"));
     a.snapshot("launcher-follow-status.png");
+}
+
+TEST_CASE("status: a recording's dropped modulation routes are said in the GUI's words") {
+    // gui.md §2, "Modulation words" (round 194 G2): a MIDI overdub's copy at
+    // record stop is never refused at the route limit; the routes it drops
+    // come as record.warning events, whose code, path
+    // and reason the status line words (views::modulationNote), never their
+    // text. Shaped as the engine sends it (app.cpp, settleCopiedRoutes with
+    // trimToLimit; the reason since 9047d42a).
+    App a;
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    auto warning = [](const std::string& route) {
+        json::Value w = json::Value::object();
+        w["code"] = "modulation.not_copied";
+        w["message"] = route +
+                       " (mo_2.out to cutoff) was not copied to fx_3: the project holds at most "
+                       "4096 routes; remove routes, then add it again with modulation.add";
+        w["path"] = "/modulations/" + route;
+        w["hint"] = "";
+        w["track"] = "tr_1";
+        w["file"] = "";
+        w["reason"] = "limit";
+        return w;
+    };
+    shell.engineEvents({{"record.warning", warning("mr_1")}});
+    const std::string one = shell.statusNote();
+    INFO(one);
+    CHECK(one.starts_with("A modulation was not copied: the project holds the most routes it can"));
+    for (const char* engine : {"modulation.add", "mo_2", "mr_1", "fx_3", "4096 routes;"})
+        CHECK(one.find(engine) == std::string::npos);
+    // Several in one batch: the first in full, then the count, once.
+    shell.engineEvents({{"record.warning", warning("mr_1")},
+                        {"record.warning", warning("mr_2")},
+                        {"record.warning", warning("mr_3")}});
+    INFO(shell.statusNote());
+    CHECK(shell.statusNote().starts_with("A modulation was not copied: "));
+    CHECK(shell.statusNote().find("And 2 more modulations were not copied.") != std::string::npos);
+    CHECK(shell.statusNote().find("modulation.add") == std::string::npos);
+    // Another warning keeps its words beside it.
+    json::Value other = json::Value::object();
+    other["code"] = "record.overlap";
+    other["message"] = "the take overlaps a locked item";
+    shell.engineEvents({{"record.warning", other}, {"record.warning", warning("mr_1")}});
+    CHECK(shell.statusNote().starts_with("the take overlaps a locked item; A modulation"));
+}
+
+TEST_CASE("input menu: a rack's Out that would loop a modulation is refused in the GUI's words") {
+    // gui.md §2 (round 199 F2): track.set's record_rack, a rack's Out as the
+    // channel's input, can close a modulation cycle: Cee feeds a follower
+    // that modulates Tee, and Tee's MIDI send reaches Synth's Notes module,
+    // so Synth's Out as Cee's input loops. The input menu says it in the
+    // GUI's words, as the rack's Out and not the parent send, without ids.
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto cee = call("track.add", R"({"name":"Cee"})")["track"].asString();
+    const auto tee = call("track.add", R"({"name":"Tee"})")["track"].asString();
+    call("modulate", R"({"target":{"track":")" + tee +
+                         R"(","param":"volume"},"source":"follower","from":")" + cee + R"("})");
+    auto rack = call("rack.add", R"({"name":"Synth"})");
+    const std::string home = rack["track"].asString(), out = rack["out"].asString();
+    call("module.add", R"({"rack":")" + rack["rack"].asString() + R"(","type":"notes"})");
+    call("route.add", R"({"from":")" + tee + R"(","to":")" + home + R"(","midi":{}})");
+    const auto ceeId = *model::Id::parse(cee);
+    a.ui.selectedTracks = {cee};
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    std::string error;
+    shell.onError = [&](const std::string& text) { error = text; };
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    shell.openInputMenu(ceeId, {100, 100, 20, 20});
+    a.root->frame(false);
+    auto* menu = a.root->find("tcp.input." + cee);
+    REQUIRE(menu);
+    std::function<void()> pickOut;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.shortcut == "rack" && item.label.starts_with("Synth")) pickOut = item.run;
+    REQUIRE(pickOut);
+    a.root->closePopups();
+    const auto version = a.app->head().version;
+    pickOut();
+    INFO(error);
+    CHECK(a.app->head().version == version);
+    CHECK(error.starts_with("Taking that rack's Out as the input would loop its modulation"));
+    CHECK(error.find("parent send") == std::string::npos);
+    for (const char* id : {"tr_", "mr_", "rk_", "mo_", "modulation."})
+        CHECK(error.find(id) == std::string::npos);
+    // With the parent send turned off in the same edit (a macro's or an
+    // agent's), the refusal is still the rack's Out's (round 200 F3): a
+    // parent send turned off makes no edge.
+    auto both = a.dispatcher->execute(
+        {"track.set",
+         *json::parse(R"({"track":")" + cee + R"(","parent_send":false,"record_rack":")" + out +
+                      R"("})"),
+         origin});
+    REQUIRE_FALSE(both);
+    CHECK(both.error().path == "/args/record_rack");
+    const std::string said =
+        views::modulationRefusal(a.app->head(), "track.set", both.error()).message;
+    CHECK(said.starts_with("Taking that rack's Out as the input would loop its modulation"));
+    CHECK(a.app->head().version == version);
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
 }

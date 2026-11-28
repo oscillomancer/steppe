@@ -648,6 +648,8 @@ std::unique_ptr<ui::Node> Inspector::build() {
     file_ =
         &box.emplace<ui::TextBlock>("inspector.file", "", ui::Font::Mono, "caption", "ink-quiet");
     file_->layout.height = ui::SizeRule::content();
+    // The heard take's modulated FX parameters (ADR-0096 M5), as a track's.
+    buildModulation(box, itemMod_);
 
     // One launcher clip: each field one clip.set (ADR-0097).
     auto& clipBox = panel->emplace<ui::Node>("inspector.clip");
@@ -711,6 +713,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
     clipFollow_->onChange = [this](const std::string& value) { set("follow", value); };
     auto& clipStates = formRow(clipBox, "clip.state", "State");
     state(clipStates, "clip.mute", "Mute", "mute");
+    buildModulation(clipBox, clipMod_);  // the active take's, as an item's
 
     // Tracks: each field one track.set on every selected track.
     auto& tracks = panel->emplace<ui::Node>("inspector.track");
@@ -729,22 +732,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
     field(tracks, "track.pan", "Pan");
     // Modulation (ADR-0096): one track's modulated parameters, each a line to
     // its source; the row is not there while nothing is modulated.
-    auto& modRow = tracks.emplace<ui::Node>("inspector.row.track.modulation");
-    rows_["track.modulation"] = &modRow;
-    modRow.layout.dir = ui::Layout::Dir::Row;
-    modRow.layout.height = ui::SizeRule::content();
-    modRow.layout.gap = 8;
-    modRow.visible = false;
-    auto& modName = modRow.emplace<ui::Label>("inspector.label.track.modulation", "Modulation",
-                                              ui::Font::Ui, "small", "ink-quiet");
-    modName.layout.width = ui::SizeRule::fixed(72);
-    modName.layout.height = ui::SizeRule::fixed(22);
-    auto& lines = modRow.emplace<ui::Node>("inspector.track.modulation");
-    lines.layout.dir = ui::Layout::Dir::Column;
-    lines.layout.width = ui::SizeRule::fraction();
-    lines.layout.height = ui::SizeRule::content();
-    lines.layout.gap = 4;
-    modLines_ = &lines;
+    buildModulation(tracks, trackMod_);
     // Notes: several lines, for one track. Leaving the field or Ctrl+Enter
     // applies them; Escape puts back what the track has.
     // The label is above the field, which takes the panel's width: lines
@@ -807,6 +795,8 @@ void Inspector::readClip(bool force) {
     const model::Session& s = app_.head();
     const model::Clip* clip = ids_.empty() ? nullptr : s.clips.find(ids_.front());
     if (!clip) return;
+    readModulation(clipMod_, clip->activeTake ? modRoutesOfTake(s, *clip->activeTake)
+                                              : std::vector<model::Id>{});
     show("clip.name", clip->name, force);
     // A MIDI clip's period is in beats, an audio clip's in seconds of take time.
     const bool midi = clip->kind == model::ClipKind::Midi;
@@ -860,6 +850,8 @@ void Inspector::readItems(bool force) {
     const bool one = items.size() == 1;
     const model::Item* item = items.front();
     const model::Take* take = one && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    readModulation(itemMod_, one && item->activeTake ? modRoutesOfTake(s, *item->activeTake)
+                                                     : std::vector<model::Id>{});
     // One item: its name and place. Several: only what they can share.
     for (const char* key : {"name", "start", "length"}) rows_[key]->visible = one;
     if (one) {
@@ -1048,7 +1040,7 @@ void Inspector::readTracks(bool force) {
     row->current = common(tracks, [](const model::Track& t) { return t.color; });
     row->invalidate();
     rows_["track.modulation"]->visible = false;
-    if (one) readModulation(ids_.front());
+    if (one) readModulation(trackMod_, modRoutesOfTrack(app_.head(), ids_.front()));
     rows_["track.notes"]->visible = one;
     if (one) {
         notesShown_ = tracks.front()->notes;
@@ -1058,10 +1050,28 @@ void Inspector::readTracks(bool force) {
     }
 }
 
-void Inspector::readModulation(model::Id id) {
+void Inspector::buildModulation(ui::Node& parent, ModRow& mod) {
+    auto& row = parent.emplace<ui::Node>("inspector.row." + mod.key + ".modulation");
+    rows_[mod.key + ".modulation"] = &row;
+    row.layout.dir = ui::Layout::Dir::Row;
+    row.layout.height = ui::SizeRule::content();
+    row.layout.gap = 8;
+    row.visible = false;
+    auto& name = row.emplace<ui::Label>("inspector.label." + mod.key + ".modulation", "Modulation",
+                                        ui::Font::Ui, "small", "ink-quiet");
+    name.layout.width = ui::SizeRule::fixed(72);
+    name.layout.height = ui::SizeRule::fixed(22);
+    auto& lines = row.emplace<ui::Node>("inspector." + mod.key + ".modulation");
+    lines.layout.dir = ui::Layout::Dir::Column;
+    lines.layout.width = ui::SizeRule::fraction();
+    lines.layout.height = ui::SizeRule::content();
+    lines.layout.gap = 4;
+    mod.lines = &lines;
+}
+
+void Inspector::readModulation(ModRow& mod, const std::vector<model::Id>& routes) {
     const model::Session& s = app_.head();
-    const auto routes = modRoutesOfTrack(s, id);
-    rows_["track.modulation"]->visible = !routes.empty();
+    rows_[mod.key + ".modulation"]->visible = !routes.empty();
     if (!scales_) scales_ = std::make_unique<PluginScales>(dispatcher_, &app_);
     const auto catalog = racks::catalog(app_);
     // Each route: its parameter as its lane names it, and its source.
@@ -1079,16 +1089,16 @@ void Inspector::readModulation(model::Id id) {
     }
     std::string key;
     for (const auto& [route, what, source] : shown) key += route.str() + what + source + ";";
-    if (key == modShown_) return;
-    modShown_ = key;
-    modLines_->clear();
+    if (key == mod.shown) return;
+    mod.shown = key;
+    mod.lines->clear();
     AppActions* a = &actions_;
     ui::Root* r = &root_;
     // A source mark dims where its route is off (all of them, on "N routes").
     auto on = [&](model::Id route) { return s.modulations.find(route)->enabled; };
     auto line = [&](const std::string& nodeId, const std::string& text, const std::string& mark,
                     bool lit, std::function<void()> click) {
-        auto& b = modLines_->emplace<ModLine>(nodeId, text, std::move(click));
+        auto& b = mod.lines->emplace<ModLine>(nodeId, text, std::move(click));
         b.setMark(mark, lit ? "signal-cv" : "ink-faint");
         b.layout.width = ui::SizeRule::fraction();
         b.layout.height = ui::SizeRule::fixed(22);
@@ -1096,7 +1106,7 @@ void Inspector::readModulation(model::Id id) {
     };
     if (shown.size() <= 4) {
         for (const auto& [route, what, source] : shown)
-            line("inspector.track.modulation." + route.str(), what, source, on(route),
+            line("inspector." + mod.key + ".modulation." + route.str(), what, source, on(route),
                  [a, route] { showModSource(*a, route); });
     } else {
         // Past four: one line, its menu listing them all.
@@ -1105,9 +1115,10 @@ void Inspector::readModulation(model::Id id) {
             items.push_back({what + " " + source, "", [a, route] { showModSource(*a, route); }});
         const bool any = std::any_of(shown.begin(), shown.end(),
                                      [&](const auto& entry) { return on(std::get<0>(entry)); });
-        line("inspector.track.modulation.all", std::to_string(shown.size()) + " routes",
-             std::string(views::kModMark), any, [r, items] {
-                 const ui::Node* at = r->find("inspector.track.modulation.all");
+        const std::string all = "inspector." + mod.key + ".modulation.all";
+        line(all, std::to_string(shown.size()) + " routes", std::string(views::kModMark), any,
+             [r, items, all] {
+                 const ui::Node* at = r->find(all);
                  if (!at) return;
                  r->openPopup(
                      ui::makeMenu("inspector.modulation.menu", items, [r] { r->closePopup(); }),

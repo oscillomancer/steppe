@@ -18,6 +18,13 @@ class Label : public Node {
     void setText(std::string text);
     const std::string& text() const { return text_; }
     int align = kLeft | kMiddle;
+    // A short mark right after a left-aligned text, in its own theme colour
+    // ("" for the text's), in UiBold; "" for none. The text elides in the
+    // room left of the mark, so the mark never covers it. Not part of
+    // valueText().
+    void setMark(std::string mark, std::string token = {});
+    const std::string& mark() const { return mark_; }
+    const std::string& markColor() const { return markColor_; }
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     std::string valueText() const override { return text_; }
@@ -25,7 +32,7 @@ class Label : public Node {
   private:
     std::string text_;
     Font font_;
-    std::string size_, color_;
+    std::string size_, color_, mark_, markColor_;
 };
 
 class Button : public Node {

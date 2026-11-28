@@ -450,15 +450,11 @@ void ParamPanel::openMenu(const std::string& key, const std::string& name, bool 
     if (learnable && openLearn)
         items.push_back(
             {"MIDI learn: " + name + "\u2026", "", [this, key, name] { learn(key, name); }});
-    // The track whose chain holds the effect: a follower cannot hear it.
-    std::optional<model::Id> owner;
-    for (const auto& t : s.tracks) {
-        const auto& chain = t.value->chain;
-        const auto& input = t.value->inputChain;
-        if (std::find(chain.begin(), chain.end(), fx_) != chain.end() ||
-            std::find(input.begin(), input.end(), fx_) != input.end())
-            owner = t.id;
-    }
+    // The track that applies the effect: the one whose chain or input chain
+    // holds it, or for a take's FX the track of the take's item or clip
+    // (ADR-0096 M5). A follower cannot hear it, and its freeze holds it.
+    std::optional<model::Id> owner = model::trackOfChainFx(s, fx_);
+    if (!owner) owner = model::trackOfTakeFx(s, fx_);
     json::Value modTarget = json::Value::object();
     modTarget["fx"] = idText(fx_);
     modTarget["param"] = key;

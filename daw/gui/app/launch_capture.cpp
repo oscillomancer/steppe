@@ -11,6 +11,7 @@
 
 #include "supple/model/schemas.h"
 #include "supple/views/launcher.h"
+#include "supple/views/modulation_words.h"
 #include "supple/views/object_name.h"
 
 namespace supple::gui {
@@ -31,11 +32,13 @@ using CaptureView = engine::EngineApp::CaptureView;
 using CaptureCommit = engine::EngineApp::CaptureCommit;
 using CaptureEnd = engine::EngineApp::CaptureEnd;
 
-// A take kept for the pane: uncommitted, with something to write, and not
-// declined (an undo took its commit back).
+// A take kept for the pane: uncommitted as the app judges it
+// (captureUncommitted: a performance to write, holdsPerformance), and not
+// declined (an undo took its commit back). Never the pane's own count: a
+// capture holding only a return's crossfade has nothing to commit (round
+// 221 F1).
 bool pending(const std::optional<CaptureView>& v) {
-    return v && v->capture.placed && v->capture.frames > 0 && !v->capture.launches.empty() &&
-           v->commit == CaptureCommit::None;
+    return v && v->holdsPerformance && v->commit == CaptureCommit::None;
 }
 }  // namespace
 
@@ -45,7 +48,9 @@ std::string CaptureControl::takeWords(const CaptureView& v) {
     // The end is where the next bar would start: its last bar is the one
     // holding the frame before it.
     const int last = s.timeMap->barBeat(std::max(v.startBeat, v.endBeat - 1e-6)).bar;
-    const std::size_t n = v.capture.launches.size();
+    // What it lays down (the app's count, as its warnings say it), never
+    // what a crossfade at its start faded from.
+    const std::size_t n = v.held;
     return (first == last ? "bar " + std::to_string(first)
                           : "bars " + std::to_string(first) + "\u2013" + std::to_string(last)) +
            ", " + std::to_string(n) + (n == 1 ? " launch" : " launches");
@@ -69,6 +74,9 @@ std::string CaptureControl::refusalWords(const Error& e) {
         return e.path.size() >= tail.size() &&
                e.path.compare(e.path.size() - tail.size(), tail.size(), tail) == 0;
     };
+    // The copy's routes past the project's limit (ADR-0096 M5); the status
+    // line says it in full (views::modulationRefusal).
+    if (e.code == "modulation.limit") return "it would make too many modulation routes";
     if (e.code == "item.locked") {
         // The launch whose stretch met it (/performance/launches/N) names the
         // track; the one locked item there under the take names the place.
@@ -209,7 +217,9 @@ Error CaptureControl::keep(Error refusal) {
     armed_ = capturing_ = false;
     refusal_ = refusalWords(refusal);
     refused_ = true;
-    refusal = views::objectNames(app_.head(), std::move(refusal));
+    refusal = views::objectNames(
+        app_.head(), views::modulationRefusal(app_.head(), "launch.commit", std::move(refusal)));
+    if (refusal.message.ends_with('.')) refusal.message.pop_back();  // the GUI's sentence
     refusal.message += "; the performance is kept: fix that, then click Capture to commit it";
     return refusal;
 }
@@ -332,6 +342,9 @@ Status CaptureControl::commit() {
     if (const auto notice =
             views::followNotice(app_.head(), "launch.commit", json::Value::object(), *r))
         said += (said.empty() ? "" : " ") + *notice;
+    if (const std::string mod = views::modulationNote(app_.head(), "launch.commit", *r);
+        !mod.empty())
+        said += (said.empty() ? "" : " ") + mod;
     if (onNotice && !said.empty()) onNotice(said);
     // Stopped (a commit at stop, or the toggle turned off while stopped):
     // every track returns to the arrangement where playing starts, so play

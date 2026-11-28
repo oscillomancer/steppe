@@ -2011,6 +2011,9 @@ EngineApp::CaptureView EngineApp::described(CaptureView view) const {
     view.startBeat = tm.beatAt(double(view.capture.startSample) / rate);
     view.endBeat = tm.beatAt(double(view.capture.startSample + view.capture.frames) / rate);
     view.replacedOnBegin = view.kept && engine_ && engine_->launchCapturing();
+    const CapturedPerformance perf = performanceOf(view.capture, view.sampleRate);
+    view.held = heldLaunches(perf).size();
+    view.holdsPerformance = captureBegun(view.capture) && holdsLaunches(perf);
     return view;
 }
 
@@ -2073,9 +2076,7 @@ bool EngineApp::captureUncommitted() {
     const auto c = launchCapture();
     // Holding a performance as launch.commit judges it (holdsLaunches): not
     // only what a crossfade at its start faded from (round 219 F2).
-    if (!c || !c->capture.placed || c->capture.frames <= 0 ||
-        !holdsLaunches(performanceOf(c->capture, c->sampleRate)))
-        return false;
+    if (!c || !c->holdsPerformance) return false;
     return c->commit != CaptureCommit::Committed;  // never written, or taken back
 }
 
@@ -2122,9 +2123,9 @@ std::string EngineApp::captureLine(const CaptureView& c, std::string_view then) 
     // Worded from the view's fields, the ones a client in-process reads.
     const CaptureView d = described(c);
     const auto beat = [](double b) { return json::formatDouble(std::round(b * 1000) / 1000); };
-    // What it lays down (heldLaunches): what was launched, not what a
+    // What it lays down (CaptureView::held): what was launched, not what a
     // crossfade at its start faded from.
-    const std::size_t n = heldLaunches(performanceOf(d.capture, d.sampleRate)).size();
+    const std::size_t n = d.held;
     return "the capture from beat " + beat(d.startBeat) + " to " + beat(d.endBeat) + " (" +
            std::to_string(n) + (n == 1 ? " launch" : " launches") + ", version " +
            std::to_string(c.capture.version) + ")" + std::string(then);

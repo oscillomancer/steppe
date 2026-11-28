@@ -1281,7 +1281,8 @@ descriptions lists its parameters in the FX window; those it lets you
 modulate have a slider there.
 
 A violet "~" says that something is modulated. It appears at the right of
-a plug-in in the mixer when one of its parameters is, and after "fx" on
+a plug-in in the mixer and after its name in the FX window when one of its
+parameters is, and after "fx" on
 the track (in the track list and the mixer) when any plug-in in its chain
 is. Selecting the track shows a **Modulation** row in the inspector: each
 modulated parameter with its source ("Marram · Filter 1 Cutoff ~ LFO"), or
@@ -1291,7 +1292,18 @@ window with that source picked. A modulated parameter's lane has a
 move it), and its title names the parameter first ("Filter 1 Cutoff ·
 Marram"). On a fader, pan or FX parameter, the right-click menu's **Show
 modulation source** takes you there too; clicking the violet bar only
-changes the depth.
+changes the depth. The same menu's **Remove modulation** removes one
+route, named by its source, and leaves the rack as it is.
+
+A plug-in in a take's own chain (**Take FX…** on an item or a clip) can be
+modulated the same way, from its parameter menu in the FX window. The
+item's or clip's inspector then shows its **Modulation** row. The
+parameter's lane is under the item's track, or, for a clip, in the MIDI
+editor's lanes under the roll, with the band the modulation can add and,
+while it plays, its value now. The modulation follows the take: it
+plays while that take is the one heard, and the menu says "Modulation
+idle: another take of its item plays" (or "its item is muted") when it
+does not.
 
 ## Timing audio with hits and stretch markers
 

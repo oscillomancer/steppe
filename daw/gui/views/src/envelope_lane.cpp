@@ -156,6 +156,20 @@ bool chainModulated(const model::Session& session, model::Id track) {
     return false;
 }
 
+NameMark takeNameMark(const model::Session& session, std::optional<model::Id> take) {
+    const model::Take* t = take ? session.takes.find(*take) : nullptr;
+    if (!t) return {};
+    NameMark out;
+    out.on = false;
+    for (model::Id fx : t->chain) {
+        if (!fxModulated(session, fx)) continue;
+        out.mark = std::string(kModMark);
+        out.on = out.on || fxModulationOn(session, fx);
+    }
+    if (out.mark.empty()) out.on = true;
+    return out;
+}
+
 bool routeOn(const model::Session& session, const model::EnvTarget& target) {
     for (const auto& m : session.modulations)
         if (m.value->target == target && m.value->enabled) return true;
@@ -475,28 +489,40 @@ LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
                                      env.target.object) != tk.value->chain.end();
         if (!take) return title;
         // Another item on the track with the same effect's same parameter
-        // would give its lane this title too: each says its item.
+        // would give its lane this title too: each says its item. Another
+        // take of the same item (a copy, ADR-0096 M5 copies its envelopes)
+        // would too: each says its own take.
         const model::Item* item = takeItemOf(session, env.target.object);
-        bool twin = false;
+        const auto own = model::takeFxOwner(session, env.target.object);
+        bool twin = false, sibling = false;
         if (item)
             for (const auto& e : session.envelopes) {
                 if (e.value->target == env.target || e.value->target.param != env.target.param ||
-                    e.value->target.object.kind != model::Kind::Fx)
+                    e.value->target.object.kind != model::Kind::Fx ||
+                    effectInChain(session, e.value->target.object) != title.owner)
                     continue;
                 const model::Item* other = takeItemOf(session, e.value->target.object);
-                if (other && other != item && other->track == item->track &&
-                    effectInChain(session, e.value->target.object) == title.owner)
-                    twin = true;
+                if (other && other != item && other->track == item->track) twin = true;
+                if (other == item) sibling = true;
             }
-        if (!twin) {
+        if (!twin && !sibling) {
             title.note = "(take)";
             return title;
         }
-        const model::Take* tk = item->activeTake ? session.takes.find(*item->activeTake) : nullptr;
-        const int bar =
-            session.timeMap->barBeat(std::max(0.0, model::itemSpan(session, *item).startBeat)).bar;
-        const std::string name = tk && !tk->name.empty() ? tk->name + ", " : std::string();
-        title.note = "(take: " + name + "bar " + std::to_string(bar) + ")";
+        std::string what;
+        // The take as the item's take list names it (takeLabel: a name two
+        // takes share, as a copy's, adds its place).
+        if (sibling && own) what = takeLabel(session, own->take);
+        if (twin) {
+            const model::Take* tk =
+                item->activeTake ? session.takes.find(*item->activeTake) : nullptr;
+            const int bar =
+                session.timeMap->barBeat(std::max(0.0, model::itemSpan(session, *item).startBeat))
+                    .bar;
+            if (what.empty() && tk && !tk->name.empty()) what = tk->name;
+            what += (what.empty() ? "" : ", ") + std::string("bar ") + std::to_string(bar);
+        }
+        title.note = "(take: " + what + ")";
         return title;
     }
     // A rack module's knob: "Bells » Osc · fine".

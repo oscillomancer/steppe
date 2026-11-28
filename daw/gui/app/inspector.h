@@ -103,20 +103,28 @@ class Inspector {
     void readTracks(bool force);
     void readClip(bool force);
     void commitNotes(const std::string& text);  // one track's notes, when they changed
-    // One track's Modulation row (gui.md §4.14): a line per route, "N routes"
-    // past four; shown only while something of the track is modulated.
-    void readModulation(model::Id id);
+    // A Modulation row (gui.md §4.14): a line per route, "N routes" past
+    // four, shown only while one of its routes exists: one track's (its
+    // controls, chains and sends), and one item's or clip's (its heard take's
+    // FX, ADR-0096 M5). `key` names its nodes: inspector.<key>.modulation.<route>.
+    struct ModRow {
+        std::string key;
+        ui::Node* lines = nullptr;  // its lines
+        std::string shown;          // what they were built from
+    };
+    void buildModulation(ui::Node& parent, ModRow& mod);
+    void readModulation(ModRow& mod, const std::vector<model::Id>& routes);
     ui::Root& root_;
     engine::EngineApp& app_;
     const UiState& selection_;
     cmd::Dispatcher& dispatcher_;
     AppActions& actions_;
-    ui::Node* itemBox_ = nullptr;            // the item fields; hidden otherwise
-    ui::Node* trackBox_ = nullptr;           // the track fields
-    ui::Node* colors_ = nullptr;             // the track colour swatches
-    ui::TextArea* notes_ = nullptr;          // one track's notes
-    ui::Node* modLines_ = nullptr;           // the Modulation row's lines
-    std::string modShown_;                   // what they were built from
+    ui::Node* itemBox_ = nullptr;    // the item fields; hidden otherwise
+    ui::Node* trackBox_ = nullptr;   // the track fields
+    ui::Node* colors_ = nullptr;     // the track colour swatches
+    ui::TextArea* notes_ = nullptr;  // one track's notes
+    ModRow trackMod_{"track", nullptr, {}}, itemMod_{"item", nullptr, {}},
+        clipMod_{"clip", nullptr, {}};
     std::unique_ptr<PluginScales> scales_;   // plug-in parameters' names
     std::string notesShown_;                 // as the session has them
     std::map<std::string, ui::Node*> rows_;  // a field's row, to hide with it

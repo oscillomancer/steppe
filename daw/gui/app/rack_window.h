@@ -99,6 +99,8 @@ class RackWindow {
     Result<json::Value> exec(const std::string& command, json::Value args,
                              const std::string& gesture = {});
     void report(const Error& e);
+    void noteRemoved(const model::Session& before, std::string_view command,
+                     const json::Value& result);
     // The space's hooks.
     void move(const std::vector<RackSpace::Move>& moves);
     void param(model::Id module, int index, double value, ui::Gesture g);

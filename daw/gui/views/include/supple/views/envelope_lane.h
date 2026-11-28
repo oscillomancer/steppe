@@ -87,6 +87,19 @@ bool chainModulated(const model::Session& session, model::Id track);
 bool routeOn(const model::Session& session, const model::EnvTarget& target);
 bool fxModulationOn(const model::Session& session, model::Id fx);
 bool chainModulationOn(const model::Session& session, model::Id track);
+// The mark an item's or a clip's name carries (ADR-0096 M5; gui.md §4.3,
+// §4.13): kModMark while an FX of its heard take `take` is modulated, else
+// ""; `on` false where every route onto those FX is off. The one place that
+// decides it: the names show no mark when this returns none.
+struct NameMark {
+    std::string mark;
+    bool on = true;
+};
+NameMark takeNameMark(const model::Session& session, std::optional<model::Id> take);
+// Whether item and clip names draw takeNameMark's mark. Off: on a coloured
+// name bar the mark does not read (render 209), so the inspector's
+// Modulation row and the route's lane carry it. One line turns it on.
+inline constexpr bool kTakeNameMarksShown = false;
 
 // Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
 // cable into it from a unipolar, gate or phase output); the app supplies it

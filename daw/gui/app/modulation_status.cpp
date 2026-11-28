@@ -33,6 +33,15 @@ std::string inertWords(const std::string& reason) {
     return "the parameter cannot take it";
 }
 
+std::string takeIdleWords(const model::Session& s, model::Id fx) {
+    const auto owner = model::takeFxOwner(s, fx);
+    const model::Item* item =
+        owner && owner->owner.kind == model::Kind::Item ? s.items.find(owner->owner) : nullptr;
+    if (item && item->mute && item->activeTake == owner->take) return "its item is muted";
+    if (owner && owner->owner.kind == model::Kind::Clip) return "another take of its clip plays";
+    return "another take of its item plays";
+}
+
 std::optional<ui::MenuItem> inertItem(cmd::Dispatcher& dispatcher, const model::Session& s,
                                       const model::EnvTarget& target) {
     std::size_t routes = 0;
@@ -50,7 +59,8 @@ std::optional<ui::MenuItem> inertItem(cmd::Dispatcher& dispatcher, const model::
     }
     if (!reason) return std::nullopt;
     ui::MenuItem m;
-    m.label = (routes == 1 ? "Modulation idle: " : "A modulation is idle: ") + inertWords(*reason);
+    m.label = (routes == 1 ? "Modulation idle: " : "A modulation is idle: ") +
+              (*reason == "take" ? takeIdleWords(s, target.object) : inertWords(*reason));
     m.enabled = false;
     return m;
 }

@@ -282,6 +282,65 @@ TEST_CASE("a button's mark sits after its text, in its own colour, and widens it
     CHECK(marked.bounds().w == plain.bounds().w);
 }
 
+TEST_CASE("a label's mark follows its text, and a long text elides before it") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Column;
+    auto& shortName = content->emplace<Label>("short", "Gain", Font::Ui, "small");
+    auto& longName = content->emplace<Label>("long", "Hickory on the vocal bus, the long way round",
+                                             Font::Ui, "small");
+    for (Label* l : {&shortName, &longName}) {
+        l->layout.width = SizeRule::fixed(110);
+        l->setMark("~", "signal-cv");
+    }
+    root.setContent(std::move(content));
+    root.frame(false);
+    CHECK(longName.valueText() == "Hickory on the vocal bus, the long way round");
+    CHECK(longName.mark() == "~");
+    CHECK(longName.markColor() == "signal-cv");
+    gui::Image img = root.readBack();
+    const float ratio = static_cast<float>(img.width) / fixture().window->width();
+    auto pixel = [&](float x, float y) {
+        const std::size_t i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(img.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        return std::array<int, 3>{img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]};
+    };
+    auto violet = [&](float x, float y) {
+        const auto [r, g, b] = pixel(x, y);
+        return b - g > 25 && r - g > 10;
+    };
+    auto ink = [&](float x, float y) {  // the text's light neutral grey
+        const auto [r, g, b] = pixel(x, y);
+        return r > 110 && std::abs(r - g) < 14 && std::abs(b - g) < 14;
+    };
+    auto any = [&](const Rect& b, auto&& test) {
+        for (float y = b.y; y < b.bottom(); y += 0.5f)
+            for (float x = b.x; x < b.right(); x += 0.5f)
+                if (test(x, y)) return true;
+        return false;
+    };
+    // The long name: its mark at the column's right end, and no ink of the
+    // elided text under it.
+    const Rect lb = longName.bounds();
+    const Rect markRoom{lb.right() - 9, lb.y, 9, lb.h};
+    CHECK(any(markRoom, violet));
+    CHECK_FALSE(any(markRoom, ink));
+    CHECK(any(Rect{lb.x, lb.y, lb.w - 14, lb.h}, ink));
+    // The short name: its mark right after it, not at the column's end.
+    const Rect sb = shortName.bounds();
+    CHECK(any(Rect{sb.x, sb.y, 60, sb.h}, violet));
+    CHECK_FALSE(any(Rect{sb.x + 60, sb.y, sb.w - 60, sb.h}, violet));
+    // No mark: the text has the whole column again.
+    longName.setMark("");
+    root.frame(false);
+    img = root.readBack();
+    CHECK_FALSE(any(longName.bounds(), violet));
+    CHECK(any(Rect{lb.right() - 9, lb.y, 9, lb.h}, ink));
+}
+
 TEST_CASE("damage repaints only what changed") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
