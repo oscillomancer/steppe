@@ -4,7 +4,7 @@ Modulate one parameter or mixer level with an LFO or follower.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -88,7 +88,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `modulation.cycle`: a follower on a track the target feeds Hint: listen to another track, or modulate a buss it feeds
+- `modulation.source`: the source is not a Mod Out module Hint: use rack.get to find the rack's Mod Out, or add one with module.add
+- `modulation.target`: the target is missing, not one object, or not modulatable Hint: check fx.describe or the track's params, and name one fx, track or route
+- `modulation.depth`: the depth is outside the target's range Hint: -1..1 for a plug-in parameter, -48..48 dB for volume, -200..200 % for pan or width
+- `modulation.duplicate`: the same source already reaches that parameter Hint: change that route's depth with modulation.set instead
+- `modulation.cycle`: the route, or a follower on a track the target feeds, would let the rack hear what it modulates Hint: listen to another track, or modulate a buss it feeds
+- `modulation.limit`: the project holds the most routes it can Hint: remove routes you no longer need with modulation.remove
 
 ### Examples
 

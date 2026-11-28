@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include "../../../tests/file_platform.h"
 #include "supple/audio/audio_file.h"
@@ -623,4 +624,391 @@ TEST_CASE("item.mix-to-track sums the selected items' strips onto a new muted ch
     // One undo step removes the channel and its item.
     REQUIRE(f.app->undo());
     CHECK(f.app->head().tracks.size() == tracks);
+}
+
+TEST_CASE("healing joins take FX routes that match, and refuses ones that differ (M5)") {
+    Fixture f;
+    f.run("rack.add", R"({"track":"tr_1"})");                    // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out"})");  // mo_2
+    f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");  // fx_1
+    f.run("modulation.add", R"({"source":{"module":"mo_2","input":"in_1"},
+        "target":{"fx":"fx_1","param":"gain"},"depth":0.25})");                  // mr_1
+    // Both halves keep the route: the right one on its copied FX.
+    f.run("item.split", R"({"item":"it_1","at":1})");
+    REQUIRE(f.app->head().modulations.size() == 2);
+    const model::Id copy{model::Kind::Modulation, 2};
+    CHECK(f.app->head().modulations.find(copy)->target.object == model::Id::parse("fx_2"));
+    // A depth that differs: refused, its own words and hint.
+    f.run("modulation.set", R"({"modulation":"mr_2","depth":0.5})");
+    auto refused = f.call("item.heal", R"({"items":["it_1","it_2"]})");
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "item.heal_fx");
+    CHECK(refused.error().message.find("modulation routes") != std::string::npos);
+    CHECK(refused.error().hint.find("modulation.set") != std::string::npos);
+    // Matching again: healed, the right half's route goes with its piece and
+    // no route is reported removed (it lives on in the left one).
+    f.run("modulation.set", R"({"modulation":"mr_2","depth":0.25})");
+    const auto healed = f.run("item.heal", R"({"items":["it_1","it_2"]})");
+    if (const json::Value* warnings = healed.find("warnings"))
+        for (const auto& w : warnings->asArray())
+            CHECK(w.find("code")->asString() != "modulation.removed");
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target.object == model::Id::parse("fx_1"));
+    REQUIRE(f.app->undo());
+    CHECK(f.app->head().modulations.size() == 2);
+}
+
+namespace {
+// rk_1 on tr_1 (its Out uncabled): Transport's beat phase into the Mod Out
+// mo_2, routed into a gain added to tk_1's chain (fx_1 when tr_1 has none).
+void beatModulated(Fixture& f) {
+    f.run("rack.add", R"({"track":"tr_1"})");                      // rk_1, mo_1 its Out
+    f.run("module.add", R"({"rack":"rk_1","type":"mod_out"})");    // mo_2
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");  // mo_3
+    f.run("cable.add", R"({"from":"mo_3.beat_phase","to":"mo_2.in_1"})");
+    const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+    json::Value add = *json::parse(R"({"source":{"module":"mo_2","input":"in_1"},"depth":0.3})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx.find("fx")->asString();
+    add["target"]["param"] = "gain";
+    auto added = f.bus->execute({"modulation.add", std::move(add), origin});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+}
+}  // namespace
+
+TEST_CASE("item.apply-fx prints a modulated take FX exactly as it plays (M5, F10)") {
+    // The take's gain moved by Transport's beat phase: the track over the
+    // item's span sounds the same before the bake and after it, when the
+    // printed take plays without the FX (mode replace removes them, and the
+    // route with them, after printing).
+    Fixture f;
+    beatModulated(f);
+    const model::ItemSpan span =
+        model::itemSpan(f.app->head(), *f.app->head().items.find(*model::Id::parse("it_1")));
+    OfflineSettings settings;
+    settings.applyMasterPlayrate = false;
+    settings.track = *model::Id::parse("tr_1");
+    settings.tap = model::Tap::PreFader;
+    settings.startSeconds = span.startSec;
+    settings.endSeconds = span.endSec;
+    settings.threads = 1;
+    auto before = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(before);
+    // The route moves something: without it the track sounds otherwise.
+    {
+        model::EditTxn t(f.app->head(), f.app->head().version + 1);
+        for (const auto& m : f.app->head().modulations) t.remove<model::Modulation>(m.id);
+        auto plain = t.commit();
+        REQUIRE(plain);
+        auto unmodulated = f.app->renderSession(*plain, settings);
+        REQUIRE(unmodulated);
+        CHECK_FALSE(bool(unmodulated->audio.channels == before->audio.channels));
+    }
+    f.run("item.apply-fx", R"({"item":"it_1","mode":"replace"})");
+    CHECK(f.app->head().modulations.empty());
+    auto after = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(after);
+    CHECK(bool(after->audio.channels == before->audio.channels));
+}
+
+TEST_CASE("item.consolidate prints modulated take FX exactly as they play (M5, F10)") {
+    // Two items whose takes' gains a route moves (the duplicate copies it):
+    // the track sounds the same before and after, the routes going with the
+    // baked FX.
+    Fixture f;
+    beatModulated(f);
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    REQUIRE(f.app->head().modulations.size() == 2);
+    OfflineSettings settings{.endSeconds = 1.25,
+                             .threads = 1,
+                             .track = model::Id{model::Kind::Track, 1},
+                             .tap = model::Tap::PreFader};
+    auto before = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(before);
+    f.finish(f.run("item.consolidate", R"({"items":["it_1","it_2"]})"));
+    REQUIRE(f.app->head().items.size() == 1);
+    CHECK(f.app->head().modulations.empty());
+    auto after = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(after);
+    CHECK(bool(after->audio.channels == before->audio.channels));
+}
+
+TEST_CASE("item.consolidate.commit is stale when a route into a baked FX changed (M5, G6)") {
+    // The render is taken with one depth; the route changes before the
+    // commit, so what was printed is no longer what plays: refused as stale.
+    Fixture f;
+    beatModulated(f);
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    const auto job = f.run("item.consolidate", R"({"items":["it_1","it_2"]})");
+    f.run("modulation.set", R"({"modulation":"mr_1","depth":-0.3})");
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    INFO(json::writeCompact(*status));
+    CHECK((*status)["status"].asString() != "done");
+    CHECK(json::writeCompact(*status).find("item.consolidate_stale") != std::string::npos);
+    CHECK(f.app->head().items.size() == 2);
+    CHECK(f.app->head().modulations.size() == 2);
+}
+
+namespace {
+// tk_1's gain modulated by `source` ("lfo", or "follower" from `from`)
+// through modulate, which makes the rack on a new channel, Modulators; plus
+// tr_3 "Elsewhere", which nothing the bakes render reads. Returns the
+// source module.
+std::string sourced(Fixture& f, const char* source, const char* from = nullptr) {
+    const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+    json::Value args = json::Value::object();
+    args["target"] = json::Value::object();
+    args["target"]["fx"] = fx.find("fx")->asString();
+    args["target"]["param"] = "gain";
+    args["source"] = source;
+    if (from) args["from"] = from;
+    args["depth"] = 0.2;
+    auto made = f.bus->execute({"modulate", std::move(args), origin});
+    REQUIRE_MESSAGE(made, (made ? "" : made.error().toString()));
+    f.run("track.add", R"({"name":"Elsewhere"})");
+    return made->find("module")->asString();
+}
+// The job `job`'s status once it finished, its events flushed.
+json::Value settled(Fixture& f, const json::Value& job) {
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    return *status;
+}
+// A consolidate of it_1 and its copy it_2, with `edit` made while it renders.
+json::Value consolidated(Fixture& f, const std::function<void()>& edit) {
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    const auto job = f.run("item.consolidate", R"({"items":["it_1","it_2"]})");
+    if (edit) edit();
+    return settled(f, job);
+}
+}  // namespace
+
+TEST_CASE("item.consolidate is stale when the route's source changed during it (round 192 F4)") {
+    // The stale check covers what the render read, not only the route: the
+    // LFO's rate on another channel's rack changes what the gain printed.
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        const std::string lfo = sourced(f, "lfo");
+        const auto status = consolidated(f, [&] {
+            if (!edited) return;
+            json::Value set = json::Value::object();
+            set["module"] = lfo;
+            set["params"] = *json::parse(R"({"rate": 3})");
+            REQUIRE(f.bus->execute({"module.set", std::move(set), origin}));
+        });
+        INFO(json::writeCompact(status));
+        if (edited) {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+            CHECK(f.app->head().items.size() == 2);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
+TEST_CASE("item.consolidate is stale when a followed track changed during it (round 192 F4)") {
+    // A Follower source reads tr_2's signal: an edit to tr_2 is an edit to
+    // what the render read. tr_3 is read by nothing: its edit is accepted.
+    for (const char* edit : {"followed", "elsewhere"}) {
+        INFO(edit);
+        Fixture f;
+        f.run("track.add", R"({"name":"Followed"})");  // tr_2
+        sourced(f, "follower", "tr_2");
+        const std::string elsewhere =
+            f.app->head().tracks.find(model::kMaster)->children.back().str();
+        const auto status = consolidated(f, [&] {
+            json::Value set = json::Value::object();
+            set["track"] = std::string(edit) == "followed" ? std::string("tr_2") : elsewhere;
+            set["volume_db"] = -6.0;
+            REQUIRE(f.bus->execute({"track.set", std::move(set), origin}));
+        });
+        INFO(json::writeCompact(status));
+        if (std::string(edit) == "followed") {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
+TEST_CASE("item.consolidate is stale when a Notes source's item moves during it (round 193 R1)") {
+    // Other is tr_2; Keys (tr_3) holds a MIDI item; the rack (on Modulators,
+    // tr_4, which modulate makes) has a Notes module playing Keys, its sends
+    // off, into the Mod Out input that modulates tk_1's gain. Moving that item onto
+    // Modulators (in the closure) or onto a new track (outside it) leaves
+    // the module playing nothing: both are edits to what the render read.
+    // Renumbering the closure's tracks in order (the master, tr_1 and tr_4
+    // as tr_1, tr_2 and tr_3; Keys, outside it, kept as written) once hashed
+    // the first the same: the item's track went from Keys's raw "tr_3" to
+    // Modulators renumbered "tr_3" (P9).
+    for (const char* to : {"rack", "new"}) {
+        INFO("to " << std::string(to));
+        Fixture f;
+        f.run("track.add", R"({"name":"Other"})");  // tr_2
+        f.run("track.add", R"({"name":"Keys"})");   // tr_3
+        const std::string keys = f.app->head().tracks.find(model::kMaster)->children.back().str();
+        REQUIRE(keys == "tr_3");
+        const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+        json::Value args = *json::parse(R"({"source":"lfo","depth":0.2})");
+        args["target"] = json::Value::object();
+        args["target"]["fx"] = fx.find("fx")->asString();
+        args["target"]["param"] = "gain";
+        auto made = f.bus->execute({"modulate", std::move(args), origin});
+        REQUIRE_MESSAGE(made, (made ? "" : made.error().toString()));
+        const std::string rack = made->find("rack")->asString();
+        const std::string modOut = made->find("mod_out")->asString();
+        const std::string input = made->find("input")->asString();
+        json::Value item = *json::parse(R"({"bar":1,"notation":"voice v; 1: C4:w"})");
+        item["track"] = keys;
+        const auto exec = [&](const char* name, json::Value request) {
+            auto r = f.bus->execute({name, std::move(request), origin});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string midi = exec("item.add", item).find("item")->asString();
+        json::Value notes = *json::parse(R"({"type":"notes"})");
+        notes["rack"] = rack;
+        notes["source"] = keys;
+        const std::string module = exec("module.add", notes).find("module")->asString();
+        // Without its sends the source track is not in the closure, only its
+        // items (with sends, the default, it is, and nothing collided).
+        json::Value sends = *json::parse(R"({"source_sends":false})");
+        sends["module"] = module;
+        exec("module.set", sends);
+        json::Value cable = json::Value::object();
+        cable["from"] = module + ".gate";
+        cable["to"] = modOut + "." + input;
+        exec("cable.add", cable);
+        std::string target;  // the rack's track
+        for (const auto& e : f.app->head().racks)
+            if (e.id.str() == rack) target = e.value->track.str();
+        REQUIRE(target == "tr_4");
+        if (std::string(to) == "new") {
+            f.run("track.add", R"({"name":"Other"})");
+            target = f.app->head().tracks.find(model::kMaster)->children.back().str();
+        }
+        const auto status = consolidated(f, [&] {
+            json::Value move = json::Value::object();
+            move["item"] = midi;
+            move["track"] = target;
+            REQUIRE(f.bus->execute({"item.move", std::move(move), origin}));
+        });
+        INFO(json::writeCompact(status));
+        CHECK(status.find("status")->asString() != "done");
+        CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+    }
+}
+
+TEST_CASE("item.mix-to-track is not stale for an edit its render does not read (round 193)") {
+    // A track added (and another's volume) during the mix: its private view's
+    // buss and routes take numbers from counters that creation moves, so they
+    // are hashed in a range of their own; the result commits.
+    Fixture f;
+    sourced(f, "lfo");
+    const std::string elsewhere = f.app->head().tracks.find(model::kMaster)->children.back().str();
+    const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+    f.run("track.add", R"({"name":"Later"})");
+    json::Value set = json::Value::object();
+    set["track"] = elsewhere;
+    set["volume_db"] = -6.0;
+    REQUIRE(f.bus->execute({"track.set", std::move(set), origin}));
+    const auto status = settled(f, job);
+    INFO(json::writeCompact(status));
+    CHECK(status.find("status")->asString() == "done");
+}
+
+TEST_CASE(
+    "item.mix-to-track is stale when a warp peer of its take changes during it "
+    "(round 195 F3)") {
+    // it_1 and its copy it_2, moved onto Peer (tr_2), quantized together:
+    // tk_1 and tk_2 are warp peers, and the render of it_1 reads tk_2's
+    // bundle (offline.cpp keeps a selected take's peers). tr_2 is outside
+    // the mix's closure, so only the peers' hashing sees an edit to tk_2's
+    // transients; without it the mix committed over the edit.
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        f.run("track.add", R"({"name":"Peer"})");  // tr_2
+        f.run("take.hits.set", R"({"take":"tk_1","positions":[0.3,0.8]})");
+        f.run("item.duplicate", R"({"item":"it_1","to":0})");
+        f.run("item.move", R"({"item":"it_2","track":"tr_2"})");
+        f.run("audio.quantize", R"({"items":["it_1","it_2"],"grid":0.25})");
+        const model::Session before = f.app->head();
+        REQUIRE(before.takes.find({model::Kind::Take, 1})->warpPeers.size() == 2);
+        REQUIRE(before.items.find({model::Kind::Item, 2})->track ==
+                model::Id{model::Kind::Track, 2});
+        const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+        if (edited) f.run("take.hits.set", R"({"take":"tk_2","positions":[0.2,0.6]})");
+        const auto status = settled(f, job);
+        INFO(json::writeCompact(status));
+        if (edited) {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.mix_stale") != std::string::npos);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
+TEST_CASE("item.mix-to-track is stale when the route's source changed during it (round 192 F4)") {
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        const std::string lfo = sourced(f, "lfo");
+        const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+        if (edited) {
+            json::Value set = json::Value::object();
+            set["module"] = lfo;
+            set["params"] = *json::parse(R"({"rate": 3})");
+            REQUIRE(f.bus->execute({"module.set", std::move(set), origin}));
+        }
+        const auto status = settled(f, job);
+        INFO(json::writeCompact(status));
+        if (edited)
+            CHECK(json::writeCompact(status).find("item.mix_stale") != std::string::npos);
+        else
+            CHECK(status.find("status")->asString() == "done");
+    }
+}
+
+TEST_CASE("item.mix-to-track prints a modulated take FX as it plays (M5, F10)") {
+    // One modulated item through its strip: with Console 9 off the mix is
+    // that strip's stem, the take's gain moving as it does in playback.
+    Fixture f;
+    beatModulated(f);
+    const auto& head = f.app->head();
+    const auto span = model::itemSpan(head, *head.items.find(*model::Id::parse("it_1")));
+    OfflineSettings settings;
+    settings.applyMasterPlayrate = false;
+    settings.track = *model::Id::parse("tr_1");
+    settings.startSeconds = span.startSec;
+    settings.endSeconds = span.endSec;
+    const auto stem = f.app->renderMix(settings).value().audio;
+    const auto result = f.finish(f.run("item.mix-to-track", R"({"items":["it_1"]})"));
+    const auto mix = audio::readAudio(result.find("file")->asString()).value();
+    REQUIRE(mix.channelCount() == 2);
+    REQUIRE(stem.frames() == mix.frames());
+    for (std::size_t c = 0; c < 2; ++c)
+        for (std::size_t i = 0; i < mix.frames(); ++i)
+            REQUIRE(double(mix.channels[c][i]) ==
+                    doctest::Approx(double(stem.channels[c][i])).epsilon(1e-5));
+    // The source keeps its route: mix-to-track leaves the item as it is.
+    CHECK(f.app->head().modulations.size() == 1);
 }

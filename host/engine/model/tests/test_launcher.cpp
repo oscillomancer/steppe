@@ -107,7 +107,7 @@ TEST_CASE("launcher: sc and cl ids parse and allocate") {
 TEST_CASE("launcher: scenes and clips save, reopen and serialize the same") {
     const Fixture f = fixture();
     const std::string bytes = serializeProject(f.s);
-    CHECK(bytes.find("\"supple.project/2.22\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.23\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     json::Value& sc = doc["scenes"]["sc_2"];
     CHECK(sc["name"] == "Chorus");

@@ -410,6 +410,11 @@ void applyLaunch(Node& n, const LaunchAction& a, bool* warmSwapped) SUPPLE_RT {
     if (n.launchNextValid && next.kind == a.kind && next.player == a.player &&
         next.anchorSample == a.anchorSample)
         n.launchNextValid = false;
+    // So is its entry (M5, G1), on a node whose chains have no lead.
+    const LaunchAction& entry = n.launchEntry;
+    if (n.launchEntryValid && entry.kind == a.kind && entry.player == a.player &&
+        entry.anchorSample == a.anchorSample)
+        n.launchEntryValid = false;
     L.kind = a.kind;
     L.player = a.kind == LaunchState::Kind::Clip ? a.player : -1;
     L.anchorSample = a.anchorSample;
@@ -448,6 +453,10 @@ void remapUndo(const From& from, const To& to, LaunchUndo& u) SUPPLE_RT {
     if (u.warmValid && u.warmNext.kind == LaunchState::Kind::Clip) {
         u.warmNext.player = remapPlayer(from, to, u.warmNext.player);
         u.warmValid = u.warmNext.player >= 0;
+    }
+    if (u.entryValid && u.entry.kind == LaunchState::Kind::Clip) {
+        u.entry.player = remapPlayer(from, to, u.entry.player);
+        u.entryValid = u.entry.player >= 0;
     }
 }
 // The records of `old` carried to `n` (carryLaunch): a feed's by its module.
@@ -528,6 +537,14 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
         n.launchNext.player = remap(n.launchNext.player);
         n.launchNextValid = n.launchNext.player >= 0;
     }
+    // A clip chain's entry (preenter, M5 G1), by clip id too, while the new
+    // plan's node still has a modulated clip chain.
+    n.launchEntry = old.launchEntry;
+    n.launchEntryValid = old.launchEntryValid && n.modClipChain && !n.players.empty();
+    if (n.launchEntryValid && n.launchEntry.kind == LaunchState::Kind::Clip) {
+        n.launchEntry.player = remap(n.launchEntry.player);
+        n.launchEntryValid = n.launchEntry.player >= 0;
+    }
     // And one warming up (prewarm, S3 step D).
     n.launchWarmNext = old.launchWarmNext;
     n.launchWarmAt = old.launchWarmAt;
@@ -538,6 +555,7 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     }
     n.launchNextKey = old.launchNextKey;
     n.launchWarmKey = old.launchWarmKey;
+    n.launchEntryKey = old.launchEntryKey;
     carryLaunchUndos(old, n);
     // A rack's Notes feeds, by module and clip: one whose source changed, or
     // whose clip the new plan lacks, follows the arrangement again.
@@ -1429,6 +1447,16 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     n.launchNext = a;
     n.launchNextValid = true;
+    // Its input takes it from here: the entry's work is done (M5, G1).
+    const LaunchAction& entry = n.launchEntry;
+    if (n.launchEntryValid && entry.kind == a.kind && entry.player == a.player &&
+        entry.anchorSample == a.anchorSample)
+        n.launchEntryValid = false;
+}
+
+void preenter(Node& n, const LaunchAction& a) SUPPLE_RT {
+    n.launchEntry = a;
+    n.launchEntryValid = true;
 }
 
 void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT {
@@ -1470,6 +1498,9 @@ LaunchUndo* noteLaunchUndo(Node& n, int feed, std::int64_t key, std::uint64_t ep
     u.warmAt = n.launchWarmAt;
     u.nextKey = n.launchNextKey;
     u.warmKey = n.launchWarmKey;
+    u.entry = n.launchEntry;
+    u.entryValid = n.launchEntryValid;
+    u.entryKey = n.launchEntryKey;
     u.releaseHeld = n.releaseHeld;
     u.launchFresh = n.launchFresh;
     u.switchPending = n.launchSwitchPending;
@@ -1493,7 +1524,12 @@ bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
             f.launchFresh = u.launchFresh;
             continue;
         }
-        if (u.early) {  // only what its prelaunch or prewarm set
+        // The clip chain's entry, as the early half and the switch both
+        // change it (preenter sets it; prelaunch and the switch clear it).
+        n.launchEntry = u.entry;
+        n.launchEntryValid = u.entryValid;
+        n.launchEntryKey = u.entryKey;
+        if (u.early) {  // only what its preenter, prelaunch or prewarm set
             n.launchNext = u.next;
             n.launchNextValid = u.nextValid;
             n.launchNextKey = u.nextKey;
@@ -1528,6 +1564,7 @@ bool takeBackLaunches(Node& n, std::uint64_t epoch, std::int64_t heardEnd,
     if (any) {
         if (n.launchNextValid && n.launchNextKey < heardEnd) n.launchNextValid = false;
         if (n.launchWarmValid && n.launchWarmKey < heardEnd) n.launchWarmValid = false;
+        if (n.launchEntryValid && n.launchEntryKey < heardEnd) n.launchEntryValid = false;
         if (inexact && n.launchUndoLostEpoch == epoch && n.launchUndoLostKey >= heardEnd)
             *inexact = true;
         launchRelocated(n);

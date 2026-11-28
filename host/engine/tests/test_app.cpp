@@ -16,8 +16,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <set>
 #include <thread>
+#include <tuple>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
@@ -40,6 +42,7 @@
 #endif
 #include "audition_loader.h"
 #include "bridge_patience.h"
+#include "command_validation.h"
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
@@ -5197,7 +5200,9 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
     registerEngineCommands(registry);
     cmd::Dispatcher d(registry, *app);
     app->setupFixture(d, "song_with_modulation");
-    const auto removedBy = [&](std::string name, std::string_view args) {
+    // Each names its cause (round 193, the GUI): the FX is the target; the
+    // rack and its Mod Out (the source) go with the module, rack or track.
+    const auto removedBy = [&](std::string name, std::string_view args, const char* reason) {
         CAPTURE(name);
         auto r = d.execute({name, j(args), kTest});
         REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
@@ -5208,15 +5213,28 @@ TEST_CASE("modulation commands: removing a route's source or target removes it, 
         for (auto w : warnings->asArray())
             named |= w["code"].asString() == "modulation.removed" &&
                      w["message"].asString().find("mr_1") != std::string::npos &&
-                     w["path"].asString() == "/modulations/mr_1";
+                     w["path"].asString() == "/modulations/mr_1" && w.find("reason") &&
+                     w["reason"].asString() == reason;
         CHECK(named);
         REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
         CHECK(app->view().modulations.size() == 1);  // undo brings the route back
     };
-    removedBy("fx.remove", R"({"fx": "fx_1"})");
-    removedBy("module.remove", R"({"module": "mo_2"})");
-    removedBy("rack.remove", R"({"rack": "rk_1"})");
-    removedBy("track.remove", R"({"track": "tr_1"})");
+    removedBy("fx.remove", R"({"fx": "fx_1"})", "target_removed");
+    removedBy("module.remove", R"({"module": "mo_2"})", "source_removed");
+    removedBy("rack.remove", R"({"rack": "rk_1"})", "source_removed");
+    removedBy("track.remove", R"({"track": "tr_1"})", "source_removed");
+    // A source that stays but no longer fits (a module that is not a Mod
+    // Out): strandedModulations says which end, which the warning words
+    // source_unfit. No command makes one; the model is checked directly.
+    model::EditTxn t(app->view(), 1);
+    model::Modulation stray = *app->view().modulations.find(*model::Id::parse("mr_1"));
+    stray.source.module = *model::Id::parse("mo_1");  // the rack's Out
+    t.modify<model::Modulation>(*model::Id::parse("mr_1"),
+                                [&](model::Modulation& m) { m = stray; });
+    const auto stranded = model::strandedModulations(t.preview());
+    REQUIRE(stranded.size() == 1);
+    CHECK(stranded[0].route == *model::Id::parse("mr_1"));
+    CHECK(stranded[0].atSource);
 }
 
 TEST_CASE("fx.describe marks the parameters a modulation route can take") {
@@ -5273,6 +5291,7 @@ TEST_CASE("modulation commands: a modulated send turned MIDI loses its route, wi
     CHECK(w["code"].asString() == "modulation.removed");
     CHECK(w["path"].asString() == "/modulations/mr_1");
     CHECK(w["message"].asString().find(sendId + " volume") != std::string::npos);
+    CHECK(w["reason"].asString() == "target_unfit");  // the send stays, unfit
 }
 
 TEST_CASE("modulation commands: a track's volume, pan and width, and a send's level") {
@@ -6199,3 +6218,1218 @@ TEST_CASE("off Linux, memory locking and the CPU idle request refuse with a Linu
     app->stopEngine();
 }
 #endif
+
+TEST_CASE("modulation commands: a route into a take that does not play is inert: take (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // Transport's `playing` into mo_2.in_1, so a route is fed (no `source`).
+    run("module.add", j(R"({"rack": "rk_1", "type": "transport"})"));  // mo_3
+    run("cable.add", j(R"({"from": "mo_3.playing", "to": "mo_2.in_1"})"));
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string fx = run("fx.add", fxArgs).find("fx")->asString();
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx;
+    add["target"]["param"] = "gain";
+    run("modulation.add", add);
+    // Each route on tr_1: its owner's item, and its inert reason or "".
+    const auto rows = [&] {
+        std::vector<std::pair<std::string, std::string>> out;
+        const json::Value listed = run("modulation.list", j(R"({"track": "tr_1"})"));
+        for (const auto& row : listed.find("modulations")->asArray()) {
+            const json::Value* owner = row.find("owner");
+            REQUIRE(owner);
+            const json::Value* inert = row.find("inert");
+            out.emplace_back(owner->find("item")->asString(), inert ? inert->asString() : "");
+        }
+        return out;
+    };
+    const auto inertOf = [&] {
+        const auto all = rows();
+        REQUIRE(all.size() == 1);
+        return all[0].second;
+    };
+    json::Value which = json::Value::object();
+    which["item"] = item;
+    // The active take: live.
+    CHECK(inertOf().empty());
+    // Another take active (a new, empty one): this one does not play.
+    const std::string second = run("take.add", which).find("id")->asString();
+    which["take"] = second;
+    run("take.activate", which);
+    CHECK(inertOf() == "take");
+    // Active again, live again; its item muted, it does not play.
+    which["take"] = take;
+    run("take.activate", which);
+    CHECK(inertOf().empty());
+    json::Value mute = json::Value::object();
+    mute["item"] = item;
+    mute["mute"] = true;
+    run("item.set", mute);
+    CHECK(inertOf() == "take");
+    mute["mute"] = false;
+    run("item.set", mute);
+    CHECK(inertOf().empty());
+    // A comp: the second half plays the second take. Each piece holds a
+    // copy of the first take with its route: live in the first piece, which
+    // plays it, and `take` in the second, which does not.
+    json::Value comp = j(R"({"spans": [{"from": 2, "to": 4, "index": 1}]})");
+    comp["item"] = item;
+    run("take.comp", comp);
+    const auto pieces = rows();
+    REQUIRE(pieces.size() == 2);
+    const model::Session s = app->view();
+    const auto at = [&](const std::string& piece) {
+        const model::Item* it = s.items.find(*model::Id::parse(piece));
+        REQUIRE(it);
+        return it->position;
+    };
+    const bool firstFirst = at(pieces[0].first) < at(pieces[1].first);
+    CHECK(pieces[firstFirst ? 0 : 1].second.empty());
+    CHECK(pieces[firstFirst ? 1 : 0].second == "take");
+}
+
+TEST_CASE("modulation commands: take.add {from} copies the routes into the FX it copies (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string fx = run("fx.add", fxArgs).find("fx")->asString();
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = fx;
+    add["target"]["param"] = "gain";
+    run("modulation.add", add);
+    // A copy of the take within its item: its FX's copy carries the route,
+    // with the same source, parameter and depth, in the same undo step.
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = take;
+    const auto copied = run("take.add", copy);
+    CHECK_FALSE(copied.find("warnings"));
+    const auto second = model::Id::parse(copied.find("id")->asString());
+    REQUIRE(second);
+    const model::Session s = app->view();
+    REQUIRE(s.modulations.size() == 2);
+    const model::Take* made = s.takes.find(*second);
+    REQUIRE(made);
+    REQUIRE(made->chain.size() == 1);
+    const auto onCopy = model::modulationsInto(s, made->chain[0]);
+    REQUIRE(onCopy.size() == 1);
+    const model::Modulation& route = *s.modulations.find(onCopy[0]);
+    CHECK(route.source.module == model::Id::parse("mo_2"));
+    CHECK(route.source.input == "in_1");
+    CHECK(route.target.param == "gain");
+    CHECK(route.depth == 0.25);
+    CHECK(model::modulationsInto(s, *model::Id::parse(fx)).size() == 1);
+    REQUIRE(app->undo());
+    CHECK(app->view().modulations.size() == 1);
+    CHECK_FALSE(app->view().takes.contains(*second));
+}
+
+TEST_CASE(
+    "modulation commands: take.add {from} copies the take's envelopes, so a route through one "
+    "stays live (M5)") {
+    // The copy is a copy like any other (copyTake): its FX and take carry
+    // their envelopes, so a route into a parameter reached through its
+    // envelope (the fixed gain's gain, ADR-0096 M4) plays on the copy too,
+    // and the whole survives a save and reopen.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string lfo =
+        run("module.add", j(R"({"rack": "rk_1", "type": "lfo"})")).find("module")->asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    run("cable.add", cable);
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    const auto takeFx = [&](const char* plugin) {
+        json::Value args = json::Value::object();
+        args["take"] = take;
+        args["plugin"] = plugin;
+        return run("fx.add", args).find("fx")->asString();
+    };
+    takeFx("com.suppleaudio.test.sine");  // an instrument, for the take envelope
+    const std::string gain = takeFx("com.suppleaudio.test.fixed-gain");
+    json::Value fxEnv = j(R"({"param": "0", "points": [{"bar": 1, "value": 0.5}]})");
+    fxEnv["fx"] = gain;
+    run("env.add", fxEnv);
+    json::Value takeEnv = j(R"({"param": "volume", "points": [{"beat": 0, "value": -6}]})");
+    takeEnv["take"] = take;
+    run("env.add", takeEnv);
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.1})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = gain;
+    add["target"]["param"] = "0";
+    run("modulation.add", add);
+    const std::size_t envelopes = app->view().envelopes.size();
+
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = take;
+    const auto second = model::Id::parse(run("take.add", copy).find("id")->asString());
+    REQUIRE(second);
+    {
+        const model::Session s = app->view();
+        CHECK(s.envelopes.size() == envelopes + 2);
+        const model::Take* made = s.takes.find(*second);
+        REQUIRE(made);
+        REQUIRE(made->chain.size() == 2);
+        std::size_t onTake = 0, onGain = 0;
+        for (const auto& e : s.envelopes) {
+            if (e.value->target.object == *second) ++onTake;
+            if (e.value->target.object == made->chain[1]) ++onGain;
+        }
+        CHECK(onTake == 1);
+        CHECK(onGain == 1);
+        CHECK(model::modulationsInto(s, made->chain[1]).size() == 1);
+    }
+    // The copy made active, its route plays through the copied envelope (not
+    // inert: envelope), and the original's waits for its take: here and
+    // after a save and reopen.
+    json::Value activate = json::Value::object();
+    activate["item"] = item;
+    activate["take"] = second->str();
+    run("take.activate", activate);
+    const auto inert = [](cmd::Dispatcher& on) {
+        auto r = on.execute({"modulation.list", j("{}"), kTest});
+        REQUIRE(r);
+        std::vector<std::string> out;
+        for (const auto& row : r->find("modulations")->asArray()) {
+            const json::Value* why = row.find("inert");
+            out.push_back(why ? why->asString() : "");
+        }
+        return out;
+    };
+    CHECK(inert(d) == std::vector<std::string>{"take", ""});
+    run("project.save", j(R"({"path": "copied.json"})"));
+    auto reopened = makeApp(root.path);
+    cmd::Dispatcher d2(registry, *reopened);
+    REQUIRE(d2.execute({"project.open", j(R"({"path": "copied.json"})"), kTest}));
+    CHECK(model::serializeProject(reopened->head()) == model::serializeProject(app->head()));
+    CHECK(inert(d2) == std::vector<std::string>{"take", ""});
+}
+
+TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)") {
+    // A client words a refusal from the registry entry of the command it ran:
+    // the route commands, the copies and moves and other edges addChecked
+    // refuses for (by its own lists, detail::copiedPath and closesCycle),
+    // item.heal and the stale bakes. In every *_commands.cpp each modulation
+    // code raised is checked against the command that raises it, and each
+    // modulation code a route command declares against what it can raise
+    // (review round 193 R2, round 195 F2). Warnings are not in the registry
+    // (session-model.md lists them; their reasons, model::kRouteWarningReasons).
+    //
+    // What it covers, exactly: a modulation code written as refused("…"),
+    // Error("…") or code = "…" in a command file, charged to the section
+    // from one command's name to the next; the wrapper's codes, against its
+    // lists. What it cannot see: a code a command reaches through the model
+    // (checkInvariants' modulation.cycle), which the cycle rows
+    // (detail::kCycleRows) list by the kind of edge the model's cycle check
+    // walks, held to the walker and the spec by "the cycle rows cover every
+    // edge…"; a helper's callers (checkRoute and checkCycle:
+    // modulation.add and modulation.set, and modulate through
+    // modulation.add), listed by hand; a code built another way (a
+    // variable, Error{…}), of which there is none.
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const auto declared = [&](const char* name) {
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE_MESSAGE(info, name);
+        std::set<std::string> out;
+        for (const cmd::ErrorSpec& e : info->errors) out.insert(e.code);
+        return out;
+    };
+    std::vector<std::string> undeclared;
+    const auto need = [&](const char* name, const std::string& code) {
+        if (!declared(name).count(code)) undeclared.push_back(std::string(name) + ": " + code);
+    };
+    for (const char* name :
+         {"item.paste", "item.consolidate", "item.consolidate.commit", "item.add", "clip.duplicate",
+          "scene.capture", "scene.insert", "arrangement.build", "track.duplicate", "launch.commit",
+          "item.duplicate", "item.split", "clip.add", "take.add"}) {
+        CHECK_MESSAGE(!detail::copiedPath(name).empty(), name);
+        need(name, "modulation.limit");
+    }
+    // Every command in a cycle row declares modulation.cycle (the edit
+    // wrapper's rows; the own rows by the command's checks, below).
+    for (const detail::CycleRow& row : detail::kCycleRows) {
+        need(std::string(row.command).c_str(), "modulation.cycle");
+        if (row.by != detail::CycleBy::Own)
+            CHECK_MESSAGE(detail::closesCycle(row.command), row.command);
+    }
+    need("item.heal", "item.heal_fx");
+    need("item.consolidate", "item.consolidate_stale");
+    need("item.consolidate.commit", "item.consolidate_stale");
+    need("item.mix-to-track", "item.mix_stale");
+    need("item.mix-to-track.commit", "item.mix_stale");
+    // Every command file by command: a code raised there (refused, Error, or
+    // a code assigned) belongs to the command whose section (from its
+    // `c.name = "..."` to the next) holds it; one before the file's first
+    // command is a helper's. Only modulation_commands.cpp has helpers that
+    // raise one (checkRoute, checkCycle; checkCycle passes on the model's
+    // cycle); another file's would need its callers tied here.
+    const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "src";
+    const std::set<std::string> notErrors = {"modulation.add",       "modulation.set",
+                                             "modulation.remove",    "modulation.list",
+                                             "modulation.telemetry", "modulation.stacked",
+                                             "modulation.removed",   "modulation.not_copied"};
+    std::map<std::string, std::set<std::string>> raisedBy;  // "": the helpers
+    // A command's name: `c.name = "…"` (or another builder's `x.name`), or
+    // rack_commands.cpp's `common(c, "…"`.
+    static const std::regex name(R"re((?:\b[a-z]+\.name = |common\(c, )"([a-z.\-]+)")re");
+    static const std::regex code(R"re((refused\(|Error\(|code = )"(modulation\.[a-z_]+)")re");
+    std::size_t files = 0;
+    std::vector<std::string> strayHelpers;
+    for (const auto& entry : fs::directory_iterator(src)) {
+        const std::string file = entry.path().filename().string();
+        if (!file.ends_with("_commands.cpp")) continue;
+        ++files;
+        std::ifstream in(entry.path());
+        REQUIRE(in);
+        const bool helpersHere = file == "modulation_commands.cpp";
+        std::string section, line;
+        while (std::getline(in, line)) {
+            std::smatch m;
+            if (std::regex_search(line, m, name)) section = m[1];
+            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i) {
+                if (notErrors.count((*i)[2])) continue;
+                if (section.empty() && !helpersHere)
+                    strayHelpers.push_back(file + ": " + std::string((*i)[2]));
+                else
+                    raisedBy[section].insert((*i)[2]);
+            }
+        }
+    }
+    CHECK(files > 20);  // the directory was read
+    std::string stray;
+    for (const std::string& h : strayHelpers) stray += h + "\n";
+    INFO("a helper's modulation code outside modulation_commands.cpp:\n" << stray);
+    CHECK(strayHelpers.empty());
+    // The wrapper (command_validation.h) raises only what it declares: its
+    // own lists, checked above.
+    {
+        std::ifstream in(src / "command_validation.h");
+        REQUIRE(in);
+        std::set<std::string> raised;
+        std::string line;
+        while (std::getline(in, line))
+            for (std::sregex_iterator i(line.begin(), line.end(), code), e; i != e; ++i)
+                raised.insert((*i)[2]);
+        for (const std::string& c : raised)
+            CHECK_MESSAGE((c == "modulation.limit" || c == "modulation.cycle"), c);
+    }
+    REQUIRE(raisedBy.count(""));
+    raisedBy[""].insert("modulation.cycle");  // checkCycle: the model's (checkInvariants)
+    REQUIRE(raisedBy.count("modulation.add"));
+    // What each route command can raise: its own codes, its helpers' (all
+    // of them for add and set), and for modulate modulation.add's but the
+    // envelope, which it adds before it calls it.
+    std::map<std::string, std::set<std::string>> raisable;
+    for (const auto& [command, codes] : raisedBy)
+        if (!command.empty()) raisable[command] = codes;
+    for (const char* command : {"modulation.add", "modulation.set"})
+        raisable[command].insert(raisedBy[""].begin(), raisedBy[""].end());
+    for (const std::string& c : raisable["modulation.add"])
+        if (c != "modulation.envelope") raisable["modulate"].insert(c);
+    for (const auto& [command, codes] : raisable)
+        for (const std::string& c : codes) need(command.c_str(), c);
+    // And no route command declares a modulation code it cannot raise (N1).
+    std::vector<std::string> unraisable;
+    for (const auto& [command, codes] : raisable)
+        for (const std::string& c : declared(command.c_str()))
+            if (c.rfind("modulation.", 0) == 0 && !codes.count(c))
+                unraisable.push_back(command + ": " + c);
+    std::string list;
+    for (const std::string& u : undeclared) list += u + "\n";
+    INFO("undeclared:\n" << list);
+    CHECK(undeclared.empty());
+    std::string extra;
+    for (const std::string& u : unraisable) extra += u + "\n";
+    INFO("declared, not raisable:\n" << extra);
+    CHECK(unraisable.empty());
+}
+
+TEST_CASE(
+    "modulation commands: track.duplicate copies every route into the track (round 192 F1 f)") {
+    // Its fader, pan and width, its send's level, its chain FX and its take
+    // FX: each route onto the copy's counterpart, with the same source and
+    // depth, in one undo step. A route into another track is not copied.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("track.add", j(R"({"name": "Verb", "type": "buss"})"));  // tr_2
+    run("track.add", j(R"({"name": "Keys"})"));                  // tr_3
+    const std::string send =
+        run("route.add", j(R"({"from": "tr_3", "to": "tr_2"})")).find("id")->asString();
+    const std::string chainFx =
+        run("fx.add", j(R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})"))
+            .find("fx")
+            ->asString();
+    const auto added =
+        run("item.add", j(R"({"track": "tr_3", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    json::Value takeFxArgs = json::Value::object();
+    takeFxArgs["take"] = added.find("take")->asString();
+    takeFxArgs["plugin"] = "com.suppleaudio.test.gain";
+    const std::string takeFx = run("fx.add", takeFxArgs).find("fx")->asString();
+    const auto route = [&](const char* input, json::Value target, double depth) {
+        json::Value args = json::Value::object();
+        args["source"] = json::Value::object();
+        args["source"]["module"] = "mo_2";
+        args["source"]["input"] = input;
+        args["target"] = std::move(target);
+        args["depth"] = depth;
+        run("modulation.add", args);
+    };
+    route("in_1", j(R"({"track": "tr_3", "param": "volume"})"), -6);
+    route("in_1", j(R"({"track": "tr_3", "param": "pan"})"), 100);
+    route("in_2", j(R"({"track": "tr_3", "param": "width"})"), -40);
+    json::Value sendTarget = json::Value::object();
+    sendTarget["route"] = send;
+    sendTarget["param"] = "volume";
+    route("in_3", sendTarget, 3);
+    json::Value chainTarget = json::Value::object();
+    chainTarget["fx"] = chainFx;
+    chainTarget["param"] = "gain";
+    route("in_4", chainTarget, 0.25);
+    json::Value takeTarget = json::Value::object();
+    takeTarget["fx"] = takeFx;
+    takeTarget["param"] = "gain";
+    route("in_5", takeTarget, -0.25);
+    route("in_6", j(R"({"track": "tr_1", "param": "volume"})"), -3);  // another track's
+    REQUIRE(app->view().modulations.size() == 7);
+
+    const std::string copy =
+        run("track.duplicate", j(R"({"tracks": ["tr_3"]})")).find("tracks")->at(0).asString();
+    const model::Session s = app->view();
+    CHECK(s.modulations.size() == 13);
+    const model::Id copied = *model::Id::parse(copy);
+    const model::Track& dup = *s.tracks.find(copied);
+    REQUIRE(dup.chain.size() == 1);
+    // The copy's send to tr_2, and its item's take FX.
+    std::optional<model::Id> dupSend, dupTakeFx;
+    for (const auto& e : s.routes)
+        if (e.value->from.track == copied) dupSend = e.id;
+    for (const auto& e : s.items)
+        if (e.value->track == copied) dupTakeFx = s.takes.find(e.value->takes.at(0))->chain.at(0);
+    REQUIRE(dupSend);
+    REQUIRE(dupTakeFx);
+    const auto one = [&](model::Id object, const std::string& param, const char* input,
+                         double depth) {
+        std::size_t n = 0;
+        for (const auto& e : s.modulations) {
+            const model::Modulation& m = *e.value;
+            if (m.target.object != object || m.target.param != param) continue;
+            ++n;
+            CHECK(m.source.module == model::Id::parse("mo_2"));
+            CHECK(m.source.input == input);
+            CHECK(m.depth == depth);
+        }
+        return n;
+    };
+    CHECK(one(copied, "volume", "in_1", -6) == 1);
+    CHECK(one(copied, "pan", "in_1", 100) == 1);
+    CHECK(one(copied, "width", "in_2", -40) == 1);
+    CHECK(one(*dupSend, "volume", "in_3", 3) == 1);
+    CHECK(one(dup.chain[0], "gain", "in_4", 0.25) == 1);
+    CHECK(one(*dupTakeFx, "gain", "in_5", -0.25) == 1);
+    CHECK(one(*model::Id::parse("tr_1"), "volume", "in_6", -3) == 1);  // not copied
+    REQUIRE(app->undo());
+    CHECK(app->view().modulations.size() == 7);
+}
+
+TEST_CASE("modulation: a route through a take FX's envelope moves it, at any block size (M5, R3)") {
+    // The fixed gain's gain is reached only through its envelope (ADR-0096
+    // M4). In a take's chain the lane runs on the plan's grid as a track
+    // chain's does, so the route moves the print, the same at 37, 128 and
+    // 512, and a disabled route leaves the envelope's level.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("module.add", j(R"({"rack": "rk_1", "type": "transport"})"));  // mo_3
+    run("cable.add", j(R"({"from": "mo_3.playing", "to": "mo_2.in_1"})"));
+    const auto added =
+        run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})"));
+    const auto takeFx = [&](const char* plugin) {
+        json::Value args = json::Value::object();
+        args["take"] = added.find("take")->asString();
+        args["plugin"] = plugin;
+        return run("fx.add", args).find("fx")->asString();
+    };
+    takeFx("com.suppleaudio.test.sine");
+    const std::string gain = takeFx("com.suppleaudio.test.fixed-gain");
+    json::Value env = j(R"({"param": "0", "points": [{"bar": 1, "value": 0.5}]})");
+    env["fx"] = gain;
+    run("env.add", env);
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": -0.2})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = gain;
+    add["target"]["param"] = "0";
+    const std::string route = run("modulation.add", add).find("modulation")->asString();
+    const auto mix = [&](std::uint32_t block) {
+        OfflineSettings settings;
+        settings.endSeconds = 1.0;
+        settings.blockSize = block;
+        auto r = app->renderMix(settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return r->audio.channels[0];
+    };
+    const auto routed = mix(128);
+    CHECK(mix(37) == routed);
+    CHECK(mix(512) == routed);
+    json::Value off = json::Value::object();
+    off["modulation"] = route;
+    off["enabled"] = false;
+    run("modulation.set", off);
+    const auto level = mix(128);
+    CHECK(std::any_of(level.begin(), level.end(), [](float v) { return v != 0.0f; }));
+    CHECK(level != routed);
+}
+
+TEST_CASE(
+    "modulation commands: a take FX is a target, and copies of its take keep its routes (M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto warned = [](const json::Value& r, std::string_view code,
+                           std::string_view reason = {}) {
+        const json::Value* warnings = r.find("warnings");
+        if (!warnings) return false;
+        for (auto w : warnings->asArray())
+            if (w["code"].asString() == code &&
+                (reason.empty() || (w.find("reason") && w["reason"].asString() == reason)))
+                return true;
+        return false;
+    };
+    // Bass (tr_1) holds an item whose take has a gain in its chain.
+    const auto added =
+        run("item.add", R"({"track": "tr_1", "bar": 1, "notation": "voice v; 1: C4:w"})");
+    const std::string item = added.find("item")->asString(), take = added.find("take")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["take"] = take;
+    fxArgs["plugin"] = "com.suppleaudio.test.gain";
+    auto fxAdded = d.execute({"fx.add", fxArgs, kTest});
+    REQUIRE_MESSAGE(fxAdded, (fxAdded ? "" : fxAdded.error().toString()));
+    const std::string takeFx = fxAdded->find("fx")->asString();
+
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = takeFx;
+    add["target"]["param"] = "gain";
+    auto routed = d.execute({"modulation.add", add, kTest});
+    REQUIRE_MESSAGE(routed, (routed ? "" : routed.error().toString()));
+    const auto listed = run("modulation.list", R"({"track": "tr_1"})")["modulations"];
+    REQUIRE(listed.size() == 1);
+    auto row = listed.at(0);
+    REQUIRE(row.find("owner"));
+    CHECK(row["owner"]["item"].asString() == item);
+    CHECK(row["owner"]["take"].asString() == take);
+    CHECK_FALSE(row["owner"].find("clip"));
+
+    // Every copy of the take carries the route onto its own FX: the same
+    // source and depth.
+    const auto routesOnCopies = [&] {
+        const model::Session s = app->view();
+        std::size_t n = 0;
+        for (const auto& e : s.modulations) {
+            CHECK(e.value->source.module == model::Id::parse("mo_2"));
+            CHECK(e.value->depth == 0.25);
+            if (model::takeFxOwner(s, e.value->target.object)) ++n;
+        }
+        return n;
+    };
+    json::Value dup = json::Value::object();
+    dup["item"] = item;
+    dup["to"] = 8.0;
+    const auto duplicated = d.execute({"item.duplicate", dup, kTest});
+    REQUIRE_MESSAGE(duplicated, (duplicated ? "" : duplicated.error().toString()));
+    CHECK_FALSE(warned(*duplicated, "modulation.not_copied"));
+    CHECK(routesOnCopies() == 2);
+    json::Value split = json::Value::object();
+    split["item"] = item;
+    split["at"] = 2.0;
+    REQUIRE(d.execute({"item.split", split, kTest}));
+    CHECK(routesOnCopies() == 3);  // both halves keep it
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    CHECK(routesOnCopies() == 1);
+
+    // Drums (tr_2) is heard by Bass's rack (a follower), so the route cannot
+    // follow the take there: a copy drops it and says so; a move is refused.
+    run("track.add", R"({"name": "Drums"})");  // tr_2
+    run("modulate", R"({"target": {"track": "tr_1", "param": "volume"}, "source": "follower",
+        "from": "tr_2", "rack": "rk_1"})");
+    json::Value paste = json::Value::object();
+    paste["items"] = json::Value::array();
+    json::Value one = json::Value::object();
+    one["item"] = item;
+    one["track"] = "tr_2";
+    one["position"] = 16.0;
+    paste["items"].push_back(one);
+    const auto before = app->view().modulations.size();
+    const auto pasted = d.execute({"item.paste", paste, kTest});
+    REQUIRE_MESSAGE(pasted, (pasted ? "" : pasted.error().toString()));
+    CHECK(warned(*pasted, "modulation.not_copied", "cycle"));
+    CHECK(app->view().modulations.size() == before);
+    REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+    json::Value move = json::Value::object();
+    move["item"] = item;
+    move["track"] = "tr_2";
+    const auto moved = d.execute({"item.move", move, kTest});
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "modulation.cycle");
+    CHECK(moved.error().path == "/args/track");
+    CHECK(moved.error().hint.find("another track") != std::string::npos);
+    CHECK(app->view().items.find(*model::Id::parse(item))->track == model::Id::parse("tr_1"));
+}
+
+TEST_CASE("modulation commands: fx.move onto a track the rack hears is refused (round 193 R2)") {
+    // A gain on tr_1 modulated by a follower of Listened: moved onto
+    // Listened, the rack would hear the FX it moves. The refusal is the
+    // declared modulation.cycle at the moved-to track, and nothing moves.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string listened = run("track.add", j(R"({"name": "Listened"})"))["track"].asString();
+    const std::string gain =
+        run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+            .asString();
+    json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+    modulate["from"] = listened;
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const cmd::CommandInfo* info = registry.find("fx.move");
+    REQUIRE(info);
+    CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                      [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+    json::Value move = json::Value::object();
+    move["fx"] = gain;
+    move["track"] = listened;
+    move["index"] = 0;
+    const auto moved = d.execute({"fx.move", move, kTest});
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "modulation.cycle");
+    CHECK(moved.error().path == "/args/track");
+    CHECK(moved.error().hint == "remove the route, or choose another track");
+    const auto& chain = app->view().tracks.find(*model::Id::parse("tr_1"))->chain;
+    CHECK(std::find(chain.begin(), chain.end(), *model::Id::parse(gain)) != chain.end());
+}
+
+TEST_CASE(
+    "modulation commands: a send or parent send into what the rack hears is refused "
+    "(round 195 F2)") {
+    // A gain on tr_1 modulated by a follower of the buss Listened. Each edit
+    // that would feed Listened from tr_1 closes a cycle (tr_1 -> Listened ->
+    // the rack -> tr_1): a send (route.add, route.set re-targeted), tr_1
+    // moved under Listened with its parent send on, and the parent send
+    // turned on under it. Each is refused with the declared
+    // modulation.cycle at the argument that makes the edge, and changes
+    // nothing.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string listened =
+        run("track.add", j(R"({"name": "Listened", "type": "buss"})"))["track"].asString();
+    const std::string gain =
+        run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+            .asString();
+    json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+    modulate["from"] = listened;
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const auto refused = [&](const char* name, const json::Value& args, const char* path,
+                             const char* hintWord) {
+        INFO(name << " " << json::writeCompact(args));
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+        const std::string before = model::serializeProject(app->view());
+        const auto r = d.execute({name, args, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path == std::string("/args") + path);
+        CHECK(r.error().hint.find(hintWord) != std::string::npos);
+        CHECK(model::serializeProject(app->view()) == before);
+    };
+    json::Value send = j(R"({"from": "tr_1"})");
+    send["to"] = listened;
+    refused("route.add", send, "/to", "send to another track");
+    // A send to the master, then re-targeted at Listened.
+    const std::string route =
+        run("route.add", j(R"({"from": "tr_1", "to": "tr_0"})"))["id"].asString();
+    json::Value retarget = json::Value::object();
+    retarget["route"] = route;
+    retarget["to"] = listened;
+    refused("route.set", retarget, "/to", "keep the route's destination");
+    json::Value move = j(R"({"track": "tr_1"})");
+    move["parent"] = listened;
+    refused("track.move", move, "/parent", "another parent");
+    // Under Listened with the parent send off: no edge, so it moves. Turned
+    // on there, the parent send closes the cycle.
+    run("track.set", j(R"({"track": "tr_1", "parent_send": false})"));
+    run("track.move", move);
+    refused("track.set", j(R"({"track": "tr_1", "parent_send": true})"), "/parent_send",
+            "parent send off");
+}
+
+TEST_CASE(
+    "modulation commands: a Notes module or a rack input closing a cycle is refused "
+    "(rounds 198 F1, 199, 200)") {
+    // As round 195 F2's: a gain on tr_1 modulated by a follower of the buss
+    // Listened (rk_1), plus a channel Other. Variants 0-3: a Notes module in
+    // rk_1 that follows Other while tr_1 sends MIDI to Other hears tr_1:
+    // tr_1 -> rk_1 -> tr_1 (made following Other, its source set to Other,
+    // its sends turned on, or its rack moved onto Other). Variant 4: Synth's
+    // rack has a sourceless Notes module that tr_1's MIDI send to Synth
+    // reaches; Other sends into Listened; Synth's Out picked as Other's
+    // input closes rk_2 -> Other -> Listened -> rk_1 -> tr_1 -> rk_2.
+    // Round 200: variant 5 pastes a Notes module that follows Other into
+    // rk_1; variants 6 and 7 move rk_1 onto Other, tr_1 sending MIDI to
+    // Other, then load a preset with a sourceless Notes module or patch one
+    // in (refused by the nested module.add at the module's entry); variants
+    // 8 and 9 are variant 4 with the parent send turned off, or turned on
+    // when it already was: the record rack closed the cycle (F3). Round 202
+    // F1: variant 10 is variant 4 with Other under Listened, its parent send
+    // off, turned on with the record rack: Other's send to Listened makes
+    // the parent send redundant, so the answer is the record rack's, and
+    // following its hint (the parent send alone) is accepted. Round 204 F1:
+    // an argument that leaves the stored value as it is picks no row, so
+    // variant 11 (route.set of Other's send to Listened {from: tr_1, to:
+    // Listened, unchanged}) answers /from, and variant 12 (module.set {source:
+    // Other, unchanged, source_sends: true}) answers /source_sends; following
+    // either hint is accepted. Each is refused with the declared
+    // modulation.cycle at its argument, with its row's hint, and changes
+    // nothing.
+    for (int variant = 0; variant < 13; ++variant) {
+        INFO("variant " << variant);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *app);
+        app->setupFixture(d, "song");
+        auto run = [&](std::string name, const json::Value& args) {
+            auto r = d.execute({std::move(name), args, kTest});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string listened =
+            run("track.add", j(R"({"name": "Listened", "type": "buss"})"))["track"].asString();
+        const std::string gain =
+            run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+                .asString();
+        json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+        modulate["from"] = listened;
+        modulate["target"] = json::Value::object();
+        modulate["target"]["fx"] = gain;
+        modulate["target"]["param"] = "gain";
+        const std::string rack = run("modulate", modulate)["rack"].asString();
+        const std::string other = run("track.add", j(R"({"name": "Other"})"))["track"].asString();
+        const auto midiSend = [&](const std::string& to) {
+            json::Value send = j(R"({"from": "tr_1", "midi": {}})");
+            send["to"] = to;
+            run("route.add", send);
+        };
+        const auto notesIn = [&](const std::string& in, const std::string& source) {
+            json::Value notes = j(R"({"type": "notes"})");
+            notes["rack"] = in;
+            if (!source.empty()) notes["source"] = source;
+            return run("module.add", notes)["module"].asString();
+        };
+        const char* name = "";
+        std::string path;
+        const char* rowCommand = nullptr;  // the row whose hint it answers, when not name's
+        std::string rowPath;
+        json::Value args = json::Value::object();
+        const auto onOther = [&] {
+            json::Value move = json::Value::object();
+            move["rack"] = rack;
+            move["track"] = other;
+            run("rack.set", move);
+            midiSend(other);
+        };
+        if (variant == 0) {  // made following Other
+            midiSend(other);
+            name = "module.add";
+            path = "/source";
+            args = j(R"({"type": "notes"})");
+            args["rack"] = rack;
+            args["source"] = other;
+        } else if (variant == 1) {  // following Fourth, then Other
+            midiSend(other);
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            name = "module.set";
+            path = "/source";
+            args["module"] = notesIn(rack, fourth);
+            args["source"] = other;
+        } else if (variant == 2) {  // following Other, its sends off, then on
+            const std::string module = notesIn(rack, other);
+            json::Value offSends = j(R"({"source_sends": false})");
+            offSends["module"] = module;
+            run("module.set", offSends);
+            midiSend(other);
+            name = "module.set";
+            path = "/source_sends";
+            args["module"] = module;
+            args["source_sends"] = true;
+        } else if (variant == 3) {  // a sourceless Notes module follows its rack's channel
+            midiSend(other);
+            notesIn(rack, "");
+            name = "rack.set";
+            path = "/track";
+            args["rack"] = rack;
+            args["track"] = other;
+        } else if (variant == 5) {  // a pasted Notes module that follows Other
+            midiSend(other);
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = fourth;
+            json::Value copy = json::Value::object();
+            copy["modules"] = json::Value::array();
+            copy["modules"].push_back(notesIn(run("rack.add", addRack)["rack"].asString(), other));
+            run("module.copy", copy);
+            name = "rack.paste";
+            path = "/rack";
+            args["rack"] = rack;
+        } else if (variant == 6) {  // a preset's sourceless Notes module
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = fourth;
+            const std::string keys = run("rack.add", addRack)["rack"].asString();
+            notesIn(keys, "");
+            json::Value save = j(R"({"name": "Keys"})");
+            save["rack"] = keys;
+            run("rack.preset.save", save);
+            onOther();
+            name = "rack.preset.load";
+            path = "/rack";
+            args = j(R"({"name": "Keys"})");
+            args["rack"] = rack;
+        } else if (variant == 7) {  // a patched-in sourceless Notes module
+            onOther();
+            name = "rack.patch";
+            path = "/modules/keys/rack";
+            rowCommand = "module.add";
+            rowPath = "/rack";
+            args = j(R"({"modules": {"keys": {"type": "notes"}}})");
+            args["rack"] = rack;
+        } else if (variant == 11) {  // a send's source moved to tr_1, its destination kept
+            json::Value send = json::Value::object();
+            send["from"] = other;
+            send["to"] = listened;
+            name = "route.set";
+            path = "/from";
+            args["route"] = run("route.add", send)["id"].asString();
+            args["from"] = "tr_1";
+            args["to"] = listened;
+        } else if (variant == 12) {  // following Other, sends off; its source given again
+            const std::string module = notesIn(rack, other);
+            json::Value offSends = j(R"({"source_sends": false})");
+            offSends["module"] = module;
+            run("module.set", offSends);
+            midiSend(other);
+            name = "module.set";
+            path = "/source_sends";
+            args["module"] = module;
+            args["source"] = other;
+            args["source_sends"] = true;
+        } else {  // Synth's Out as Other's input (round 199 probe I; 8, 9 round 200 F3; 10)
+            const std::string synth =
+                run("track.add", j(R"({"name": "Synth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = synth;
+            json::Value made = run("rack.add", addRack);
+            const std::string synthRack = made["rack"].asString();
+            notesIn(synthRack, "");
+            midiSend(synth);
+            json::Value send = json::Value::object();
+            send["from"] = other;
+            send["to"] = listened;
+            run("route.add", send);
+            const std::string out = made["out"].asString();
+            name = "track.set";
+            path = "/record_rack";
+            args["track"] = other;
+            args["record_rack"] = out;
+            if (variant == 8) args["parent_send"] = false;
+            if (variant == 9) args["parent_send"] = true;  // on already: no new edge
+            if (variant == 10) {  // under Listened, its parent send off, then on
+                json::Value move = json::Value::object();
+                move["track"] = other;
+                move["parent"] = listened;
+                run("track.move", move);
+                json::Value off = j(R"({"parent_send": false})");
+                off["track"] = other;
+                run("track.set", off);
+                args["parent_send"] = true;
+            }
+            // Every kind of edge the check walks is in this project.
+            std::set<model::CycleEdgeKind> kinds;
+            for (const model::CycleEdge& e : model::cycleEdges(app->view())) kinds.insert(e.kind);
+            CHECK(kinds.size() == model::kCycleEdgeKinds.size());
+        }
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+        const std::string before = model::serializeProject(app->view());
+        const auto r = d.execute({name, args, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path == "/args" + path);
+        const std::string_view wantCommand = rowCommand ? rowCommand : name;
+        const std::string_view wantPath = rowCommand ? std::string_view(rowPath) : path;
+        const auto row = std::find_if(detail::kCycleRows.begin(), detail::kCycleRows.end(),
+                                      [&](const detail::CycleRow& x) {
+                                          return x.by == detail::CycleBy::Wrapper &&
+                                                 x.command == wantCommand && x.path == wantPath;
+                                      });
+        CHECK_MESSAGE(row != detail::kCycleRows.end(), "no row " << wantCommand << " " << wantPath);
+        if (row != detail::kCycleRows.end()) CHECK(r.error().hint == row->hint);
+        CHECK(model::serializeProject(app->view()) == before);
+        if (variant == 10) {  // its hint followed: the record rack left out
+            json::Value parentOnly = j(R"({"parent_send": true})");
+            parentOnly["track"] = args["track"];
+            const auto followed = d.execute({"track.set", parentOnly, kTest});
+            CHECK_MESSAGE(followed, (followed ? "" : followed.error().toString()));
+        }
+        if (variant == 11 || variant == 12) {  // its hint followed: that argument left out
+            json::Value kept = args;
+            kept.asObject().erase(variant == 11 ? "from" : "source_sends");
+            const auto followed = d.execute({name, kept, kTest});
+            CHECK_MESSAGE(followed, (followed ? "" : followed.error().toString()));
+        }
+    }
+}
+
+TEST_CASE(
+    "the cycle rows cover every edge the model's cycle check walks, as the spec's table "
+    "lists them (rounds 199, 200)") {
+    // The check adds every edge with its kind (model::CycleEdgeKind, so the
+    // compiler holds the sites); a kind without a row fails here, so a new
+    // kind cannot reach the walker unrefused and undeclared. What this
+    // cannot see: a new edge of an existing kind reaching the check through
+    // what feeds it (midiFollowers, a modulation target's node, a new kind
+    // of route end), as round 198 F1's did. The table in session-model.md
+    // ("Edits that can close a modulation cycle") lists exactly the rows:
+    // edge, command, argument and where it points.
+    const fs::path engine = fs::path(__FILE__).parent_path().parent_path();
+    std::set<std::string> walked;
+    for (const model::CycleEdgeKind kind : model::kCycleEdgeKinds) {
+        CHECK_FALSE(model::cycleEdgeWord(kind).empty());
+        walked.insert(std::string(model::cycleEdgeWord(kind)));
+    }
+    CHECK(walked.size() == model::kCycleEdgeKinds.size());
+    std::set<std::string> rowKinds;
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> rows;
+    for (const detail::CycleRow& r : detail::kCycleRows) {
+        const std::string edge(model::cycleEdgeWord(r.edge));
+        CHECK_MESSAGE((r.by == detail::CycleBy::Own || !r.hint.empty()), r.command);
+        rowKinds.insert(edge);
+        rows.insert({edge, std::string(r.command),
+                     r.field.empty() ? std::string("(any)") : std::string(r.field),
+                     std::string(r.path)});
+    }
+    CHECK(walked == rowKinds);
+    // The spec's table: | `edge` | `command` | `field` or (any) | `/path` | hint |
+    std::ifstream spec(engine.parent_path().parent_path() / "docs" / "specs" / "session-model.md");
+    REQUIRE(spec);
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> documented;
+    std::string line;
+    bool inTable = false;
+    static const std::regex row(
+        R"re(^\| `([a-z_]+)` \| `([a-z.\-]+)` \| (`[a-z_]+`|\(any\)) \| `(/[a-z_]+)` \|)re");
+    while (std::getline(spec, line)) {
+        if (line.find("| Edge | Command | Argument | Refused at | Hint |") != std::string::npos) {
+            inTable = true;
+            continue;
+        }
+        if (!inTable) continue;
+        if (line.rfind("|", 0) != 0) break;
+        std::smatch m;
+        if (!std::regex_search(line, m, row)) continue;  // the separator
+        std::string field = m[3];
+        if (field != "(any)") field = field.substr(1, field.size() - 2);
+        documented.insert({m[1], m[2], field, m[4]});
+    }
+    for (const auto& r : rows)
+        CHECK_MESSAGE(documented.count(r),
+                      "not in the spec: " << std::get<1>(r) << " " << std::get<2>(r));
+    for (const auto& r : documented)
+        CHECK_MESSAGE(rows.count(r),
+                      "not in the code: " << std::get<1>(r) << " " << std::get<2>(r));
+}
+
+TEST_CASE(
+    "track.set: a parent send closing a plain and a modulation cycle answers the plain one "
+    "(round 198 N2)") {
+    // X, a buss under the buss P with its parent send off; a send P -> X; a
+    // follower of P modulating a gain on X. X's parent send turned on closes
+    // X -> P -> X (plain) and P -> the rack -> X -> P (modulation). Whichever
+    // was made first, the answer is route.cycle: removing the modulation
+    // would leave the plain cycle.
+    for (const bool modulationFirst : {false, true}) {
+        INFO("modulation first " << modulationFirst);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *app);
+        app->setupFixture(d, "song");
+        auto run = [&](std::string name, const json::Value& args) {
+            auto r = d.execute({std::move(name), args, kTest});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string p =
+            run("track.add", j(R"({"name": "P", "type": "buss"})"))["track"].asString();
+        const std::string x =
+            run("track.add", j(R"({"name": "X", "type": "buss"})"))["track"].asString();
+        json::Value off = json::Value::object();
+        off["track"] = x;
+        off["parent_send"] = false;
+        run("track.set", off);
+        json::Value move = json::Value::object();
+        move["track"] = x;
+        move["parent"] = p;
+        run("track.move", move);
+        json::Value send = json::Value::object();
+        send["from"] = p;
+        send["to"] = x;
+        const auto modulateX = [&] {
+            json::Value fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+            fx["track"] = x;
+            json::Value m = j(R"({"source": "follower", "depth": 0.2})");
+            m["from"] = p;
+            m["target"] = json::Value::object();
+            m["target"]["fx"] = run("fx.add", fx)["fx"].asString();
+            m["target"]["param"] = "gain";
+            run("modulate", m);
+        };
+        if (modulationFirst) modulateX();
+        run("route.add", send);
+        if (!modulationFirst) modulateX();
+        json::Value on = json::Value::object();
+        on["track"] = x;
+        on["parent_send"] = true;
+        const auto r = d.execute({"track.set", on, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "route.cycle");
+        CHECK(r.error().path == "/args/parent_send");
+    }
+}
+
+TEST_CASE("modulation commands: exploding takes onto tracks may not close a cycle (M5, G2)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // T (tr_3) sits in the buss F (tr_2) with its parent send off, so a rack
+    // on T may follow F and modulate an FX on T's second take: T does not
+    // feed F. A new channel for that take, under F with its send on, would.
+    run("track.add", j(R"({"name": "F", "type": "buss"})"));
+    run("track.add", j(R"({"name": "T", "parent": "tr_2"})"));
+    run("track.set", j(R"({"track": "tr_3", "parent_send": false})"));
+    const auto added = run("item.add", j(R"({"track": "tr_3", "bar": 1, "notation": "1: C4:w"})"));
+    const std::string item = added.find("item")->asString();
+    json::Value copy = json::Value::object();
+    copy["item"] = item;
+    copy["from"] = added.find("take")->asString();
+    const std::string second = run("take.add", copy)["id"].asString();
+    json::Value fx = json::Value::object();
+    fx["take"] = second;
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    const std::string gain = run("fx.add", fx)["fx"].asString();
+    json::Value modulate = j(R"({"source": "follower", "from": "tr_2", "depth": 0.2})");
+    modulate["target"] = json::Value::object();
+    modulate["target"]["fx"] = gain;
+    modulate["target"]["param"] = "gain";
+    run("modulate", modulate);
+    const auto routes = app->view().modulations.size();
+    const auto tracks = app->view().tracks.size();
+    json::Value explode = json::Value::object();
+    explode["item"] = item;
+    auto refused = d.execute({"item.explode-takes", explode, kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.cycle");
+    CHECK(refused.error().path == "/args/item");
+    CHECK(refused.error().hint == "remove the route, or use mode serial");
+    CHECK(app->view().tracks.size() == tracks);  // no channel made
+    // Serial keeps every take on T: allowed, the route still on its FX.
+    explode["mode"] = "serial";
+    run("item.explode-takes", explode);
+    CHECK(app->view().modulations.size() == routes);
+    CHECK(model::trackOfTakeFx(app->view(), *model::Id::parse(gain)) == model::Id::parse("tr_3"));
+}
+
+TEST_CASE(
+    "modulation commands: a copy past 4096 routes is refused whole; a recording's is trimmed "
+    "(M5)") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, const json::Value& args) {
+        auto r = d.execute({std::move(name), args, kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto added = run("item.add", j(R"({"track": "tr_1", "bar": 1, "notation": "1: C4:w"})"));
+    const std::string item = added.find("item")->asString();
+    json::Value fx = json::Value::object();
+    fx["take"] = added.find("take")->asString();
+    fx["plugin"] = "com.suppleaudio.test.gain";
+    const auto takeFx = *model::Id::parse(run("fx.add", fx)["fx"].asString());
+    json::Value add = j(R"({"source": {"module": "mo_2", "input": "in_1"}, "depth": 0.25})");
+    add["target"] = json::Value::object();
+    add["target"]["fx"] = takeFx.str();
+    add["target"]["param"] = "gain";
+    const auto original = *model::Id::parse(run("modulation.add", add)["modulation"].asString());
+    // Filled to the limit with routes into the track's own gain (fx_1), then
+    // opened: one more copy of the take's route would pass it.
+    {
+        const model::Session& head = app->head();
+        model::EditTxn t(head, head.version + 1);
+        const model::Id modOut = *model::Id::parse("mo_2"), gain = *model::Id::parse("fx_1");
+        for (std::size_t i = head.modulations.size(); i < model::kMaxModulations; ++i)
+            t.create(model::Modulation{{modOut, "in_1"}, {gain, "p" + std::to_string(i)}, 0.1});
+        auto full = t.commit();
+        REQUIRE_MESSAGE(full, (full ? "" : full.error().toString()));
+        REQUIRE(writeFileAtomic(root.path / "full.json", model::serializeProject(*full)));
+    }
+    run("project.open", j(R"({"path": "full.json"})"));
+    REQUIRE(app->head().modulations.size() == model::kMaxModulations);
+    for (const char* command : {"item.duplicate", "item.split"}) {
+        CAPTURE(command);
+        json::Value args = json::Value::object();
+        args["item"] = item;
+        if (std::string_view(command) == "item.split") args["at"] = 2.0;
+        auto refused = d.execute({command, args, kTest});
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "modulation.limit");
+        CHECK(refused.error().path == "/args/item");
+        CHECK(refused.error().message.find("4097") != std::string::npos);
+        CHECK(refused.error().hint.find("remove at least 1 ") != std::string::npos);
+        CHECK(app->head().items.size() == 1);  // nothing made
+    }
+    // The overdub's settling trims instead: the copy's route goes, named
+    // with the limit as its reason, and the rest of the edit stands.
+    model::EditTxn t(app->head(), app->head().version + 1);
+    model::Modulation copy = *app->head().modulations.find(original);
+    const model::Id made = t.create(copy);
+    t.copiedRoute(made, original);
+    const auto dropped = settleCopiedRoutes(t, true);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].original == original);
+    CHECK(dropped[0].reason == model::RouteWarningReason::Limit);
+    CHECK(dropped[0].message.find("modulation.add") != std::string::npos);
+    CHECK_FALSE(t.exists<model::Modulation>(made));
+    CHECK(t.preview().modulations.size() == model::kMaxModulations);
+    // A copy whose source the destination lacks (a paste from a retained
+    // version naming a Mod Out since removed) goes first, with reason
+    // source (round 193: the warning carries it).
+    model::EditTxn u(app->head(), app->head().version + 1);
+    model::Modulation orphan = *app->head().modulations.find(original);
+    orphan.source.module = *model::Id::parse("mo_1");  // the rack's Out, not a Mod Out
+    const model::Id strayCopy = u.create(orphan);
+    u.copiedRoute(strayCopy, original);
+    const auto unsourced = settleCopiedRoutes(u, false);
+    REQUIRE(unsourced.size() == 1);
+    CHECK(unsourced[0].reason == model::RouteWarningReason::Source);
+    CHECK_FALSE(u.exists<model::Modulation>(strayCopy));
+}

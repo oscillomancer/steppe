@@ -1201,8 +1201,9 @@ keys. The target must support modulation. Numeric semantic keys take precedence.
 
 A Mod Out module takes a rack's signals out of the rack: `modulation.add
 {source: {module, input}, target: {fx, param}, depth}` routes one of its
-inputs to a parameter of a plug-in on a track, where `fx.describe {full:
-true}` marks the parameter `modulatable`. Depth is the offset at a full
+inputs to a parameter of a plug-in on a track or in a take's chain (an
+item's or a clip's), where `fx.describe {full: true}` marks the parameter
+`modulatable`. Depth is the offset at a full
 signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
 automation.
@@ -1222,6 +1223,21 @@ gesture is one undo step), `modulation.remove` removes it, and
 into its Mod Out input and, when it cannot play, why: `source` when
 nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
 `modulation.removed` warning.
+
+A route into a take's plug-in moves it only while that take plays; for
+another take of the item it waits. Copies keep their routes:
+duplicating, splitting, pasting or otherwise copying an item or a clip
+copies the routes into its take's plug-ins, and duplicating a track
+copies every route into its faders, sends and plug-ins. A copy at another
+time hears its sources at that time, so it has the same routes, not
+necessarily the same sound. When a copy lands
+where the route cannot follow (its Mod Out is gone, or the copy's track
+feeds the rack that modulates it), the route is left out and the result
+says which, with a `modulation.not_copied` warning. Moving an item to such
+a track is refused. Healing a split, or joining comp pieces, needs the
+pieces' routes to match. A project holds at most 4096 routes: a copy that
+would pass that is refused, except a recording, which keeps the take and
+leaves out the routes that do not fit.
 
 A route can also take a track's volume (`{track, param: "volume"}`, depth
 in dB, −48 to 48), pan or width (percent, −200 to 200), or the level of an

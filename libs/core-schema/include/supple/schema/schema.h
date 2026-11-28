@@ -32,6 +32,9 @@ struct DecodeOptions {
 };
 struct Warning {
     std::string code, message, path;
+    // Where the code names its causes: a short fixed word for this one
+    // (command-bus.md); empty, and left out of the reply, otherwise.
+    std::string reason = {};
 };
 struct CheckCtx {
     std::vector<Error>* errors = nullptr;

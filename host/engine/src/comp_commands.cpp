@@ -465,6 +465,13 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
             model::setItemEndToItemEnd(s, l, r);
             l.fadeOut = r.fadeOut;
             txn.put(group[0], std::move(l));
+            // Its routes match the left piece's (joinablePieces), which
+            // carries them on: no removal warning (ADR-0096 M5).
+            const model::Session joined = engine.view();
+            for (Id t : r.takes)
+                if (const model::Take* tk = joined.takes.find(t))
+                    for (Id fx : tk->chain)
+                        for (Id route : model::modulationsInto(joined, fx)) txn.routeLivesOn(route);
             for (Id t : r.takes) SUPPLE_TRY(removeTakeObjects(txn, engine.view(), t));
             txn.remove<model::Item>(group[m]);
             removed.insert(group[m]);

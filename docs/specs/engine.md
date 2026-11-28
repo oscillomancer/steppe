@@ -142,7 +142,12 @@ a structural edit while the preceding plan remains prepared.
   `delay = S(v) + b - S(u) - a`. Pre-FX taps have offset zero, other main
   taps and auxiliary source channels use the source chain latency. Key
   destinations use `stage.before`; main sums and auxiliary destinations use
-  zero. Each auxiliary link participates separately. Padding remains on
+  zero. Each auxiliary link participates separately. A modulation edge's
+  destination offset (§1.4.1) can be negative: for a mixer target in a chain
+  of under 32 samples, and for a take-chain stage, whose chain runs ahead of
+  the track. The same two formulas hold. The edge sets a minimum on the
+  target's forward arrival: the source's arrival plus `a` less `b`. The
+  delay stays non-negative. Padding remains on
   shorter fan-out paths; independent sources arrive at a sum aligned without
   padding the faster source. Parallel FX retain their internal alignment.
 - The same main-master anchor is used in realtime and offline plans. Nodes
@@ -301,7 +306,8 @@ until it is released.
 - **Edges.** Every route, enabled or not, is an edge from its source rack's
   node to the node that applies its target; `enabled` only zeroes its
   contribution (ADR-0096, amendment M-l). That is the track for an FX in a chain
-  and for a track's mixer targets; for a send's level it is the node that
+  or in a take's chain (the track that holds the take's item or clip; M5,
+  below) and for a track's mixer targets; for a send's level it is the node that
   applies the level (the source strip, or the rack for a rack send). The
   edge orders the source first in `topoOrder`, is a dependency in both
   executors' schedules, and joins the latency solve (§1.3) as a sidechain
@@ -311,7 +317,15 @@ until it is released.
   - its `before` is the chain latency ahead of the target stage: 0 for an
     input-chain stage, which is outside compensation; for a mixer target
     the whole chain less one grid interval (32 frames), since it reads one
-    interval ahead;
+    interval ahead. In a chain of under 32 samples that `before` is
+    negative, and the track waits for the difference where it has no other
+    read-ahead (shipped since M1).
+    - In a project without latency, a fader route adds up to 32 samples plus
+      the tap. It adds them to the plan's output latency when its path is
+      the longest, and the user meets them in the heard position, sync and
+      MIDI clock lead, and record alignment.
+    - A disabled or inert route costs the same, since every route is an
+      edge (M-l);
   - it carries a delay line of held values sized by that compensation, so
     the value the rack computed for timeline sample t reaches the target as
     the target plays t;
@@ -321,6 +335,194 @@ until it is released.
   A late source path delays the target as a sidechain does. Cycles are
   refused at edit time (`modulation.cycle`); self-modulation is not
   supported.
+- **Take FX targets (M5, ADR-0096 amended 2026-11-25, round 187; built
+  2026-11-26).** A route into an FX of a take's chain is an
+  edge into the track that holds the take's item or clip.
+  - **Order.** `model::modulationTargetNode`, and with it `topoOrder`, maps
+    a take FX to that track. The solve's induction needs the node indices
+    in topological order with every modulation edge counted (plan.cpp, the
+    forward and reverse passes).
+  - **`ModEdge`.** It names its chain (`takeChain`, an index into
+    `Node::takeChains`, found by the take's id) and the stage in it
+    (`takeStage`). `prepare` binds the CLAP id and the `mods` slots or the
+    lane (M4) on that stage, as on a chain stage.
+  - **A take the plan does not play.** When the plan compiles no chain for
+    the take (an inactive take, an item the plan leaves out), the edge
+    keeps `takeChain` −1. It compiles like an inert route: no values
+    buffer and no delay, `before` 0. It stays an edge for order and
+    liveness, and it sends nothing.
+    - `modulation.list` says so: `inert: "take"`, decided by
+      `model::takeFxPlays`, which holds when the take is its item's active
+      take and the item is not muted, or its clip's active take (a muted
+      clip's chain still compiles). That is the rule the plan compiles take
+      chains by. `take` comes before the other reasons, since the plan binds
+      nothing there. What the plan adds at run time (a recording master's
+      lane mute or silence, a render without launches) is not reported.
+    - A comp: `take.comp` splits the item into pieces that each hold a copy
+      of every take, and each copy keeps its routes. A take that plays in
+      only some pieces is played there: its copies' routes are live in
+      those pieces and `take` in the others, each route answering for the
+      piece that holds it.
+  - **A render without launches.** `dropClipChains` erases the clip chains
+    after compile (offline.cpp). It sets the `takeChain` of their edges to
+    −1 as well, so those edges are treated as above. Item chains come
+    before clip chains in the vector, so their indices survive the drop.
+  - **Its `before`.** A take chain runs ahead of the track: an item's chain
+    by its own latency (`TakeChain::latency`), a clip's chain by the node's
+    `launchLead`. Stage k of the chain therefore processes timeline sample
+    t where the track's input plays t − (lead − before_k).
+    - The edge's `before` is `itemShift − S + before_k − lead`.
+    - `itemShift − S` is 0 on a channel. On a master it is the chain's
+      latency, because a master's items play after its chain. Masters hold
+      no clips.
+    - The `before` is negative for a channel's items and for clips. It may
+      be positive for a master's items, so the code asserts nothing about
+      its sign.
+  - **The solve.** §1.3's formulas take this `before` unchanged. The
+    target's forward arrival must be at least the source's arrival plus the
+    tap less `before`.
+    - Where the track has less read-ahead than that, it waits for its
+      source: by at most the lead plus the tap beyond the source's own
+      arrival. A late source path does the same (above).
+    - A negative `before` is not new to the solve. A mixer target's is
+      negative under 32 samples of chain latency.
+  - **A new cause of latency change (R7).** While a take FX is modulated,
+    activating a take, muting an item, or moving an item into or out of
+    the plan changes the solve: the edge's `before` moves between 0 and the
+    stage's value.
+    - The plan's output latency can then move, and the swap re-anchors the
+      affected paths with its crossfade, as any latency change does.
+    - Today none of those edits changes the solve.
+  - **Entry, one grid interval early (F1).** Stages are sent their
+    modulation only at grid points. So a take chain is entered, and its
+    stages reset, at least one grid interval (32 frames) before its input
+    reaches the item or clip.
+    - **Why.** The grid point at or before the onset then always falls
+      inside a block the chain runs. Its sum reaches the onset at any block
+      size, in both executors.
+    - **A stage that smooths.** The value at the onset is exact at any
+      block size, but the grid values before it are sent from the entry,
+      which falls on a block boundary. So a stage with memory (parameter
+      smoothing) gives an output after the onset that depends on the block
+      size, and after an off-grid loop wrap on the pass's alignment; live
+      equals offline at the same alignment (review round 193, measured with
+      a gain smoothed over 64 frames). So the tests stay on the memoryless
+      gain. A switch's entry (G1) is proved by red runs: the audio and the
+      MIDI switch tests in test_clip_player_modulation.cpp fail without the
+      live preenter (review round 195). The early entry after a wrap (S2)
+      is covered, not proved by a red run (STATUS).
+    - **Item chains.** Every branch where `processTake` decides that the
+      chain meets its item (unity, the early wrap, the playrate path)
+      widens the input end by `kAutomationStep`.
+      - This holds for every item chain, modulated or not. So it moves
+        every item chain's reset up to one block earlier.
+      - Plug-ins whose state runs free from their reset (an LFO's phase)
+        may render differently in existing projects, and goldens may move.
+        That state depended on the block size before as well, so this is
+        not a regression.
+    - **Modulated clip chain.** A node has one when any route edge reaches
+      a stage of one of its clip chains: enabled, disabled or inert (every
+      route is an edge, M-l). The compile decides it.
+      - An edit that changes this changes the node's `launchEarly`.
+      - A committed launch whose new early frame has already passed is
+        voided and placed again, by the existing path. So such an edit can
+        move a launch already placed.
+    - **Clip chains: two switches (round 188 G1).** On a node with a
+      modulated clip chain, a launch is known to the node
+      `launchLead + kAutomationStep` frames before it applies.
+      - At that point only the incoming clip's chain is entered (activated
+        and reset), and it runs on silence. It is in a third state,
+        entered, beside playing and inactive (`processClipChain`
+        otherwise deactivates a chain that has no input and is not heard).
+      - The input switch, `launchNext`, stays at `launchLead` before the
+        switch, as now. So an outgoing MIDI clip still ends its notes at
+        the switch, and a relaunched audio clip plays on to it.
+      - A chain already active, such as the relaunch of the playing clip,
+        is not entered again.
+      - The replay has the same two switches, the entry and the input
+        switch, at the same frames.
+      - Like `launchNext`, the entry is one slot per node. Launches closer
+        together than the early window overwrite it as they overwrite
+        `launchNext` (an existing rule). The window is 32 frames wider.
+    - **What it costs.** `launchEarly` is the larger of
+      `launchLead + kAutomationStep` and the warm-up, and placement keeps
+      that much room before the switch.
+      - On such a node an unquantized launch applies up to 32 frames later
+        than it would otherwise.
+      - A quantized launch pressed within 32 frames more before its
+        boundary takes the next boundary: the last
+        `launchLead + 32 + block` frames instead of the last
+        `launchLead + block`.
+      - The replay places launches the same way, so real time equals the
+        replay and `as_heard` is unchanged.
+    - **Locates.** A locate (play, a seek) enters at the locate, as a play
+      start does, and both runs start there.
+    - **Take FX lanes.** The same early entry makes their first value
+      independent of the block size. Before M5 they sent the curve at
+      frame 0 of a block-dependent entry block.
+  - **The delay.** It runs every block at the node (`processNode` step 0),
+    whether or not the take chain runs, so the values stay
+    timeline-aligned for a chain that is entered.
+  - **Delivery.** `processTake` and `processClipChain` call
+    `modulateStage` for each of their stages after the stage's automation.
+    It runs on the node's absolute grid, the same grid and origin as the
+    track's chain.
+    - A chain that does not run in a block is sent nothing, and its memo
+      goes stale.
+    - At entry `reset()` moves `modulationEpoch()`, so the first grid point
+      sends every modulated parameter.
+    - Bridged plug-ins get the bridge's event cap (`kBridgeBlockEvents`) as
+      on a chain stage.
+  - **Lanes (M4).** A take FX lane bound to a route sends its summed value
+    at its usual points. On a clip those are in clip time (§1.4.2, C2), and
+    the 32-frame points follow the node's grid.
+  - **Under a master playrate.** The lead, `before_k` and the delay are in
+    device frames, as for a chain stage.
+  - **The code's steps (S3).** Nothing new runs on the audio path: the
+    edge is compiled into the plan and bound at prepare, and the per-block
+    work is the existing delay and `modulateStage`. Today's code does not
+    reach take-chain stages, so M5 changes:
+    - **The model.** `modulationTargetNode`, `trackOfChainFx` (or a
+      `trackOfTakeFx` beside it) and the checker's range, plus
+      `strandedModulations` and `dropUnplayableModulations`.
+    - **The compile.** The plan's edge compile finds `takeChain` and
+      `takeStage`; `dropClipChains` resets them (above).
+    - **R1, memo slots.** `bindModulation` scans take chains for the
+      parameters the pool remembers as modulated. Without that, removing
+      a take FX's last route never sends its 0.
+    - **R2, event room.** The take-chain stages' event reservation adds
+      `st.modEvents`, as the chain and input-chain stages' does.
+    - **R3, M4 lanes.** Both take-chain `automateStage` calls pass the plan
+      (`&p`), so a lane bound to a route reads its sum.
+    - **R4, carrying across tracks.** `carryMoved` matches take-chain
+      stages by instance across nodes, so a take moved to another track
+      while playing keeps its memo, and sends the 0 of a route removed in
+      the same swap.
+    - **R5.** The `takeChain` index after `dropClipChains` (above).
+    - **R6, cost.** Every edge's delay runs every block, and copies
+      multiply routes with the same Mod Out input and delay length. A
+      route into a take the plan does not play costs no delay (above).
+      Sharing a delay line between edges with the same (Mod Out, input,
+      length) is allowed, and is not required.
+  - **The step's tests.** Besides the plan's alignment and the render
+    tests:
+    - an item whose onset falls between a block start and the next grid
+      point, played from a position off the 32 grid: real time at 128 and
+      512 equals the offline render, in both executors (F1, S1);
+    - the same for a clip chain coming in;
+    - on a node with a modulated clip chain, a MIDI clip switch and an
+      audio relaunch equal the same launches without the route, apart from
+      the modulated parameter (G1);
+    - a loop with a latent take chain whose lead exceeds the track's
+      read-ahead, with the route on a stage k > 0, across the early wrap
+      (S2);
+    - a mixer target's alignment in a chain of under 32 samples. This is
+      coverage of shipped behaviour, so it cannot fail first;
+    - one test per bake: all four are exact (none is refused).
+  - **What it costs.** Modulating a take FX can add up to its chain's lead,
+    beyond the source's arrival, to its track's arrival, and only where the
+    track lacks that much read-ahead. The added cost reaches the plan's
+    output latency only when this path is the longest.
 - **Liveness.** A modulation edge propagates liveness both ways, like a MIDI
   edge (§2.1): a live source makes its target live, and a live target pulls
   its source live. A route's source and target therefore always share an
@@ -352,7 +554,13 @@ until it is released.
     grid point, as does a stage that first processes or first has a route
     after its run's first block (it once sent at the first frame of the
     block the plan arrived in; round 210 F1), and an input chain that
-    first runs then, its track armed while playing (round 212 F1).
+    first runs then, its track armed while playing (round 212 F1). A
+    node's take chains start a run with its own chains, and one that does
+    not run in a block (its clip not playing, its item not yet reached)
+    consumes the run's start, so it first sends on the grid: an item's
+    chain, entered one grid interval before its onset (M5, F1), is sent
+    the grid point before the onset, live and offline alike (review round
+    213 at the take-fx merge).
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6): a stage's slots are matched by instance and CLAP id. A
     parameter that the new plan no longer modulates is sent one 0 at its
@@ -808,9 +1016,10 @@ the same.*
     placed again.
   - Each node keeps undo records of what an apply changed (`LaunchUndo`,
     16 per node, carried by `carryLaunch`): its launch state, the prelaunch
-    and prewarm halves, the reader rotation, a feed's state. An early
-    half's record restores only what that half set (the next and warm-up
-    halves), never the launch state, because a heard switch may have come
+    and prewarm halves, a modulated clip chain's entry (preenter, ADR-0096
+    M5) with its switch frame, the reader rotation, a feed's state. An early
+    half's record restores only what that half set (the entry, the next and
+    warm-up halves), never the launch state, because a heard switch may have come
     after it: two launches closer together than the channel's lead record
     the second's early half before the first's switch (round 201 F1). On
     leaving an epoch an executor undoes, newest first, the records whose
@@ -3717,13 +3926,18 @@ the model joins it and commits metadata only. The GUI shows the error in its
 status line while recording continues for healthy targets.
 
 A committed recording may carry a `warnings` array with structured
-`code`, `message`, `path`, `hint`, `track` and `file` fields.
+`code`, `message`, `path`, `hint`, `track` and `file` fields, and `reason`
+where the code names its causes (a short fixed word, as a command's
+warning has: `modulation.not_copied` from a `midi_overdub` take whose
+copied routes pass the limit carries `limit`, session-model.md). A client
+words a warning from `code`, `path` and `reason`; `message` is the
+engine's own text and may name commands.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
 and the `record.warning` event while retained passes still commit. Every
 warning a commit itself adds (where a take went: `record.stack_skipped`,
 `record.stack_group` and the other `record.*` warnings of take stacking,
 ADR-0103, and those of the `take.comp` it makes) also goes out as a
-`record.warning` event, in the same shape, once the commit has succeeded,
+`record.warning` event, in the same shape (`reason` included), once the commit has succeeded,
 whatever stopped the recording (a command from any client, or the engine
 halting, whose commit has no caller to answer); each warning once per
 commit, a pass's own warnings not again.
@@ -5248,7 +5462,13 @@ No special normalization of drifting stored FX state is performed. Corresponding
 FX envelopes retain their full matching original curves/automation. Take-relative
 envelopes may join constant or linear seam continuations, with copied automation
 rebased to the original origin. An unrecoverable nonlinear seam refuses with
-`item.heal_envelope`; differing stored FX refuse with `item.heal_fx`. Other
+`item.heal_envelope`; differing stored FX refuse with `item.heal_fx`, and so do
+corresponding FX whose modulation routes differ (the same source, parameter,
+depth, `enabled` and `lane` per route; ADR-0096 M5, the contract), with a hint
+of their own: make the routes match with `modulation.set` or
+`modulation.remove`. The right-hand routes go with the right-hand FX. Their
+twins live on at the left, so no `modulation.removed` warning is given for
+them. Other
 incompatibilities use `item.heal_incompatible`, all with a Consolidate hint.
 
 All original left-side warp peers must be represented by compatible selected

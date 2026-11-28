@@ -4,7 +4,7 @@ Rack modules: add, edit, copy, fork, and their knobs.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -43,6 +43,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `rack.unknown_type`: no such module type Hint: module.list
 - `rack.param`: a knob or value the type does not have Hint: module.describe
 - `rack.limit`: too many modules Hint: remove modules first
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /source: remove the modulation route first (modulation.remove), or choose another source; at /rack: remove the modulation route first (modulation.remove), or give the Notes module a source
 
 ### Examples
 
@@ -793,6 +794,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /source: remove the modulation route first (modulation.remove), or choose another source; at /source_sends: remove the modulation route first (modulation.remove), or leave its source's sends off
 
 ### Examples
 

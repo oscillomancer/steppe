@@ -4,7 +4,7 @@ Takes of an item: add, activate, bake, extract, hits, stretch.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -66,7 +66,7 @@ Result:
 
 Add a take to an item or clip, optionally copied from one of its takes.
 
-
+from: copy that take of the same item or clip as every take copy is made: its FX, the envelopes on the take and on its FX (with their automation items) and the modulation routes into its FX (ADR-0096 M5), in the same undo step; the copy is in no warp bundle.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -99,6 +99,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -1105,6 +1109,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 

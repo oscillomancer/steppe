@@ -3,7 +3,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <optional>
+#include <string_view>
+#include <tuple>
+#include <vector>
 
 #include "supple/engine/app.h"
 #include "supple/model/freeze.h"
@@ -81,10 +86,298 @@ inline Status checkItemTrack(const model::Session& s, model::Id track,
 // The item's take list is the caller's to update.
 Status removeTakeObjects(model::EditTxn& t, const model::Session& s, model::Id take);
 
+namespace detail {
+// The argument that names what a command copies, where a copy past the route
+// limit is refused (ADR-0096 M5).
+inline std::string copiedPath(std::string_view command) {
+    if (command == "item.paste" || command == "item.consolidate" ||
+        command == "item.consolidate.commit")
+        return "/items";
+    if (command == "item.add" || command == "clip.duplicate") return "/clip";
+    if (command == "scene.capture") return "/region";
+    if (command == "scene.insert") return "/scene";
+    if (command == "arrangement.build") return "/sequence";
+    if (command == "track.duplicate") return "/tracks";
+    if (command == "launch.commit") return "/performance";
+    if (command == "item.duplicate" || command == "item.split" || command == "clip.add")
+        return "/item";
+    if (command == "take.add") return "/from";
+    return "";
+}
+// Every edit that can close a modulation cycle (review rounds 195 F2, 198
+// F1, 199, 200): one row per command and argument, under the kind of edge
+// the model's cycle check walks that it makes or redirects
+// (model::CycleEdgeKind: the check adds every edge with its kind, and a test
+// holds each kind to its rows and these rows to session-model.md's table).
+// A row with a field applies when the edit gives that argument; one without
+// applies to the command whatever it gives. The edit wrapper refuses and
+// declares a row's edit (by: Wrapper). The modulation commands refuse and
+// declare it in their own checks (Own). rack.patch adds its modules through
+// module.add, which refuses at the module's entry (Nested); the wrapper
+// declares it.
+// Not rows: a new track (track.add, track.template.load) has no edge into
+// it, and project.template.load replaces the whole project; a copy
+// (track.duplicate, module.duplicate, the take copies) mirrors its source's
+// edges, so only its copied modulation routes can close a cycle, and the
+// copy settle drops those (modulation.not_copied, reason "cycle"); a remove
+// that takes edges away cannot close one, but track.remove also leaves the
+// Notes modules that played the track following their rack's channel; undo
+// restores a state that held.
+enum class CycleBy { Wrapper, Own, Nested };
+struct CycleRow {
+    model::CycleEdgeKind edge;
+    std::string_view command;  // the command that makes or redirects it
+    std::string_view field;    // the argument; "" for the command whatever it gives
+    std::string_view path;     // where the refusal points
+    std::string_view message;  // the registry's words for the cause
+    std::string_view hint;
+    CycleBy by = CycleBy::Wrapper;
+};
+using K = model::CycleEdgeKind;
+inline constexpr std::array<CycleRow, 29> kCycleRows{{
+    // A parent send: the child feeds its parent.
+    {K::ParentSend, "track.move", "parent", "/parent",
+     "the track's parent send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or choose another parent"},
+    {K::ParentSend, "track.set", "parent_send", "/parent_send",
+     "the parent send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or leave the parent send off"},
+    // A route: its source feeds its destination (a track, a key's FX, a
+    // rack's In; a rack's Out its channel).
+    {K::Route, "route.add", "fx", "/fx", "the key route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or key another plug-in"},
+    {K::Route, "route.add", "to", "/to", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or send to another track"},
+    {K::Route, "route.set", "to", "/to", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's destination"},
+    {K::Route, "route.set", "fx", "/fx", "the key route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's plug-in"},
+    {K::Route, "route.set", "from", "/from", "the send would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or keep the route's source"},
+    {K::Route, "route.set", "", "/route", "the route would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or leave the route as it was"},
+    {K::Route, "track.set", "record_rack", "/record_rack",
+     "the rack's Out as the channel's input would feed a rack what it modulates",
+     "remove the modulation route first (modulation.remove), or pick another rack's Out"},
+    // A MIDI send heard by a Notes module that follows the send's
+    // destination (with its source's sends on): the send's source feeds
+    // the module's rack.
+    {K::NotesFollow, "route.add", "to", "/to",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or send to another track"},
+    {K::NotesFollow, "route.set", "to", "/to",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or keep the route's destination"},
+    {K::NotesFollow, "route.set", "from", "/from",
+     "the MIDI send would reach a Notes module in a rack that modulates its source",
+     "remove the modulation route first (modulation.remove), or keep the route's source"},
+    {K::NotesFollow, "module.add", "source", "/source",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or choose another source"},
+    {K::NotesFollow, "module.add", "", "/rack",
+     "the Notes module, following its rack's channel, would hear a MIDI send from what its rack "
+     "modulates",
+     "remove the modulation route first (modulation.remove), or give the Notes module a source"},
+    {K::NotesFollow, "module.set", "source", "/source",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or choose another source"},
+    {K::NotesFollow, "module.set", "source_sends", "/source_sends",
+     "the Notes module would hear a MIDI send from what its rack modulates",
+     "remove the modulation route first (modulation.remove), or leave its source's sends off"},
+    {K::NotesFollow, "rack.set", "track", "/track",
+     "on that channel the rack's Notes module would hear what the rack modulates",
+     "remove the modulation route first (modulation.remove), or keep the rack on its channel"},
+    {K::NotesFollow, "track.remove", "", "/track",
+     "the Notes modules that played the track would follow their rack's channel and hear what "
+     "the rack modulates",
+     "remove the modulation route first (modulation.remove), or give those Notes modules another "
+     "source (module.set) first"},
+    {K::NotesFollow, "rack.paste", "", "/rack",
+     "a pasted Notes module would hear a MIDI send from what the rack modulates",
+     "remove the modulation route (modulation.remove) or the MIDI send the Notes module would "
+     "hear, or paste into another rack"},
+    {K::NotesFollow, "rack.preset.load", "", "/rack",
+     "the preset's Notes module, following the rack's channel, would hear a MIDI send from what "
+     "the rack modulates",
+     "remove the modulation route (modulation.remove) or the MIDI send into the rack's channel, "
+     "or load the preset into another rack"},
+    {K::NotesFollow, "rack.patch", "modules", "/modules",
+     "a Notes module of the patch would hear a MIDI send from what the rack modulates",
+     "refused as module.add refuses, at the module's entry (/modules/<name>/source or "
+     "/modules/<name>/rack): remove the modulation route first (modulation.remove), or give "
+     "the Notes module another source",
+     CycleBy::Nested},
+    // A modulation route: its source's rack feeds the node of its target.
+    {K::Modulation, "modulation.add", "", "/target", "", "", CycleBy::Own},
+    {K::Modulation, "modulation.set", "", "/target", "", "", CycleBy::Own},
+    {K::Modulation, "modulate", "", "/target", "", "", CycleBy::Own},
+    {K::Modulation, "item.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {K::Modulation, "clip.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {K::Modulation, "take.extract", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {K::Modulation, "fx.move", "track", "/track",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or choose another track"},
+    {K::Modulation, "item.explode-takes", "", "/item",
+     "the move puts a modulated take or FX where its rack hears it",
+     "remove the route, or use mode serial"},
+}};
+// Whether a set command's argument leaves the stored value as it is in
+// `before` (route.set from/to/fx, module.set source/source_sends, track.set
+// parent_send/record_rack, rack.set track; round 204 F1): such an argument
+// picks no row. Another command's arguments are new.
+inline bool leavesStored(const CycleRow& r, const json::Value& fields,
+                         const model::Session& before) {
+    const json::Value* v = fields.find(std::string(r.field));
+    if (!v) return true;
+    const auto id = [&](std::string_view key) -> std::optional<model::Id> {
+        const json::Value* f = fields.find(std::string(key));
+        return f && f->isString() ? model::Id::parse(f->asString()) : std::nullopt;
+    };
+    const auto same = [&](const std::optional<model::Id>& stored) {
+        if (v->isNull()) return !stored;
+        return v->isString() && stored && stored->str() == v->asString();
+    };
+    if (r.command == "route.set") {
+        const auto route = id("route");
+        const model::Route* x = route ? before.routes.find(*route) : nullptr;
+        if (!x) return false;
+        if (r.field == "from") return same(x->from.module ? x->from.module : x->from.track);
+        if (r.field == "fx") return same(x->to.fx);
+        if (r.field == "to")
+            return same(x->to.module ? x->to.module
+                        : x->to.fx   ? model::trackOfFx(before, *x->to.fx)
+                                     : x->to.track);
+    } else if (r.command == "module.set") {
+        const auto module = id("module");
+        const model::RackModule* m = module ? before.modules.find(*module) : nullptr;
+        if (!m) return false;
+        if (r.field == "source_sends") return v->isBool() && v->asBool() == m->sourceSends;
+        if (r.field == "source") {
+            if (v->isString() && v->asString() == "none") return m->sourceOff;
+            return !m->sourceOff && same(m->source);
+        }
+    } else if (r.command == "track.set") {
+        const auto track = id("track");
+        const model::Track* t = track ? before.tracks.find(*track) : nullptr;
+        if (!t) return false;
+        if (r.field == "parent_send") return v->isBool() && v->asBool() == t->parentSend.enabled;
+        if (r.field == "record_rack") {
+            const model::Route* in =
+                t->record.input ? before.routes.find(*t->record.input) : nullptr;
+            return same(in ? in->from.module : std::nullopt);
+        }
+    } else if (r.command == "rack.set" && r.field == "track") {
+        const auto rack = id("rack");
+        const model::Rack* k = rack ? before.racks.find(*rack) : nullptr;
+        return k && same(k->track);
+    }
+    return false;
+}
+// The row an edit's refusal takes, of its command's rows whose argument it
+// gives and changes (a parent send or a source's sends turned off, or a
+// record rack cleared, makes no edge; a Notes source cleared does: the
+// module then follows its rack's channel; an argument equal to the stored
+// value makes none: round 204 F1):
+// the first whose new edges the cycle needs (taking them out of the edit's
+// result leaves no cycle: rounds 200 F3, 202 F1), else the first of them
+// (two edges each needed: either argument is a fix), else the command's
+// row without an argument.
+inline bool makesEdge(const CycleRow& r, const json::Value& fields) {
+    const json::Value* v = fields.find(std::string(r.field));
+    if (!v) return false;
+    if (r.field == "record_rack") return !v->isNull();
+    if (r.field == "parent_send" || r.field == "source_sends") return !v->isBool() || v->asBool();
+    return true;
+}
+inline const CycleRow* cycleRow(std::string_view command, const json::Value& fields,
+                                const model::Session* after = nullptr,
+                                const std::vector<model::CycleEdge>& added = {},
+                                const model::Session* before = nullptr) {
+    const CycleRow* fallback = nullptr;
+    const CycleRow* given = nullptr;
+    const CycleRow* anyGiven = nullptr;  // as given, the stored value aside
+    for (const CycleRow& r : kCycleRows) {
+        if (r.by != CycleBy::Wrapper || r.command != command) continue;
+        if (r.field.empty()) {
+            if (!fallback) fallback = &r;
+            continue;
+        }
+        if (makesEdge(r, fields) && !anyGiven) anyGiven = &r;
+        if (makesEdge(r, fields) && !(before && leavesStored(r, fields, *before))) {
+            if (!given) given = &r;
+            if (!after) continue;
+            std::vector<model::CycleEdge> mine;
+            for (const model::CycleEdge& e : added)
+                if (e.kind == r.edge) mine.push_back(e);
+            if (!mine.empty() && !model::hasCycleWithout(*after, mine)) return &r;
+        }
+    }
+    // Never none once the check ran (round 206): it runs only when this pick
+    // without `before` found a row, so `anyGiven` or `fallback` is set even
+    // when every given argument left its value as it was.
+    return given ? given : fallback ? fallback : anyGiven;
+}
+// The edges `after` has that `before` lacks.
+inline std::vector<model::CycleEdge> addedCycleEdges(const model::Session& before,
+                                                     const model::Session& after) {
+    auto old = model::cycleEdges(before);
+    const auto key = [](const model::CycleEdge& e) {
+        return std::tuple(static_cast<int>(e.kind), e.from.str(), e.to.str());
+    };
+    const auto less = [&](const model::CycleEdge& a, const model::CycleEdge& b) {
+        return key(a) < key(b);
+    };
+    std::sort(old.begin(), old.end(), less);
+    std::vector<model::CycleEdge> out;
+    for (const model::CycleEdge& e : model::cycleEdges(after))
+        if (!std::binary_search(old.begin(), old.end(), e, less)) out.push_back(e);
+    return out;
+}
+// What the registry declares for a command that has rows: its rows' causes
+// and hints, each at its argument when it has more than one.
+struct CycleRefusal {
+    std::string message, hint;
+};
+inline std::optional<CycleRefusal> closesCycle(std::string_view command) {
+    std::vector<const CycleRow*> rows;
+    for (const CycleRow& r : kCycleRows)
+        if (r.by != CycleBy::Own && r.command == command &&
+            std::none_of(rows.begin(), rows.end(),
+                         [&](const CycleRow* x) { return x->path == r.path && x->hint == r.hint; }))
+            rows.push_back(&r);
+    if (rows.empty()) return std::nullopt;
+    if (rows.size() == 1)
+        return CycleRefusal{std::string(rows[0]->message), std::string(rows[0]->hint)};
+    CycleRefusal out{"the edit would feed a rack what it modulates", ""};
+    for (const CycleRow* r : rows)
+        out.hint += (out.hint.empty() ? "" : "; ") + std::string("at ") + std::string(r->path) +
+                    ": " + std::string(r->hint);
+    return out;
+}
+}  // namespace detail
+
 // Validate derived edit values before the invocation succeeds, so a caught Lua
 // error restores this invocation's savepoint even inside a larger transaction.
 template <class Args, class Output>
 void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
+    // What the wrapper below answers for a copy or a move (ADR-0096 M5),
+    // declared here with it, so a registry walk finds each.
+    const auto declare = [&](cmd::ErrorSpec spec) {
+        if (std::none_of(command.errors.begin(), command.errors.end(),
+                         [&](const cmd::ErrorSpec& e) { return e.code == spec.code; }))
+            command.errors.push_back(std::move(spec));
+    };
+    if (!detail::copiedPath(command.name).empty())
+        declare({"modulation.limit", "the copy's routes would pass the project's route limit",
+                 "remove routes first (modulation.list), for instance the copied chain's"});
+    if (const auto cycle = detail::closesCycle(command.name))
+        declare({"modulation.cycle", cycle->message, cycle->hint});
     if (command.kind != cmd::Kind::Query) {
         auto original = std::move(command.run);
         auto encoded = command.args;
@@ -135,6 +428,50 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             }
             auto result = original(a, ctx);
             if (!result) return result.error();
+            // The routes this edit's copies made (ADR-0096 M5), settled now
+            // that the copies are placed: one the destination cannot keep is
+            // named, never dropped silently, and a copy past the route limit
+            // is refused whole. Each original whose copy stays lives on, so a
+            // cut (copy, then remove) warns nothing for it.
+            std::vector<model::Id> livesOn;
+            if (app.inTransaction()) {
+                for (const RouteNotCopied& d : settleCopiedRoutes(app.txn(), false, &livesOn))
+                    ctx.warn("modulation.not_copied", d.message, "/modulations/" + d.original.str(),
+                             std::string(model::reasonWord(d.reason)));
+                const std::size_t routes = app.txn().preview().modulations.size();
+                if (routes > model::kMaxModulations && routes > before.modulations.size())
+                    return Error("modulation.limit",
+                                 "the copy would make " + std::to_string(routes) +
+                                     " modulation routes; a project holds at most " +
+                                     std::to_string(model::kMaxModulations),
+                                 // launch.commit without `performance`
+                                 // commits the last capture: the root.
+                                 name == "launch.commit" && !fields.find("performance")
+                                     ? std::string()
+                                     : detail::copiedPath(name),
+                                 "remove at least " +
+                                     std::to_string(routes - model::kMaxModulations) +
+                                     " routes first (modulation.list), for instance those of "
+                                     "the copied chain, which the copy duplicates");
+                const auto& joined = app.txn().routesLivingOn();
+                livesOn.insert(livesOn.end(), joined.begin(), joined.end());
+                // An edit that closes a cycle is refused at its argument,
+                // never mended by dropping a route: it must not change what
+                // sounds.
+                if (const detail::CycleRow* row = detail::cycleRow(name, fields);
+                    row && !before.modulations.empty()) {
+                    const model::Session after = app.txn().preview();
+                    Status ok = model::checkInvariants(after);
+                    if (!ok && ok.error().code == "modulation.cycle") {
+                        row = detail::cycleRow(name, fields, &after,
+                                               detail::addedCycleEdges(before, after), &before);
+                        Error e = ok.error();
+                        e.path = std::string(row->path);
+                        e.hint = std::string(row->hint);
+                        return e;
+                    }
+                }
+            }
             // Routes whose source or target this edit took away go with it,
             // each named in a warning (ADR-0096, "Cascades"); a route's own
             // commands refuse instead.
@@ -142,25 +479,29 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             // whose target stopped fitting (a send turned MIDI) goes here.
             if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
                 const auto removed = [&](model::Id route, const model::Modulation& m,
-                                         const std::string& why) {
+                                         const std::string& why, model::RouteWarningReason reason) {
                     ctx.warn("modulation.removed",
                              route.str() + " (" + m.source.module.str() + "." + m.source.input +
                                  " to " + m.target.object.str() + " " + m.target.param +
                                  ") was removed: " + why,
-                             "/modulations/" + route.str());
+                             "/modulations/" + route.str(), std::string(model::reasonWord(reason)));
                 };
                 const model::Session after = app.view();
                 for (const auto& e : before.modulations) {
                     if (after.modulations.contains(e.id)) continue;
+                    if (std::find(livesOn.begin(), livesOn.end(), e.id) != livesOn.end())
+                        continue;  // its copy or its twin carries it (M5)
                     const model::Modulation& m = *e.value;
-                    removed(e.id, m,
-                            after.modules.contains(m.source.module)
-                                ? "its target " + m.target.object.str() + " was removed"
-                                : "its source " + m.source.module.str() + " was removed");
+                    if (after.modules.contains(m.source.module))
+                        removed(e.id, m, "its target " + m.target.object.str() + " was removed",
+                                model::RouteWarningReason::TargetRemoved);
+                    else
+                        removed(e.id, m, "its source " + m.source.module.str() + " was removed",
+                                model::RouteWarningReason::SourceRemoved);
                 }
-                for (const auto& [route, why] : model::strandedModulations(after)) {
-                    removed(route, *after.modulations.find(route), why);
-                    app.txn().remove<model::Modulation>(route);
+                for (const model::StrandedModulation& d : model::strandedModulations(after)) {
+                    removed(d.route, *after.modulations.find(d.route), d.why, d.reason());
+                    app.txn().remove<model::Modulation>(d.route);
                 }
             }
             if (edit) SUPPLE_TRY(model::validateFrozenTransition(before, app.view()));

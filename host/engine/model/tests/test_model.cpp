@@ -613,7 +613,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.23";  // newer than this build's 2.22
+    doc["schema"] = "supple.project/2.24";  // newer than this build's 2.23
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);

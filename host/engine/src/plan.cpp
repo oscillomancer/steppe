@@ -361,10 +361,18 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             me.values.assign(p.block, 0.0);
             continue;
         }
+        if (me.unplayed) {  // a take the plan does not play: nothing to bind (M5)
+            me.inert = true;
+            continue;
+        }
         Stage* st = nullptr;
-        for (std::vector<Stage>* chain : {&n.chain, &n.inputChain})
-            for (Stage& candidate : *chain)
-                if (candidate.fx == me.target.object) st = &candidate;
+        if (me.takeChain >= 0)
+            st = &n.takeChains[static_cast<std::size_t>(me.takeChain)]
+                      .chain[static_cast<std::size_t>(me.takeStage)];
+        else
+            for (std::vector<Stage>* chain : {&n.chain, &n.inputChain})
+                for (Stage& candidate : *chain)
+                    if (candidate.fx == me.target.object) st = &candidate;
         const auto inert = [&](const std::string& why) {
             me.inert = true;
             p.warnings.push_back(me.route.str() + ": " + me.target.object.str() + " " +
@@ -438,13 +446,17 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
     // Stages with no route now but an earlier plan's slots: those slots
     // still owe their parameters a 0 (the memo carries into them).
     if (p.pool)
-        for (Node& n : p.nodes)
+        for (Node& n : p.nodes) {
+            const auto owed = [&](Stage& st) {
+                if (st.instance && std::find(stages.begin(), stages.end(), &st) == stages.end() &&
+                    !p.pool->modulatedParams(st.fx, {}).empty())
+                    stages.push_back(&st);
+            };
             for (std::vector<Stage>* chain : {&n.chain, &n.inputChain})
-                for (Stage& st : *chain)
-                    if (st.instance &&
-                        std::find(stages.begin(), stages.end(), &st) == stages.end() &&
-                        !p.pool->modulatedParams(st.fx, {}).empty())
-                        stages.push_back(&st);
+                for (Stage& st : *chain) owed(st);
+            for (TakeChain& tc : n.takeChains)  // ADR-0096 M5 (R1)
+                for (Stage& st : tc.chain) owed(st);
+        }
     std::stable_sort(bound.begin(), bound.end(), [](const Bound& a, const Bound& b) {
         return std::tie(a.stage, a.clapId) < std::tie(b.stage, b.clapId);
     });
@@ -709,10 +721,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Input FX (channels only): run on the record input, see processNode.
         if (t.type == model::StripType::Channel)
             for (Id fxId : t.inputChain) n.inputChain.push_back(makeStage(fxId));
-        // Takes with FX or envelopes play through a chain of their own (gap log #22).
+        // Takes with FX or envelopes play through a chain of their own (gap log #22),
+        // for each take the engine plays (model::takeFxPlays, which modulation.list's
+        // inert "take" reads too, ADR-0096 M5), unless the node drops its items.
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
+            if (it.track != n.id || !it.activeTake || n.dropItems ||
+                !model::takeFxPlays(s, {*it.activeTake, e.id, it.track}))
+                continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take) continue;
             const bool enveloped =
@@ -733,7 +749,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (t.type == model::StripType::Channel)
             for (const auto& e : s.clips) {
                 const model::Clip& clip = *e.value;
-                if (clip.track != n.id || !clip.activeTake) continue;
+                if (clip.track != n.id || !clip.activeTake ||
+                    !model::takeFxPlays(s, {*clip.activeTake, e.id, clip.track}))
+                    continue;
                 const model::Take* take = s.takes.find(*clip.activeTake);
                 if (!take) continue;
                 const bool enveloped =
@@ -984,12 +1002,28 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         } else if (m.target.object.kind == Kind::Fx) {
             const model::Track& owner = *s.tracks.find(*target);
             const auto in = std::find(owner.chain.begin(), owner.chain.end(), m.target.object);
-            if (in != owner.chain.end())
+            const auto input =
+                std::find(owner.inputChain.begin(), owner.inputChain.end(), m.target.object);
+            if (in != owner.chain.end()) {
                 me.stage = static_cast<int>(in - owner.chain.begin());
-            else
-                me.inputStage = static_cast<int>(
-                    std::find(owner.inputChain.begin(), owner.inputChain.end(), m.target.object) -
-                    owner.inputChain.begin());
+            } else if (input != owner.inputChain.end()) {
+                me.inputStage = static_cast<int>(input - owner.inputChain.begin());
+            } else if (const auto where = model::takeFxOwner(s, m.target.object)) {
+                // A take FX (ADR-0096 M5): the chain the plan compiled for
+                // its take, if it plays it.
+                const auto& chains = p.nodes[me.to].takeChains;
+                for (std::size_t c = 0; c < chains.size() && me.takeChain < 0; ++c) {
+                    if (chains[c].take != where->take) continue;
+                    for (std::size_t k = 0; k < chains[c].chain.size(); ++k)
+                        if (chains[c].chain[k].fx == m.target.object) {
+                            me.takeChain = static_cast<int>(c);
+                            me.takeStage = static_cast<int>(k);
+                        }
+                }
+                me.unplayed = me.takeChain < 0;
+                if (me.takeChain >= 0 && chains[static_cast<std::size_t>(me.takeChain)].clipChain)
+                    p.nodes[me.to].modClipChain = true;  // its launches enter early (G1)
+            }
         } else if (s.tracks.contains(*target) && s.tracks.find(*target)->freeze) {
             me.inert = true;  // a frozen track's routes are inert (ADR-0096 "Freeze")
         }
@@ -1658,13 +1692,24 @@ Status prepare(Plan& p, const Session& s) {
         // grid interval ahead for its interpolation, so its value arrives
         // that much earlier. A frozen track's FX (no stage: the print plays)
         // is outside compensation too.
+        // A take-chain stage (ADR-0096 M5) runs ahead of the track by its
+        // chain's lead (an item's latency, a clip's launch lead), less its
+        // place in the chain, from where the items play: negative for a
+        // channel's items and clips, possibly positive for a master's items.
+        // A take the plan does not play is outside compensation.
         for (std::size_t mi : n.modIn) {
             ModEdge& me = p.modEdges[mi];
-            const std::int64_t before = me.stage >= 0
-                                            ? n.chain[static_cast<std::size_t>(me.stage)].before
-                                        : me.inputStage >= 0 || me.target.object.kind == Kind::Fx
-                                            ? 0
-                                            : n.latChain - std::int64_t{kAutomationStep};
+            std::int64_t before = 0;
+            if (me.stage >= 0) {
+                before = n.chain[static_cast<std::size_t>(me.stage)].before;
+            } else if (me.takeChain >= 0) {
+                const TakeChain& tc = n.takeChains[static_cast<std::size_t>(me.takeChain)];
+                const std::int64_t lead = tc.clipChain ? n.launchLead : tc.latency;
+                before = (n.postItems ? n.latChain : 0) +
+                         tc.chain[static_cast<std::size_t>(me.takeStage)].before - lead;
+            } else if (me.inputStage < 0 && me.target.object.kind != Kind::Fx) {
+                before = n.latChain - std::int64_t{kAutomationStep};
+            }
             visit(me.from, me.tap, before, me.delay);
         }
     };
@@ -1727,6 +1772,10 @@ Status prepare(Plan& p, const Session& s) {
             zeroed(e.auxTmp, e.auxLinks.empty() ? 0 : block);
         }
     }
+    // A route into a take the plan does not play holds no delay (ADR-0096
+    // M5): it sends nothing, and its edge only orders the nodes.
+    for (ModEdge& me : p.modEdges)
+        if (me.unplayed) me.delay.init(0);
     // A key route from one output master into another's path can pull the
     // first one earlier than the others (ADR-0056).
     for (const OutputTap& o : p.outputs) {
@@ -1933,6 +1982,7 @@ Status prepare(Plan& p, const Session& s) {
                         std::min<std::size_t>(tc.events.size(), 4 * block) + st.voices.capacity();
                 for (const ParamLane& ln : st.lanes)
                     need += block / kAutomationStep + 2 + ln.curve.points.size();
+                need += st.modEvents;  // its modulation (ADR-0096 M5, R2)
                 st.blockEvents.reserve(need);
             }
         }
@@ -3426,7 +3476,13 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
     const double clock0 = launchClock(p, node, pos);
     const ClipChainInput in =
         transport.playing ? clipChainInput(node, tc.player) : ClipChainInput{};
-    if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, clock0))) {
+    // Entered (ADR-0096 M5, G1): the incoming clip's chain from its entry,
+    // one grid interval before its input switches, running on silence; a
+    // chain already running (a relaunch) goes on as it is.
+    const LaunchAction& entry = node.launchEntry;
+    const bool entered = transport.playing && !in.on && node.launchEntryValid &&
+                         entry.kind == LaunchState::Kind::Clip && entry.player == tc.player;
+    if (!transport.playing || (!in.on && !entered && !clipChainHeard(node, tc.player, clock0))) {
         skipModulation(tc.chain);
         tc.active = false;
         tc.inputPlayer = -1;
@@ -3476,10 +3532,13 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
     tc.releaseHeld = false;
     tc.inputPlayer = inputPlayer;
     tc.inputAnchor = inputAnchor;
-    // Its plug-ins' envelopes, in clip time (C2), on each stage's input side.
+    // Its plug-ins' envelopes, in clip time (C2), on each stage's input side,
+    // then their modulation on the node's grid (ADR-0096 M5; a lane bound to
+    // a route reads its sum through the plan, R3).
     for (Stage& st : tc.chain) {
         const ClipLaneSource source{&p, &node, tc.player, in, pos, lead - st.before, loop};
-        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), nullptr, &source);
+        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), &p, &source);
+        modulateStage(p, st, pos, n, time::samplesAt(p.startSeconds, p.rate), self);
     }
     for (Stage& st : tc.chain) {
         enterGroup(tc.chain, st, tc.buf, n);
@@ -3532,7 +3591,12 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     if (p.rateEnabled && transport.playing && tc.clip >= 0)
         playClip(p, node.clips[static_cast<std::size_t>(tc.clip)], tc.buf, pos, n, tc.latency,
                  node.live);
-    const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency, node.itemShift);
+    // The chain is entered one grid interval before its input reaches the
+    // item (ADR-0096 M5, F1): the grid point at or before the onset is then
+    // in a block it runs, whatever the block size, so its modulation and its
+    // lanes' first values reach the onset alike in every run.
+    const std::int64_t entry = kAutomationStep;
+    const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency + entry, node.itemShift);
     const double outputStart = mappedAt(p, node.live, pos, node.itemShift);
     bool intersects = inputEnd > double(tc.start) && outputStart < double(tc.end);
     // Unity, looping, a chain running ahead: its input reaches the loop end
@@ -3545,13 +3609,13 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
                        ahead < loopLength && pos < loop->end;
     const std::int64_t wrapAt =
         early ? loop->end - ahead : std::numeric_limits<std::int64_t>::max();
-    if (early && pos + n > wrapAt)
-        intersects = intersects || (pos + n + tc.latency - loopLength > tc.start &&
+    if (early && pos + n + entry > wrapAt)
+        intersects = intersects || (pos + n + tc.latency + entry - loopLength > tc.start &&
                                     std::max(pos, wrapAt) + tc.latency - loopLength < tc.end);
     if (p.rateEnabled) {
         const auto& clock = *p.timelines[node.live ? 1 : 0];
         const double from = clock.phase(pos - node.itemShift);
-        const double to = clock.phase(pos + n + tc.latency - node.itemShift);
+        const double to = clock.phase(pos + n + tc.latency + entry - node.itemShift);
         const double start = double(tc.start - node.itemShift),
                      end = double(tc.end - node.itemShift);
         const double firstEnd = clock.looping() ? std::min(end, clock.loopEnd()) : end;
@@ -3612,7 +3676,10 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
             unityTakeEvents(p, node.live, tc, tc.chain[static_cast<std::size_t>(tc.noteTarget)],
                             node.itemShift - tc.latency, pos, n, loop);
     }
-    for (Stage& st : tc.chain) automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
+    for (Stage& st : tc.chain) {  // then their modulation (ADR-0096 M5, R3)
+        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), &p);
+        modulateStage(p, st, pos, n, time::samplesAt(p.startSeconds, p.rate), self);
+    }
     for (Stage& st : tc.chain) {
         enterGroup(tc.chain, st, tc.buf, n);
         if (!runStage(p, st, tc.buf, n, transport, pos, self)) return false;
@@ -4342,11 +4409,18 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 // slot at its first frame. Not on a handoff or an adoption, which continue
 // in place as the grid does.
 void restartModulation(Node& n) SUPPLE_RT {
-    for (auto* chain : {&n.inputChain, &n.chain})
-        for (Stage& st : *chain) {
+    const auto restart = [](std::vector<Stage>& chain) {
+        for (Stage& st : chain) {
             st.modRunStart = true;
             for (ModParam& m : st.mods) m.stale = true;
         }
+    };
+    restart(n.inputChain);
+    restart(n.chain);
+    // Its take chains too (ADR-0096 M5; review round 213 at the take-fx
+    // merge: a seek while playing, or a pause, seek and play, sent a take
+    // FX nothing up to the next grid point).
+    for (TakeChain& tc : n.takeChains) restart(tc.chain);
 }
 
 void locateRackStages(Node& n) SUPPLE_RT {
@@ -4963,6 +5037,28 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                     carryStages(tc.chain, otc.chain);
                     break;
                 }
+        // A modulated take moved here from another track keeps its stages'
+        // memo by instance (ADR-0096 M5, R4), as an FX moved between a
+        // track's chains does: a route removed in the same swap still sends
+        // its 0. Only modulated chains look, so the search stays short.
+        for (TakeChain& tc : n.takeChains) {
+            if (std::none_of(tc.chain.begin(), tc.chain.end(),
+                             [](const Stage& st) { return !st.mods.empty(); }) ||
+                std::any_of(old.takeChains.begin(), old.takeChains.end(),
+                            [&](const TakeChain& otc) { return otc.take == tc.take; }))
+                continue;
+            for (Node& other : from.nodes) {
+                if (&other == &old || (fromClass >= 0 && other.live != (fromClass == 1))) continue;
+                for (const TakeChain& otc : other.takeChains)
+                    if (otc.take == tc.take)
+                        for (Stage& st : tc.chain)
+                            for (const Stage& os : otc.chain)
+                                if (st.instance && os.instance == st.instance) {
+                                    carryMemo(st, os);
+                                    break;
+                                }
+            }
+        }
     }
     carryRackMidi(to, from, toClass, fromClass);
 }
@@ -5127,8 +5223,19 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
 }
 
 void dropClipChains(Plan& p) {
-    for (Node& n : p.nodes)
+    // A route into a dropped clip chain's stage is left unplayed (ADR-0096
+    // M5); item chains come first in each node, so their indices stand.
+    for (ModEdge& me : p.modEdges) {
+        if (me.takeChain < 0) continue;
+        const auto& chains = p.nodes[me.to].takeChains;
+        if (!chains[static_cast<std::size_t>(me.takeChain)].clipChain) continue;
+        me.takeChain = me.takeStage = -1;
+        me.unplayed = true;
+    }
+    for (Node& n : p.nodes) {
         std::erase_if(n.takeChains, [](const TakeChain& tc) { return tc.clipChain; });
+        n.modClipChain = false;
+    }
     p.instances.clear();
     for (const Node& n : p.nodes)
         forEachStage(n, [&](const Stage& st) {

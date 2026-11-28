@@ -4,7 +4,7 @@ Tracks, channels, busses: add, set level/pan/arm, move, freeze.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -221,7 +221,7 @@ Result:
 
 Duplicate channels or busses with their FX, items, sends and automation.
 
-Each copy goes right after its original, under the same parent, with the same settings and name; its main and input chains (each plugin's settings as it sounds now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends and record input, and the envelopes on the track, its plugins, sends and takes. Not copied: a folder's children, sends into the track, and item groups. Masters cannot be duplicated. One undo step; the copies' ids in the order given.
+Each copy goes right after its original, under the same parent, with the same settings and name; its main and input chains (each plugin's settings as it sounds now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends and record input, the envelopes on the track, its plugins, sends and takes, and every modulation route whose target is on the track (its fader, pan, width, sends' levels and plugins, take FX included). Not copied: a folder's children, sends into the track, and item groups. Masters cannot be duplicated. One undo step; the copies' ids in the order given.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -261,6 +261,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `track.unknown`: no such track Hint: use a live id from track.list
 - `track.strip_type`: a master cannot be duplicated Hint: duplicate channels and busses
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -814,6 +815,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 ### Errors
 
 - `tr.cycle`: the destination is inside the track Hint: choose another parent
+- `modulation.cycle`: the track's parent send would feed a rack what it modulates Hint: remove the modulation route first (modulation.remove), or choose another parent
 
 ### Examples
 
@@ -866,6 +868,10 @@ Kind: `edit`. Exposure: `mcp-tool`.
 }
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the Notes modules that played the track would follow their rack's channel and hear what the rack modulates Hint: remove the modulation route first (modulation.remove), or give those Notes modules another source (module.set) first
 
 ### Examples
 
@@ -952,6 +958,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `track.record_input`: choose one input: audio, MIDI or rack Hint: provide one non-null input field; it replaces the previous input
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /parent_send: remove the modulation route first (modulation.remove), or leave the parent send off; at /record_rack: remove the modulation route first (modulation.remove), or pick another rack's Out
 
 ### Examples
 

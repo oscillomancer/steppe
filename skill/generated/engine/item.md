@@ -4,7 +4,7 @@ Items on tracks: add, set, move, split, paste, consolidate, export.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -164,6 +164,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `notation.*`: the notation does not compile Hint: line:col and a hint in the error
 - `item.follow`: follow with a source other than clip Hint: follow applies to a clip's copy: give clip, or leave follow out
 - `tr.unknown`: no such track Hint: see track.list
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -280,6 +281,8 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `item.consolidate_stale`: the selection, or what its render read (a route's source, a track it hears), changed Hint: consolidate again once the edits are done
+- `modulation.limit`: the consolidated takes' routes would pass the route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 - `item.consolidate_*`: invalid material, stale inputs or failed capture Hint: repair the selected sources/layout and retry consolidation
 - `item.follow_merge`: merging following MIDI takes would change how a note sounds Hint: take.bake the following takes first, then consolidate
 - `item.selection`: selection omits linked peers Hint: select the full group or suspend its edit link
@@ -330,6 +333,11 @@ Kind: `edit`. Exposure: `internal`.
 
 ```
 
+### Errors
+
+- `item.consolidate_stale`: the selection, or what its render read, changed since the job began Hint: consolidate again once the edits are done
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
+
 ### Examples
 
 ## `item.duplicate@1`
@@ -377,6 +385,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -444,6 +456,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or use mode serial
 
 ### Examples
 
@@ -621,6 +637,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Errors
 
+- `item.heal_fx`: the pieces' take FX, their states or their routes differ Hint: make the chains and routes match (modulation.list {fx}), or consolidate
 - `item.heal_*`: selection cannot be restored as a continuous source Hint: select unchanged split pieces or use item.consolidate instead
 - `item.selection`: a linked or warp peer is unselected Hint: include every affected peer or suspend the edit link
 
@@ -670,6 +687,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `item.mix_not_channel`: an item is not on a channel Hint: select items on channels only
 - `item.mix_empty`: nothing selected plays material Hint: select items with audio or MIDI
 - `track.frozen`: an item is on a frozen channel Hint: unfreeze the channel first
+- `item.mix_stale`: the selection, or what its mix read (a route's source, a track it hears), changed Hint: mix again once the edits are done
 - `item.mix_*`: stale selection, failed render or media Hint: repair and retry the mix
 
 ### Examples
@@ -723,6 +741,10 @@ Kind: `edit`. Exposure: `internal`.
 
 ```
 
+### Errors
+
+- `item.mix_stale`: the selection, or what its mix read, changed since the job began Hint: mix again once the edits are done
+
 ### Examples
 
 ## `item.move@1`
@@ -761,6 +783,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 
@@ -824,6 +850,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -1050,6 +1080,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `item.split_not_audio`: zero_crossing needs an active audio take Hint: use snap none to split MIDI or empty items at the cursor
 - `item.split_source_pending`: current source audio is not prepared Hint: start the engine, wait for source preparation and retry
 - `item.split_source`: the audio source could not be prepared Hint: relink or repair the audio source and retry
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 

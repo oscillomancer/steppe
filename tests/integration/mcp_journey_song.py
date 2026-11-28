@@ -18,8 +18,8 @@ or through `analyze.track`, and is compared with what the commands said (a launc
 `beat`, a track's volume in dB, a modulation's depth, the commit's items).
 
 It documents the limits of today's build as refusals (a clip with no key of its own has
-none to snap to, a clip take's FX take no modulation), and it plays only the path that
-works. A clip keeps the key and chords it was written against (ADR-0098): the drums and
+none to snap to), and it plays only the path that works. A clip keeps the key and
+chords it was written against (ADR-0098): the drums and
 the bass are written with `context_at` where their scene sits in the song, the keys with
 chord symbols, and the Break's bass snaps within D minor though the project starts in
 C minor. The Verse is written once, in C minor: laid under D minor it warns, and laid
@@ -311,12 +311,19 @@ def modulation(j):
     assert all(not m.get("inert") and m["fed_by"] and m["enabled"] for m in listed), listed
     assert [m["fed_by"][0]["type"].rsplit(".", 1)[1] for m in listed] == [
         "lfo", "lfo", "macro"], listed
-    # A clip take's FX take envelopes, not modulation (yet): the refusal names the way out.
+    # A clip take's FX takes modulation too (ADR-0096 M5): the route names the
+    # clip and take that hold it, and removing the FX removes the route.
     j.exec("fx.add", {"take": "tk_5", "plugin": PLUGIN + "gain"}, "Gain on the Verse keys clip.")
-    error = j.refused("modulate", {"target": {"fx": "fx_5", "param": "gain"}, "source": "lfo"},
-                      "modulation.target", "A clip take's FX take no modulation.")
-    assert "take FX" in error["hint"], error
-    j.exec("fx.remove", {"fx": "fx_5"}, "Take it off again.")
+    keys = j.exec("modulate", {"target": {"fx": "fx_5", "param": "gain"}, "source": "lfo"},
+                  "An LFO on the clip take's gain.")
+    owned = j.exec("modulation.list", {"fx": "fx_5"},
+                   "The route, with the clip and take that hold its FX.")["modulations"]
+    assert [m["modulation"] for m in owned] == [keys["modulation"]], owned
+    assert owned[0]["owner"]["take"] == "tk_5" and "clip" in owned[0]["owner"], owned
+    assert not owned[0].get("inert"), owned  # the clip's active take: it plays
+    j.exec("fx.remove", {"fx": "fx_5"}, "Take it off again: its route goes with it.")
+    left = j.exec("modulation.list", {}, "The three routes again.")["modulations"]
+    assert [m["modulation"] for m in left] == ["mr_1", "mr_2", "mr_3"], left
     return {"cutoff": cutoff, "send": send, "macro": macro}
 
 

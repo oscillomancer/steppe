@@ -1677,12 +1677,13 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 22 && warnings)  // 2.14: branches; 2.15: autosaved_through;
+    } else if (version->minor > 23 && warnings)  // 2.14: branches; 2.15: autosaved_through;
                                                  // 2.16: modulation; 2.17: context;
                                                  // 2.18: scenes, clips; 2.19: clip take FX
                                                  // envelopes in clip time; 2.20: clip context;
                                                  // 2.21: take context and follow;
-                                                 // 2.22: clip fades
+                                                 // 2.22: clip fades; 2.23: take FX
+                                                 // modulation targets (ADR-0096 M5)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never

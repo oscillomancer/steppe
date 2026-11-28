@@ -4,7 +4,7 @@ Modular racks on channels: add, arrange, patch, levels, presets.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -440,6 +440,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `track.unknown`: a copied Notes source was removed Hint: restore the source track or copy again
 - `rack.limit`: the destination would exceed its limits Hint: remove modules or paste into another rack
 - `rack.position`: the clip extends beyond the coordinate range Hint: choose a position closer to the origin
+- `modulation.cycle`: a pasted Notes module would hear a MIDI send from what the rack modulates Hint: remove the modulation route (modulation.remove) or the MIDI send the Notes module would hear, or paste into another rack
 
 ### Examples
 
@@ -492,6 +493,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 ### Errors
 
 - `rack.patch`: a name, an end or a field the patch cannot use Hint: names: lower-case letters, digits and '_'; ends: name.port
+- `modulation.cycle`: a Notes module of the patch would hear a MIDI send from what the rack modulates Hint: refused as module.add refuses, at the module's entry (/modules/<name>/source or /modules/<name>/rack): remove the modulation route first (modulation.remove), or give the Notes module another source
 
 ### Examples
 
@@ -708,6 +710,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `chain.plugin_missing`: the preset needs a plug-in that is not installed Hint: install it
 - `rack.preset_module`: an embedded source does not compile or has another id Hint: fix its source and ModuleInfo.id to match the sources entry
 - `rack.preset_invalid`: not a rack preset Hint: save it again
+- `modulation.cycle`: the preset's Notes module, following the rack's channel, would hear a MIDI send from what the rack modulates Hint: remove the modulation route (modulation.remove) or the MIDI send into the rack's channel, or load the preset into another rack
 
 ### Examples
 
@@ -901,6 +904,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `modulation.cycle`: on that channel the rack's Notes module would hear what the rack modulates Hint: remove the modulation route first (modulation.remove), or keep the rack on its channel
 
 ### Examples
 

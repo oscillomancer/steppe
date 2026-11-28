@@ -4,7 +4,7 @@ Launcher clips in a scene's cells: add, set, move, duplicate.
 
 Generated from the command registry; `index.md` lists the groups.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`, with `reason: string`, a fixed word for the cause, where the code names its causes. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
 
@@ -95,6 +95,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `clip.context_audio`: a chord, or a key after the start, on an audio clip Hint: an audio clip's context is a key at the start of bar 1
 - `clip.no_key`: follow without a key at the clip's start Hint: give the clip a context with a key at its start
 - `clip.follow_audio`: follow on an audio clip Hint: follow is for MIDI clips
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -192,6 +193,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `clip.occupied`: the cell holds a clip Hint: choose an empty cell
 - `clip.limit`: the project has 16384 clips Hint: remove clips first
+- `modulation.limit`: the copy's routes would pass the project's route limit Hint: remove routes first (modulation.list), for instance the copied chain's
 
 ### Examples
 
@@ -253,6 +255,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `clip.occupied`: the cell holds a clip Hint: choose an empty cell
 - `clip.track`: the track is not a channel Hint: choose a channel
+- `modulation.cycle`: the move puts a modulated take or FX where its rack hears it Hint: remove the route, or choose another track
 
 ### Examples
 

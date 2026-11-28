@@ -38,8 +38,8 @@ constexpr const char* kScenes[] = {"sc_1", "sc_2"};
 
 // tr_1 (cl_1, cl_2) shifted 64 frames by tr_2's latent gain; tr_2 (cl_3,
 // cl_4) unshifted: loop clips of 36000-frame ramps (each frame tells where
-// it is). tr_3 plays the sine from MIDI clips cl_5 and cl_6; tr_4's rack
-// turns tr_3's notes into its gate through a Notes module following tr_3
+// it is), cl_3 through a modulated take chain. tr_3 plays the sine from MIDI clips cl_5 and cl_6;
+// tr_4's rack turns tr_3's notes into its gate through a Notes module following tr_3
 // (`liveFeed`: with a device, so the rack is live and the anticipative
 // engine runs it in the callback).
 void project(Project& p, bool liveFeed) {
@@ -71,6 +71,29 @@ void project(Project& p, bool liveFeed) {
               ? R"({"rack": "rk_1", "type": "notes", "source": "tr_3", "device": "controller"})"
               : R"({"rack": "rk_1", "type": "notes", "source": "tr_3"})");  // mo_2
     p.run("cable.add", R"({"from": "mo_2.gate", "to": "mo_1.l"})");
+    // cl_3 through a gain in its take chain, which a route from Transport's
+    // `playing` (in a rack on tr_2) moves (ADR-0096 M5): tr_2's launches
+    // enter its clip chain early (preenter), under the same invariants.
+    const std::string rack = p.run("rack.add", R"({"track": "tr_2"})")["rack"].asString();
+    const std::string out =
+        p.run("module.add", R"({"rack": ")" + rack + R"(", "type": "mod_out"})")["module"]
+            .asString();
+    const std::string transport =
+        p.run("module.add", R"({"rack": ")" + rack + R"(", "type": "transport"})")["module"]
+            .asString();
+    p.run("cable.add", R"({"from": ")" + transport + R"(.playing", "to": ")" + out + R"(.in_1"})");
+    json::Value gain = json::Value::object();
+    gain["take"] = takeOf(p, "cl_3");
+    gain["plugin"] = "com.suppleaudio.test.gain";
+    const std::string takeGain = p.runArgs("fx.add", gain)["fx"].asString();
+    json::Value route = j(R"({"depth": -0.25})");
+    route["source"] = json::Value::object();
+    route["source"]["module"] = out;
+    route["source"]["input"] = "in_1";
+    route["target"] = json::Value::object();
+    route["target"]["fx"] = takeGain;
+    route["target"]["param"] = "gain";
+    p.runArgs("modulation.add", route);
 }
 
 // One playing stretch of one epoch: where its first frame is in the
@@ -515,6 +538,30 @@ std::int64_t hFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch
         frames = std::max(frames, noteLeft(carried->clip, carried->anchorSample, start));
     return frames;
 }
+// C (found at the take-fx merge; modulation-first-frame fixed it at run
+// starts): a replay that begins mid-run (a capture switched on while
+// playing, an epoch a loop change or a pause and play with no block
+// between continues) restarts the rack's Mod Outs at 0 and holds that to
+// the first grid point, as an offline render from there does, where live
+// keeps their history; with cl_3's modulated take chain sounding, or
+// fading out under a switch at or before the start (seed 6 epoch 102: a
+// return to the arrangement while paused, then the play), the frames up to
+// the next grid point differ. The frames it covers.
+std::int64_t cFrames(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
+                     std::int64_t offset, std::int64_t start) {
+    const LaunchLogEntry *tr2 = nullptr, *before = nullptr;
+    for (const LaunchLogEntry& e : log)
+        if (e.track == id("tr_2") &&
+            (e.epoch < epoch || (e.epoch == epoch && e.runningFrame <= offset)))
+            before = tr2, tr2 = &e;
+    const auto cl3 = [&](const LaunchLogEntry* e) {
+        return e && e->action == LaunchLogEntry::Action::Clip && e->clip == id("cl_3") &&
+               e->anchorSample <= start;
+    };
+    const bool fading = tr2 && tr2->anchorSample <= start && start < tr2->anchorSample + kFade;
+    if (!cl3(tr2) && !(fading && cl3(before))) return 0;
+    return (32 - start % 32) % 32;
+}
 const char* faultAt(const std::vector<LaunchLogEntry>& log, std::uint64_t epoch,
                     std::int64_t offset, std::int64_t start, bool capture, bool continuous,
                     bool inCallback, std::int64_t held = 0, std::int64_t* frames = nullptr) {
@@ -641,6 +688,10 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
             covered = std::max(covered, hFrames(log, g.epoch, g.song));
             ++n.faults["H"];
         }
+        if (const std::int64_t c = g.continuous ? cFrames(log, g.epoch, 0, g.song) : 0; c > 0) {
+            covered = std::max(covered, c);
+            ++n.faults["C"];
+        }
         if (covered >= length) continue;
         auto offline = replay(s, dir, epochLog(log, g.epoch), g.song, std::size_t(length), g.loop);
         const std::size_t skip = std::size_t(covered);
@@ -728,6 +779,13 @@ Counts judge(Sequence& q, const model::Session& s, const fs::path& dir) {
             covered = std::max(covered, hFrames(log, g.epoch, c.capture.startSample));
             ++n.faults["H"];
         }
+        if (const std::int64_t cf = offset > 0 || g.continuous
+                                        ? cFrames(log, g.epoch, offset, c.capture.startSample)
+                                        : 0;
+            cf > 0) {
+            covered = std::max(covered, cf);
+            ++n.faults["C"];
+        }
         const std::int64_t length = c.capture.frames - 2048;
         if (covered >= length) continue;
         const std::int64_t at = g.out + offset + covered;
@@ -778,6 +836,7 @@ int compareExecutors(Sequence& a, Sequence& b) {
             !f || f[0] != 'G')
             skip = 0;  // (G: the in-callback executor's held note, compared after it)
         if (a.liveFeed && g.playStart) skip = std::max(skip, hFrames(logA, g.epoch, g.song));
+        if (g.continuous) skip = std::max(skip, cFrames(logA, g.epoch, 0, g.song));  // C
         if (length <= skip) continue;
         const std::vector<float> slice(
             outB.begin() + std::ptrdiff_t(latB + std::size_t(gb.out + skip)),

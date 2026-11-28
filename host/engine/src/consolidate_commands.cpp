@@ -42,7 +42,9 @@ auto commitSchema() {
         .build();
 }
 Error stale() {
-    return Error("item.consolidate_stale", "selected material changed during consolidation",
+    return Error("item.consolidate_stale",
+                 "selected material, or what its render read (a route's source, a track "
+                 "feeding it), changed during consolidation",
                  "/items", "retry consolidation with the current selection");
 }
 struct Artifact {
@@ -101,6 +103,72 @@ Result<std::map<fs::path, std::string>> inputHashes(const Work& work) {
     return hashes;
 }
 
+// What a group's render hears: its track's take processing alone (the
+// pre-fader tap becomes a source-only capture: no track chain, input chain,
+// external input, mute or solo) and only the selected items on that track.
+Result<model::Session> captureView(const model::Session& source,
+                                   const model::ItemEditGroup& group) {
+    model::EditTxn capture(source, source.version);
+    const std::set<Id> selected(group.items.begin(), group.items.end());
+    // The ordinary pre-fader tap becomes a source-only capture: all take
+    // processing remains, while track processing and external inputs do not.
+    capture.modify<model::Track>(group.track, [](auto& track) {
+        track.chain.clear();
+        track.inputChain.clear();
+        track.record = {};
+        track.phaseInvert = track.mono = track.mute = false;
+        track.solo = model::Solo::Off;
+    });
+    const auto& originalTrack = *source.tracks.find(group.track);
+    std::set<Id> removedFx(originalTrack.chain.begin(), originalTrack.chain.end());
+    removedFx.insert(originalTrack.inputChain.begin(), originalTrack.inputChain.end());
+    for (Id fx : removedFx) capture.remove<model::FxInstance>(fx);
+    std::set<Id> removedEnvelopes;
+    for (const auto& env : source.envelopes)
+        if (removedFx.contains(env.value->target.object)) {
+            capture.remove<model::Envelope>(env.id);
+            removedEnvelopes.insert(env.id);
+        }
+    for (const auto& entry : source.routes)
+        if (entry.value->to.track == group.track ||
+            (entry.value->to.fx && removedFx.contains(*entry.value->to.fx))) {
+            capture.remove<model::Route>(entry.id);
+            for (const auto& env : source.envelopes)
+                if (env.value->target.object == entry.id) {
+                    capture.remove<model::Envelope>(env.id);
+                    removedEnvelopes.insert(env.id);
+                }
+        }
+    for (const auto& entry : source.autoItems)
+        if (removedEnvelopes.contains(entry.value->envelope))
+            capture.remove<model::AutomationItem>(entry.id);
+    auto snapshot = capture.commit();
+    if (!snapshot) return snapshot.error();
+    // Like the renderer's upstream-track projection, this private view can
+    // omit items without deleting their owned objects from the project.
+    model::IdMap<model::Item>::Builder items(snapshot->items);
+    for (const auto& entry : snapshot->items)
+        if (entry.value->track == group.track && !selected.contains(entry.id))
+            items.erase(entry.id);
+    snapshot->items = items.build();
+    return std::move(*snapshot);
+}
+// What the commit checks against the start (round 192 F4): the selected
+// items as before (itemEditFingerprint), and for each audio group everything
+// its render reads (upstreamFingerprint of its capture view), so an edit to
+// a route's source, or to what feeds it, makes the result stale.
+std::string bakeFingerprint(const model::Session& s, const std::vector<Id>& items) {
+    std::string out = model::itemEditFingerprint(s, items);
+    auto groups = model::consolidationGroups(s, items);
+    if (!groups) return out + ";" + groups.error().code;
+    for (const auto& group : *groups) {
+        if (!group.audio) continue;
+        auto view = captureView(s, group);
+        if (!view) return out + ";" + view.error().code;
+        out += ";" + upstreamFingerprint(*view, group.track);
+    }
+    return out;
+}
 Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
               const host::HostIdentity& identity, const LoadOverrides& overrides,
               cmd::JobManager& jobs, const std::string& job, StopToken stop) {
@@ -124,49 +192,8 @@ Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
         if (jobs.cancelled(job) || stop.stop_requested())
             return Error("job.cancelled", "consolidation cancelled", {}, "retry when ready");
         if (!group.audio) continue;
-        model::EditTxn capture(work.snapshot, work.snapshot.version);
-        const std::set<Id> selected(group.items.begin(), group.items.end());
-        // The ordinary pre-fader tap becomes a source-only capture: all take
-        // processing remains, while track processing and external inputs do not.
-        capture.modify<model::Track>(group.track, [](auto& track) {
-            track.chain.clear();
-            track.inputChain.clear();
-            track.record = {};
-            track.phaseInvert = track.mono = track.mute = false;
-            track.solo = model::Solo::Off;
-        });
-        const auto& originalTrack = *work.snapshot.tracks.find(group.track);
-        std::set<Id> removedFx(originalTrack.chain.begin(), originalTrack.chain.end());
-        removedFx.insert(originalTrack.inputChain.begin(), originalTrack.inputChain.end());
-        for (Id fx : removedFx) capture.remove<model::FxInstance>(fx);
-        std::set<Id> removedEnvelopes;
-        for (const auto& env : work.snapshot.envelopes)
-            if (removedFx.contains(env.value->target.object)) {
-                capture.remove<model::Envelope>(env.id);
-                removedEnvelopes.insert(env.id);
-            }
-        for (const auto& entry : work.snapshot.routes)
-            if (entry.value->to.track == group.track ||
-                (entry.value->to.fx && removedFx.contains(*entry.value->to.fx))) {
-                capture.remove<model::Route>(entry.id);
-                for (const auto& env : work.snapshot.envelopes)
-                    if (env.value->target.object == entry.id) {
-                        capture.remove<model::Envelope>(env.id);
-                        removedEnvelopes.insert(env.id);
-                    }
-            }
-        for (const auto& entry : work.snapshot.autoItems)
-            if (removedEnvelopes.contains(entry.value->envelope))
-                capture.remove<model::AutomationItem>(entry.id);
-        auto snapshot = capture.commit();
+        auto snapshot = captureView(work.snapshot, group);
         if (!snapshot) return snapshot.error();
-        // Like the renderer's upstream-track projection, this private view can
-        // omit items without deleting their owned objects from the project.
-        model::IdMap<model::Item>::Builder items(snapshot->items);
-        for (const auto& entry : snapshot->items)
-            if (entry.value->track == group.track && !selected.contains(entry.id))
-                items.erase(entry.id);
-        snapshot->items = items.build();
         OfflineSettings settings;
         settings.applyMasterPlayrate = false;
         settings.projectDir = work.projectDir;
@@ -221,7 +248,7 @@ Result<json::Value> publish(EngineApp& app, cmd::Dispatcher& dispatcher, Work& w
                             const cmd::Origin& origin) {
     SUPPLE_TRY(checkRenderTarget(app, work.target));
     if (app.mediaDir() != work.mediaDir ||
-        model::itemEditFingerprint(app.view(), work.commit.items) != work.commit.expected)
+        bakeFingerprint(app.view(), work.commit.items) != work.commit.expected)
         return stale();
     SUPPLE_TRY(model::completeItemSelection(app.view(), work.commit.items));
     std::error_code ec;
@@ -255,12 +282,15 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     commit.summary = "Attach consolidated audio and merge MIDI as one replayable edit.";
     commit.args = commitSchema();
     commit.result = schema::any();
+    commit.errors = {{"item.consolidate_stale",
+                      "the selection, or what its render read, changed since the job began",
+                      "consolidate again once the edits are done"}};
     commit.run = [](const Commit& a, cmd::Context& ctx) -> Result<json::Value> {
         auto& app = ctx.service<EngineApp>();
         const auto s = app.view();
         auto groups = model::consolidationGroups(s, a.items);
         if (!groups) return groups.error();
-        if (model::itemEditFingerprint(s, a.items) != a.expected) return stale();
+        if (bakeFingerprint(s, a.items) != a.expected) return stale();
         auto out = json::Value::object();
         out["items"] = json::Value::array();
         out["files"] = json::Value::array();
@@ -334,6 +364,12 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     command.args = argsSchema();
     command.result = schema::any();
     command.errors = {
+        {"item.consolidate_stale",
+         "the selection, or what its render read (a route's source, a track it hears), changed",
+         "consolidate again once the edits are done"},
+        // Its job's commit answers the route limit (addChecked, ADR-0096 M5).
+        {"modulation.limit", "the consolidated takes' routes would pass the route limit",
+         "remove routes first (modulation.list), for instance the copied chain's"},
         {"item.consolidate_*", "invalid material, stale inputs or failed capture",
          "repair the selected sources/layout and retry consolidation"},
         {"item.follow_merge", "merging following MIDI takes would change how a note sounds",
@@ -356,7 +392,7 @@ void registerConsolidateCommands(cmd::Registry& registry) {
         work.snapshot = app.view();
         work.groups = std::move(*groups);
         work.commit.items = a.items;
-        work.commit.expected = model::itemEditFingerprint(work.snapshot, a.items);
+        work.commit.expected = bakeFingerprint(work.snapshot, a.items);
         work.target = renderTarget(app);
         work.projectDir = app.projectDir();
         work.modules = app.modules();
