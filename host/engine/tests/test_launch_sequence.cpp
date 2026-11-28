@@ -29,10 +29,15 @@
 // instead, from a second generator of the seed (so the steps stay those of
 // the seed): a late leave released with the renderer held part of the way
 // ahead, and cycles run after a release before the renderer settles
-// (round 222).
+// (round 222); a relocation's renderer kept short until the next cycles, so
+// the service, launch or capture after it finds it part of the way ahead,
+// and a capture switched on in a late leave's hold, before it settles
+// (round 225). Under a sanitizer it runs fewer seeds and steps;
+// SUPPLE_SEQUENCE_FULL=1 runs the full set there too.
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <random>
 
 #include "clip_player_support.h"
@@ -216,7 +221,11 @@ struct Sequence {
     // how often each was reached: releases with the renderer held part of
     // the way ahead, and cycles run after a release before it settled.
     std::mt19937_64 timing;
-    int partialReleases = 0, heldCycles = 0;
+    int partialReleases = 0, heldCycles = 0, partialServices = 0, holdCaptures = 0;
+    // A relocation's renderer kept short (round 225): until the next cycles.
+    bool partialPin = false;
+    // The miss counters at the previous law point (round 225).
+    std::int64_t lawPlayStartMissed = 0, lawPassedPending = 0, lawMisses = 0;
     std::uint64_t pickTiming(std::uint64_t n) { return timing() % n; }
 
     Sequence(const model::Session& s, const fs::path& dir, const EngineOptions& o, std::uint64_t sd)
@@ -251,6 +260,7 @@ struct Sequence {
             MESSAGE("the renderer has not settled yet");
     }
     void run(std::int64_t cycles) {
+        unpin();
         if (cycles <= 0) return;
         if (anticipative && lateLeave) {
             for (std::int64_t i = 0; i < cycles; ++i) {
@@ -330,19 +340,47 @@ struct Sequence {
     // After a hook-driven timing (round 222), the renderer settled and the
     // acks read (a service): the no-audio invariants (launch.state agrees
     // with the nodes and the newest launches, no slot kept by what was
-    // heard: checkSettled, where the state has settled) and the three miss
-    // counters, none of which a step of this test may count (a play-start
+    // heard: checkSettled, where the state has settled) and no new miss
+    // since the previous such point (round 225: the counters are
+    // cumulative, and the end of the run checks them at 0): a play-start
     // launch missed, a launch the renderer passed while its leave was
-    // pending, an anticipation miss).
+    // pending, an anticipation miss.
     bool lawDue = false;
     void checkLaw() {
         lawDue = false;
         service();
         checkSettled();
         INFO(where());
-        CHECK(EngineTestAccess::playStartMissed(engine) == 0);
-        CHECK(EngineTestAccess::passedPending(engine) == 0);
-        CHECK(engine.anticipationMisses() == 0);
+        const std::int64_t missed = EngineTestAccess::playStartMissed(engine);
+        const std::int64_t passed = EngineTestAccess::passedPending(engine);
+        const std::int64_t misses = std::int64_t(engine.anticipationMisses());
+        CHECK(missed == lawPlayStartMissed);
+        CHECK(passed == lawPassedPending);
+        CHECK(misses == lawMisses);
+        lawPlayStartMissed = missed;
+        lawPassedPending = passed;
+        lawMisses = misses;
+    }
+    // A relocation while playing (a play, a seek, a loop change), on the
+    // anticipative executor: sometimes (round 225) its renderer is kept to
+    // a seeded stream of the new epoch until the next cycles run, so the
+    // service, launch or capture that follows finds it only part of the way
+    // ahead, as an app's tick right after a play start or a locate does
+    // (where launches taken back unheard are placed again). Set before the
+    // relocation: the renderer cannot take back what it has rendered.
+    void pinForRelocation() {
+        unpin();
+        if (!anticipative || pickTiming(4) != 0) return;
+        const std::int64_t blocks = EngineTestAccess::aheadFrames(engine) / kBlock;
+        const std::int64_t stream = kBlock * (1 + std::int64_t(pickTiming(blocks - 2)));
+        engine.holdRendererFrom(stream);
+        partialPin = true;
+        note("kept to " + std::to_string(stream));
+    }
+    void unpin() {
+        if (!partialPin) return;
+        partialPin = false;
+        engine.holdRendererFrom(std::numeric_limits<std::int64_t>::max());
     }
     // The step that releases a late leave, `cycles` long: released as far
     // ahead as the renderer goes after them, or (round 222) part of the way,
@@ -350,8 +388,11 @@ struct Sequence {
     // callback has played to a seeded distance from it (a device's
     // callback comes whenever it comes, however far the renderer has got,
     // as just after a play start). Where it settles, and what it rendered
-    // before still holding the unheard switch, is that distance.
-    void releaseStep(std::int64_t cycles) {
+    // before still holding the unheard switch, is that distance. Inside the
+    // window, sometimes (round 225) `inWindow` switches a capture on, which
+    // begins where the callback is, before the settle point: never as heard.
+    void releaseStep(std::int64_t cycles, const std::function<void()>& inWindow = {}) {
+        unpin();
         settle();
         const std::int64_t ahead = anticipative && playing ? engine.renderedAhead() : 0;
         const auto choice = pickTiming(2);
@@ -369,6 +410,8 @@ struct Sequence {
         const std::int64_t first = std::min(cycles, (ahead - distance) / kBlock);
         engine.holdRendererFrom(EngineTestAccess::played(engine) + ahead);
         run(first);
+        const bool captureNow = pickTiming(2) == 0;
+        if (lateLeave && captureNow && inWindow) inWindow();
         if (lateLeave) {
             settle();
             ++partialReleases;
@@ -410,6 +453,7 @@ struct Sequence {
         }
     }
     void play() {
+        pinForRelocation();
         engine.play();
         playing = true;
         begin();
@@ -420,6 +464,7 @@ struct Sequence {
         unadopted = false;
     }
     void pause() {
+        unpin();
         song = position();
         pausedAt = done;
         pausedSong = song;
@@ -431,10 +476,12 @@ struct Sequence {
         quietSince = done;
     }
     void seek(std::int64_t sample) {
-        if (playing)
+        if (playing) {
             song = position(), end();
-        else
+            pinForRelocation();
+        } else {
             relocatedCapture = capturing;
+        }
         engine.seek(double(sample) / 48000);
         relocated();
         song = sample;
@@ -442,10 +489,12 @@ struct Sequence {
         stoppedAt = done;
     }
     void setLoop(LoopRange to) {
-        if (playing)
+        if (playing) {
             song = position(), end();
-        else
+            pinForRelocation();
+        } else {
             relocatedCapture = capturing;
+        }
         engine.setLoop(double(to.start) / 48000, double(to.end) / 48000, to.on);
         relocated();
         loop = to;
@@ -501,6 +550,7 @@ struct Sequence {
     }
     void service() {
         settle();
+        if (partialPin) ++partialServices;
         engine.service();
         if (endedUnread) readCapture();
     }
@@ -1021,7 +1071,13 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             note("run" + std::to_string(n));
             if (late && !longPlay) {  // the late leave settles in this step
                 a.run(n);
-                b.releaseStep(n);
+                b.releaseStep(n, [&] {
+                    if (a.capturing || b.capturing) return;
+                    note("capture on, in the hold");
+                    ++b.holdCaptures;
+                    a.captureOn();
+                    b.captureOn();
+                });
             } else {
                 run(n);
             }
@@ -1266,7 +1322,9 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
                         << n.markedCaptures << " not as heard), " << q->engine.launchLog().size()
                         << " launches logged, " << q->partialReleases
                         << " late leaves released part of the way ahead, " << q->heldCycles
-                        << " cycles before a released renderer settled; counted, not compared "
+                        << " cycles before a released renderer settled, " << q->partialServices
+                        << " services with a relocation's renderer kept short, " << q->holdCaptures
+                        << " captures switched on in a late leave's hold; counted, not compared "
                            "(faults), and late-leave captures: "
                         << (faults.empty() ? std::string("none") : faults));
     }
@@ -1281,8 +1339,10 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
     // launch that does not free its track's waiting launches), 4 with a live
     // one (seed 12 found the late-leave fault: round 209 F2), a long play of
     // 1200, and one seed of each project run twice for 200, each on both
-    // executors in lockstep; fewer under ThreadSanitizer,
-    // where the same steps run several times slower.
+    // executors in lockstep; fewer under ThreadSanitizer and
+    // AddressSanitizer, where the same steps run several times slower (the
+    // full set took 24 minutes under AddressSanitizer: round 225), unless
+    // SUPPLE_SEQUENCE_FULL=1 asks for the full set there too.
 #if defined(__SANITIZE_THREAD__)
     constexpr bool kTsan = true;
 #elif defined(__has_feature)
@@ -1294,6 +1354,23 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
 #else
     constexpr bool kTsan = false;
 #endif
+#if defined(__SANITIZE_ADDRESS__)
+    constexpr bool kAsan = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    constexpr bool kAsan = true;
+#else
+    constexpr bool kAsan = false;
+#endif
+#else
+    constexpr bool kAsan = false;
+#endif
+    const char* fullSet = std::getenv("SUPPLE_SEQUENCE_FULL");
+    const bool full = fullSet && std::string(fullSet) == "1";
+    const bool tsan = kTsan && !full, asan = kAsan && !full;
+    const std::uint64_t lastNotes = tsan || asan ? 2 : 8, lastLive = tsan || asan ? 9 : 12;
+    const int seedSteps = asan ? 200 : 400, longSteps = tsan ? 300 : asan ? 150 : 1200;
+    const int repeatSteps = tsan || asan ? 100 : 200;
     // SUPPLE_SEQUENCE_SEED=n runs that seed alone (to reproduce a failure).
     const char* only = std::getenv("SUPPLE_SEQUENCE_SEED");
     if (only) {
@@ -1315,22 +1392,22 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
         const fs::path dir = p.app->projectDir();
         INFO(std::string(liveFeed ? "live Notes feed" : "Notes feed"));
         if (!liveFeed) {
-            for (std::uint64_t seed = 1; seed <= (kTsan ? 2u : 8u); ++seed)
-                (void)runSequence(s, edited, dir, seed, 400, false, false);
-            (void)runSequence(s, edited, dir, 101, kTsan ? 300 : 1200, true, false);
+            for (std::uint64_t seed = 1; seed <= lastNotes; ++seed)
+                (void)runSequence(s, edited, dir, seed, seedSteps, false, false);
+            (void)runSequence(s, edited, dir, 101, longSteps, true, false);
             // A run repeats from its seed, the anticipative one included.
-            const auto first = runSequence(s, edited, dir, 3, kTsan ? 100 : 200, false, false);
-            const auto again = runSequence(s, edited, dir, 3, kTsan ? 100 : 200, false, false);
+            const auto first = runSequence(s, edited, dir, 3, repeatSteps, false, false);
+            const auto again = runSequence(s, edited, dir, 3, repeatSteps, false, false);
             CHECK(first.first == again.first);
             CHECK((first.second == again.second));
         } else {
-            for (std::uint64_t seed = 9; seed <= (kTsan ? 9u : 12u); ++seed)
-                (void)runSequence(s, edited, dir, seed, 400, false, true);
+            for (std::uint64_t seed = 9; seed <= lastLive; ++seed)
+                (void)runSequence(s, edited, dir, seed, seedSteps, false, true);
             // A live seed repeats too (round 222: seed 10's anticipative log
             // once differed by run, a launch placed again by a service that
             // did not wait for the renderer to settle).
-            const auto first = runSequence(s, edited, dir, 10, kTsan ? 100 : 200, false, true);
-            const auto again = runSequence(s, edited, dir, 10, kTsan ? 100 : 200, false, true);
+            const auto first = runSequence(s, edited, dir, 10, repeatSteps, false, true);
+            const auto again = runSequence(s, edited, dir, 10, repeatSteps, false, true);
             CHECK(first.first == again.first);
             CHECK((first.second == again.second));
         }
@@ -1704,5 +1781,108 @@ TEST_CASE(
     CHECK(q.node("tr_3") == "clip cl_5");
     CHECK(EngineTestAccess::playStartMissed(q.engine) == 0);
     CHECK(EngineTestAccess::passedPending(q.engine) == 0);
+    q.engine.stop();
+}
+
+TEST_CASE(
+    "a capture begun before a late leave settled keeps launch_unsettled once a later epoch's "
+    "leave has settled (round 225)" *
+    doctest::description("rt")) {
+    // Anticipative: a launch the renderer applies ahead, unheard when a seek
+    // comes with the leave held late (the test hook), so the renderer
+    // renders the new epoch still holding a switch the listener may not
+    // have heard; a capture switched on there, before the leave settles;
+    // then the leave settles, a second seek ends the capture, and the next
+    // epoch's leave settles in its turn at that epoch's first frame (as on
+    // a device) before the capture is read. The capture began over frames rendered before the
+    // late leave settled: not as heard, whenever it is read (round 203 F2;
+    // the late span's end was once kept apart from its epoch and taken over
+    // by the next settle).
+    Project p;
+    project(p, false);
+    const model::Session s = p.app->head();
+    Sequence q(s, p.app->projectDir(), EngineOptions{.workers = 0}, 1);
+    q.play();
+    q.run(220);
+    q.settle();
+    q.engine.service();
+    REQUIRE(q.engine.launch(std::vector{request("tr_1", "cl_2")}, model::LaunchQuantize::None));
+    q.run(120);  // the renderer applies it in a block it renders ahead of the callback
+    q.settle();
+    REQUIRE(EngineTestAccess::slotsAhead(q.engine) > 0);
+    EngineTestAccess::rendererLeaveLate(q.engine, true);
+    q.engine.seek(2.0);
+    q.settle();
+    REQUIRE(EngineTestAccess::leavePending(q.engine));
+    q.run(40);
+    q.settle();
+    q.engine.service();  // what was counted before the capture is read before it
+    REQUIRE(q.engine.captureLaunches(true));
+    q.settle();
+    q.engine.service();
+    q.run(10);
+    const std::uint64_t late = EngineTestAccess::epoch(q.engine);
+    REQUIRE(EngineTestAccess::launchLateEpoch(q.engine) == late);
+    EngineTestAccess::rendererLeaveLate(q.engine, false);
+    q.run(100);
+    q.settle();
+    q.engine.service();
+    const std::int64_t settledAt = EngineTestAccess::launchLateEnd(q.engine);
+    {
+        const auto running = q.engine.launchCapture();
+        REQUIRE(running);
+        REQUIRE(running->placed);
+        INFO("settled at " << settledAt);
+        CHECK(running->facts.launchUnsettled);
+    }
+    // The second seek ends the capture, and the next epoch's leave settles
+    // before the capture is read: at that epoch's first frame, as on a
+    // device, whose callback has not entered the new epoch when the
+    // renderer relocates (here: held late, the renderer kept at that frame
+    // for a pre-roll cycle, then both let go); or after a span of its own
+    // (a launch applied ahead first, so that leave has a switch to take
+    // back too).
+    SUBCASE("the next leave settles at its epoch's first frame") {
+        q.engine.holdRendererFrom(0);
+        EngineTestAccess::rendererLeaveLate(q.engine, true);
+        q.engine.seek(5.0);
+        q.settle();
+        EngineTestAccess::rendererLeaveLate(q.engine, false);
+        q.backend.run(1);  // a pre-roll cycle: the callback enters the epoch, nothing rendered
+        ++q.done;
+        q.engine.holdRendererFrom(std::numeric_limits<std::int64_t>::max());
+        q.settle();
+        CHECK_FALSE(EngineTestAccess::leavePending(q.engine));
+        // The span's record is still its own: a settle in a later epoch is
+        // not its end.
+        CHECK(EngineTestAccess::launchLateEpoch(q.engine) == late);
+        CHECK(EngineTestAccess::launchLateEnd(q.engine) == settledAt);
+    }
+    SUBCASE("the next epoch has a late span of its own") {
+        REQUIRE(q.engine.launch(std::vector{request("tr_2", "cl_4")}, model::LaunchQuantize::None));
+        q.run(120);
+        q.settle();
+        REQUIRE(EngineTestAccess::slotsAhead(q.engine) > 0);
+        EngineTestAccess::rendererLeaveLate(q.engine, true);
+        q.engine.seek(5.0);
+        q.settle();
+        q.run(10);
+        CHECK(EngineTestAccess::launchLateEpoch(q.engine) > late);
+        EngineTestAccess::rendererLeaveLate(q.engine, false);
+        q.run(10);
+        q.settle();
+    }
+    q.run(10);
+    q.settle();
+    q.engine.service();
+    REQUIRE(EngineTestAccess::epoch(q.engine) > late);
+    const auto capture = q.engine.launchCapture();
+    REQUIRE(capture);
+    REQUIRE(capture->placed);
+    CHECK_FALSE(capture->on);
+    INFO("late epoch " << late << " settled at " << settledAt << "; now the late end is "
+                       << EngineTestAccess::launchLateEnd(q.engine) << " of epoch "
+                       << EngineTestAccess::launchLateEpoch(q.engine));
+    CHECK(capture->facts.launchUnsettled);
     q.engine.stop();
 }

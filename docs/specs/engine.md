@@ -941,7 +941,9 @@ the same.*
     switch, so a capture in the epoch it went on in that began before it
     settled, over frames it rendered so, is not as heard
     (`launch_unsettled`, round 203 F2; marked as those frames are rendered,
-    round 209), and so is one running across the leave, pending or placed.
+    round 209, and fixed on the capture as it is placed, so a later epoch's
+    leave cannot take it back: round 225), and so is one running across
+    the leave, pending or placed.
     It never renders past a launch of the epoch it goes on in that it has
     not switched (round 209): before such a launch's first frame on its
     targets (early halves included) it holds, and the callback's next
