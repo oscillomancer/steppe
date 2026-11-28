@@ -101,6 +101,17 @@ endif()
 target_include_directories(tp-vst3-host SYSTEM PUBLIC ${_vst3})
 target_compile_features(tp-vst3-host PUBLIC cxx_std_20)
 set_target_properties(tp-vst3-host PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# The SDK's own sources use std::wstring_convert (deprecated since C++17) and
+# printf formats that assume long long is int64. SYSTEM include directories
+# hide warnings in headers only, not in these sources, so a fresh build of the
+# target warned. Warnings are off for the SDK's sources alone: this is a
+# PRIVATE option on this target and reaches no first-party code. The
+# clang-cl driver takes /w.
+if(MSVC)
+  target_compile_options(tp-vst3-host PRIVATE /w)
+else()
+  target_compile_options(tp-vst3-host PRIVATE -w)
+endif()
 if(_supple_sanitize_flags)
   target_compile_options(tp-vst3-host PRIVATE ${_supple_sanitize_flags})
 endif()
