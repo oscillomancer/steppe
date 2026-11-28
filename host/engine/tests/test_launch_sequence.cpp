@@ -1706,3 +1706,106 @@ TEST_CASE(
     CHECK(EngineTestAccess::passedPending(q.engine) == 0);
     q.engine.stop();
 }
+
+TEST_CASE(
+    "a capture begun before a late leave settled keeps launch_unsettled once a later epoch's "
+    "leave has settled (round 225)" *
+    doctest::description("rt")) {
+    // Anticipative: a launch the renderer applies ahead, unheard when a seek
+    // comes with the leave held late (the test hook), so the renderer
+    // renders the new epoch still holding a switch the listener may not
+    // have heard; a capture switched on there, before the leave settles;
+    // then the leave settles, a second seek ends the capture, and the next
+    // epoch's leave settles in its turn at that epoch's first frame (as on
+    // a device) before the capture is read. The capture began over frames rendered before the
+    // late leave settled: not as heard, whenever it is read (round 203 F2;
+    // the late span's end was once kept apart from its epoch and taken over
+    // by the next settle).
+    Project p;
+    project(p, false);
+    const model::Session s = p.app->head();
+    Sequence q(s, p.app->projectDir(), EngineOptions{.workers = 0}, 1);
+    q.play();
+    q.run(220);
+    q.settle();
+    q.engine.service();
+    REQUIRE(q.engine.launch(std::vector{request("tr_1", "cl_2")}, model::LaunchQuantize::None));
+    q.run(120);  // the renderer applies it in a block it renders ahead of the callback
+    q.settle();
+    REQUIRE(EngineTestAccess::slotsAhead(q.engine) > 0);
+    EngineTestAccess::rendererLeaveLate(q.engine, true);
+    q.engine.seek(2.0);
+    q.settle();
+    REQUIRE(EngineTestAccess::leavePending(q.engine));
+    q.run(40);
+    q.settle();
+    q.engine.service();  // what was counted before the capture is read before it
+    REQUIRE(q.engine.captureLaunches(true));
+    q.settle();
+    q.engine.service();
+    q.run(10);
+    const std::uint64_t late = EngineTestAccess::epoch(q.engine);
+    REQUIRE(EngineTestAccess::launchLateEpoch(q.engine) == late);
+    EngineTestAccess::rendererLeaveLate(q.engine, false);
+    q.run(100);
+    q.settle();
+    q.engine.service();
+    const std::int64_t settledAt = EngineTestAccess::launchLateEnd(q.engine);
+    {
+        const auto running = q.engine.launchCapture();
+        REQUIRE(running);
+        REQUIRE(running->placed);
+        INFO("settled at " << settledAt);
+        CHECK(running->facts.launchUnsettled);
+    }
+    // The second seek ends the capture, and the next epoch's leave settles
+    // before the capture is read: at that epoch's first frame, as on a
+    // device, whose callback has not entered the new epoch when the
+    // renderer relocates (here: held late, the renderer kept at that frame
+    // for a pre-roll cycle, then both let go); or after a span of its own
+    // (a launch applied ahead first, so that leave has a switch to take
+    // back too).
+    SUBCASE("the next leave settles at its epoch's first frame") {
+        q.engine.holdRendererFrom(0);
+        EngineTestAccess::rendererLeaveLate(q.engine, true);
+        q.engine.seek(5.0);
+        q.settle();
+        EngineTestAccess::rendererLeaveLate(q.engine, false);
+        q.backend.run(1);  // a pre-roll cycle: the callback enters the epoch, nothing rendered
+        ++q.done;
+        q.engine.holdRendererFrom(std::numeric_limits<std::int64_t>::max());
+        q.settle();
+        CHECK_FALSE(EngineTestAccess::leavePending(q.engine));
+        // The span's record is still its own: a settle in a later epoch is
+        // not its end.
+        CHECK(EngineTestAccess::launchLateEpoch(q.engine) == late);
+        CHECK(EngineTestAccess::launchLateEnd(q.engine) == settledAt);
+    }
+    SUBCASE("the next epoch has a late span of its own") {
+        REQUIRE(q.engine.launch(std::vector{request("tr_2", "cl_4")}, model::LaunchQuantize::None));
+        q.run(120);
+        q.settle();
+        REQUIRE(EngineTestAccess::slotsAhead(q.engine) > 0);
+        EngineTestAccess::rendererLeaveLate(q.engine, true);
+        q.engine.seek(5.0);
+        q.settle();
+        q.run(10);
+        CHECK(EngineTestAccess::launchLateEpoch(q.engine) > late);
+        EngineTestAccess::rendererLeaveLate(q.engine, false);
+        q.run(10);
+        q.settle();
+    }
+    q.run(10);
+    q.settle();
+    q.engine.service();
+    REQUIRE(EngineTestAccess::epoch(q.engine) > late);
+    const auto capture = q.engine.launchCapture();
+    REQUIRE(capture);
+    REQUIRE(capture->placed);
+    CHECK_FALSE(capture->on);
+    INFO("late epoch " << late << " settled at " << settledAt << "; now the late end is "
+                       << EngineTestAccess::launchLateEnd(q.engine) << " of epoch "
+                       << EngineTestAccess::launchLateEpoch(q.engine));
+    CHECK(capture->facts.launchUnsettled);
+    q.engine.stop();
+}

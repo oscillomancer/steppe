@@ -777,7 +777,8 @@ std::int64_t Engine::slotKey(const LaunchSlot& s, const detail::Plan* plan) SUPP
     return s.target.load(std::memory_order_relaxed) + launchShift(plan, track);
 }
 
-bool Engine::settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SUPPLE_RT {
+bool Engine::settleLeave(detail::Plan& p, int liveClass, std::uint64_t epoch,
+                         std::int64_t stream) SUPPLE_RT {
     // The test hook holds the leave late: the callback's end not known yet.
     if (rendererLeaveLateForTests_.load(std::memory_order_relaxed)) return false;
     const std::uint64_t left = launchLeavePending_;
@@ -795,7 +796,13 @@ bool Engine::settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SU
     leaveLaunchEpoch(1, &p, left, *end);
     takeBackNodes(p, liveClass, left, *end);
     markLeft(1, left, left + 1);
-    launchLateEnd_.store(stream, std::memory_order_release);
+    // The late span's end, where it is in this epoch. A span of an earlier
+    // epoch ended with that epoch, all of it rendered before the settle:
+    // a leave settling here, at this epoch's first frame for one, is not its
+    // end (round 225: it once took the span's end over, so a capture of
+    // that epoch read afterwards lost launch_unsettled).
+    if (launchLateEpoch_.load(std::memory_order_relaxed) == epoch)
+        launchLateEnd_.store(stream, std::memory_order_release);
     // (No locate here: takeBackLaunches relocates each node it restores, and
     // a renderer settling before it rendered anything since its locate, as
     // at a play start it held for, has nothing else to clear; round 211 F2.)
@@ -816,7 +823,7 @@ void Engine::playStartMissed(int path) SUPPLE_RT {
 
 bool Engine::launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
                                std::int64_t end) SUPPLE_RT {
-    if (launchLeavePending_ == UINT64_MAX || settleLeave(p, 0, stream)) return false;
+    if (launchLeavePending_ == UINT64_MAX || settleLeave(p, 0, epoch, stream)) return false;
     if (launchesQueued_.load() == 0) return false;
     for (const LaunchSlot& slot : *launchSlots_) {
         const std::uint64_t was = status(slot.state.load());
@@ -876,7 +883,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
     // and the callback, playing only what was rendered, cannot apply one
     // before it; a passed launch is counted (launchPassedPending_) and marks
     // the capture (round 214).
-    if (renderer && launchLeavePending_ != UINT64_MAX && !settleLeave(p, liveClass, stream)) {
+    if (renderer && launchLeavePending_ != UINT64_MAX &&
+        !settleLeave(p, liveClass, epoch, stream)) {
         // Rendering with switches the listener may not have heard still in
         // place: these frames are not as heard (round 209: marked here, as
         // they are rendered, not at the relocation).
@@ -1925,6 +1933,15 @@ void Engine::placeCapture() {
     capture_.facts.liveInput = plan && plan->anyLive;
     capture_.facts.pluginFailed = pluginFailedNow();  // failed before it began (U1)
     capture_.facts.launchUnlogged = launchAcksLost_;
+    // Begun over frames the renderer rendered after a late leave, before it
+    // settled, which may still hold an unheard switch (round 203 F2): known
+    // as it is placed, since it begins where the callback is, over frames
+    // already rendered, and kept (round 225: read later, the span's record
+    // could belong to a later epoch). The renderer stores the span's end
+    // before it renders past it, and its epoch after an end of INT64_MAX.
+    if (clock.epoch == launchLateEpoch_.load(std::memory_order_acquire) &&
+        stream < launchLateEnd_.load(std::memory_order_acquire))
+        capture_.facts.launchUnsettled = true;
     capture_.inNoteJudged = false;
     judgeCaptureInNote(false);
     // A guessed return still ahead: where it really was is not known.
@@ -2290,11 +2307,8 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
                 out.facts.launchUnsettled = true;
         }
     }
-    // Over the frames a renderer rendered after a late leave, before it
-    // settled, which may still hold an unheard switch (round 203 F2).
-    if (capture_.epoch == launchLateEpoch_.load(std::memory_order_acquire) &&
-        capture_.startStream < launchLateEnd_.load(std::memory_order_acquire))
-        out.facts.launchUnsettled = true;
+    // (Begun over the frames a renderer rendered after a late leave, before
+    // it settled: fixed as it was placed, placeCapture; round 225.)
     std::stable_sort(out.launches.begin() + static_cast<std::ptrdiff_t>(firsts), out.launches.end(),
                      [](const LaunchLogEntry& a, const LaunchLogEntry& b) {
                          return a.runningFrame < b.runningFrame;

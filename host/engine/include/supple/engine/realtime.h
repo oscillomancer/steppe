@@ -1508,8 +1508,9 @@ class Engine {
     bool launchLeaveUndos_ = false;
     // The renderer's pending leave settled once the callback's end for it is
     // known: its unheard slots done, its nodes taken back. False while
-    // still unknown.
-    bool settleLeave(detail::Plan& p, int liveClass, std::int64_t stream) SUPPLE_RT;
+    // still unknown. `epoch`: the one it renders, where `stream` is.
+    bool settleLeave(detail::Plan& p, int liveClass, std::uint64_t epoch,
+                     std::int64_t stream) SUPPLE_RT;
     // Whether the renderer holds before rendering [stream, end) of `epoch`
     // (round 209): its leave still pending and a launch of the epoch it has
     // not switched has a frame there. It waits for the callback's next
@@ -1647,7 +1648,9 @@ class Engine {
     std::optional<std::optional<std::int64_t>> judgedEnd(std::uint64_t epoch) const;
     // The renderer's span after a late leave, until its settle (round 203
     // F2): the epoch it went on in and the stream where it settled
-    // (INT64_MAX until then); a capture overlapping it is not as heard.
+    // (INT64_MAX until then, and for good when that epoch ended first; a
+    // settle in a later epoch is not its end: round 225); a capture begun
+    // over it is not as heard, fixed as the capture is placed.
     std::atomic<std::uint64_t> launchLateEpoch_{UINT64_MAX};
     std::atomic<std::int64_t> launchLateEnd_{INT64_MAX};
     // Main thread: the returns logged, by track, epoch and plan generation:
