@@ -713,12 +713,19 @@ struct Stage {
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.
     // `modHeard` and `modEpoch`: the instance and its modulationEpoch() the
-    // memo was last checked against; a change marks it stale.
+    // memo was last checked against; a change marks it stale. `modRunStart`:
+    // a run starts at its next block (a restarting locate, a loop wrap, an
+    // offline render's first block: startModulationRun), which sends every
+    // slot at its first frame whatever the grid, so what follows a locate
+    // off the grid is the offline render's from there. A plan's adoption
+    // and a handoff do not set it, and the next block consumes it whether
+    // or not the stage's chain runs or sends.
     std::vector<ModParam> mods;
     std::vector<std::uint32_t> modRoutes;
     std::size_t modEvents = 0;
     const host::Instance* modHeard = nullptr;
     std::uint32_t modEpoch = 0;
+    bool modRunStart = false;
     bool bypass = false, instrument = false;
     bool autoBypassOnSilence = false, sleeping = false, processed = false;
     std::int64_t inputLatency = 0;  // stage input's timeline shift, also corrects output events
@@ -1659,6 +1666,10 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole = true) SUPPLE_RT;
 // delay lines and plugin tails, restarting console seeds; notes held at the wrap get
 // note-offs at the start of the next block.
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT;
+// A run starts at the plan's next block (ADR-0096, Stage::modRunStart):
+// locates and wraps start one per node; an offline render calls this
+// before its first block.
+void startModulationRun(Plan& p) SUPPLE_RT;
 // A plan swap (ADR-0016): device notes still sounding on a track carry over
 // to the new plan's node, which releases them, and only them, if it no
 // longer hears the same MIDI input (so monitoring off never leaves a note

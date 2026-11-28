@@ -332,6 +332,27 @@ until it is released.
   the same frame: the sum of its routes' signal × depth × the parameter's
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
+  - **A run's first frame** (an offline render's first block, a locate: a
+    seek or a play start), on the grid or not, also sends every modulated
+    parameter, the memo made stale there. Its sum there is its routes'
+    values at that frame, which a locate starts afresh: the rack restarts
+    its Mod Outs at 0, held up to their first grid point, and the route's
+    delay is cleared. So the frames up to the first grid point hold what an
+    offline render from there holds, never what the plug-in was sent
+    before the locate, which a plug-in may keep across its reset (up to 31
+    frames once differed after a seek off the grid; round 208 F2). A loop
+    wrap sends every modulated parameter at its first frame too, but it
+    starts nothing afresh: the rack keeps its modules' state and the
+    routes' delays carry on (rack.md §6), so it resends the sums carried
+    over the wrap, which a plug-in already holds, and what follows is the
+    loop going on, not an offline render from the loop start (which
+    differs there up to the first grid point; round 210 F2). A
+    handoff between executors and a plan's adoption continue the run on
+    the grid: a route an edit adds while playing first sends at the next
+    grid point, as does a stage that first processes or first has a route
+    after its run's first block (it once sent at the first frame of the
+    block the plan arrived in; round 210 F1), and an input chain that
+    first runs then, its track armed while playing (round 212 F1).
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6): a stage's slots are matched by instance and CLAP id. A
     parameter that the new plan no longer modulates is sent one 0 at its
@@ -349,9 +370,9 @@ until it is released.
     reset (a seek, a play start), a changed instance, and a patch or state
     applied to the instance: `host::Instance::modulationEpoch()` counts
     `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
-    keeps counting `reset()` alone). The next grid point then sends the
-    current sum of every modulated parameter and 0 to every other parameter
-    the memo lists, and drops those. A stage that does not process this
+    keeps counting `reset()` alone). The run's first frame or the next
+    grid point then sends the current sum of every modulated parameter and
+    0 to every other parameter the memo lists, and drops those. A stage that does not process this
     block (a compensated bypass, not owned, not processing) is sent nothing
     and its memo goes stale.
   - The route's delay runs every block at the target node, and a locate
@@ -464,7 +485,9 @@ until it is released.
   which the one-interval lookahead above delivers early, and the offset at
   each frame is linear between the interval's start and end. A rack the
   other executor still owns holds the end. The interpolation is carried by
-  target across plan swaps and starts at 0 after a locate, with the delays.
+  target across plan swaps and starts at 0 after a locate, with the delays,
+  in either executor's locate (the in-callback seek once kept both up to
+  the first grid point; round 208 F2).
   The base (automation, else the fader's value) plus the offset is clamped
   per sample to the target's range (volume up to 12 dB, a level at −inf
   stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
@@ -473,9 +496,9 @@ until it is released.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a
-function of the stage's absolute position, a reset makes the memo stale so
-the first grid point after it sends every modulated parameter, and racks
-restart their modules at every locate (rack.md §6).
+function of the stage's absolute position, a locate makes the memo stale
+and its first frame sends every modulated parameter, and racks restart
+their modules at every locate (rack.md §6).
 
 ### 1.4.2 Clip launcher (ADR-0097)
 
@@ -2190,6 +2213,10 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
+  A render restarts the rack modules it takes from its pool and ends their
+  notes, as a locate does, so renders that share a pool each play as from
+  a fresh one (they once kept a Mod Out's last value from the render
+  before up to its first grid point).
 - **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
   render gives each bridged one a call deadline of its own,
   `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;
