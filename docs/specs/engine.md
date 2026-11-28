@@ -1113,10 +1113,14 @@ the same.*
   `EngineApp::CaptureView` carries as fields all that the warnings say,
   for a client that words its own line: the span (`capture.startSample`
   and `frames`, and `startBeat`/`endBeat` on the current time map), the
-  launches, `version`, `endedBy`, `kept`, `replacedOnBegin` (a newer
+  launches, `held` (how many of them it lays down, `heldLaunches`: the
+  count the warnings say), `holdsPerformance` (it began, heard a frame and
+  holds a clip or a stop, `holdsLaunches`: the test behind
+  `captureUncommitted`), `version`, `endedBy`, `kept`, `replacedOnBegin` (a newer
   capture is armed and replaces it once it hears a frame), and `commit`:
   `None` never written, `Committed`, or `Undone`, written and taken back,
-  which the GUI reads as declined.
+  which the GUI reads as declined. A client counts and judges from those
+  two, never from the launches (round 221 F1).
   `launch.state` says both at once: `capturing` for the engine's own
   capture, armed or running, and `capture_kept` for a kept one beside it;
   with the engine stopped it answers for a kept capture. The GUI's Capture

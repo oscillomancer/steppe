@@ -1549,6 +1549,138 @@ TEST_CASE("launcher: a device restart while capturing commits the take; nothing 
     CHECK(f.errors.empty());
 }
 
+namespace {
+// Round 221 F1: Kit A launched at bar 2 and Drums back to the arrangement at
+// bar 3, a capture switched on 128 frames after that switch, inside its
+// crossfade, by the pane or by an agent (launch.capture). The capture lists
+// what the crossfade fades from (Kit A) and the return, at its frame 0:
+// nothing to lay down. With `launched`, Kit A is launched again inside it
+// (bar 4): one launch to write. The manual backend plays frame by frame
+// (in-callback), so where it begins never depends on the machine's timing;
+// the engine then stops, ending it.
+void captureFromCrossfade(LauncherFixture& f, gui::CaptureControl& capture, bool byPane,
+                          bool launched) {
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    constexpr std::uint32_t block = 128;
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block},
+                               {.anticipative = false, .workers = 0}));
+    // A failed check stops the engine before its backend goes with this frame.
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() {
+            if (app.engine()) app.stopEngine();
+        }
+    } stop{*f.app};
+    std::int64_t cycles = 0;
+    const auto until = [&](std::int64_t frame) {
+        if (const std::int64_t n = frame / block - cycles; n > 0) {
+            backend.run(n);
+            cycles += n;
+        }
+        f.app->tick();
+        capture.service();
+    };
+    REQUIRE(f.app->transport("play"));
+    until(20 * block);
+    CHECK(f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble() == 4);  // bar 2
+    until(96000 + 4000);
+    const json::Value back = f.exec("launch.arrangement", R"({"track":"tr_1"})");
+    REQUIRE(back.find("beat"));
+    CHECK(back.find("beat")->asDouble() == 8);  // bar 3
+    until(192000 + block);
+    if (byPane)
+        REQUIRE(capture.set(true));
+    else
+        f.exec("launch.capture", R"({"on":true})");
+    if (launched) CHECK(f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble() == 12);
+    until(launched ? 288000 + 48000 : 192000 + 48000);
+    const auto view = f.app->launchCapture();
+    REQUIRE(view);
+    // The crossfade's entries are there: the pane's old count saw them.
+    std::size_t clips = 0;
+    for (const auto& e : view->capture.launches)
+        clips += e.action == engine::LaunchLogEntry::Action::Clip;
+    INFO("launches: " << view->capture.launches.size() << ", clips " << clips);
+    REQUIRE(clips == (launched ? 2u : 1u));
+    REQUIRE(view->capture.launches.size() >= (launched ? 3u : 2u));
+    f.exec("engine.stop", "{}");  // ends it at the heard position, kept
+}
+}  // namespace
+
+TEST_CASE(
+    "launcher: a capture holding only a return's crossfade is no kept take and no commit, by "
+    "the pane or an agent (round 221 F1)") {
+    for (const bool byPane : {true, false}) {
+        INFO((byPane ? "armed by the pane" : "an agent's launch.capture"));
+        LauncherFixture f;
+        f.song();
+        gui::CaptureControl capture(*f.app, *f.dispatcher);
+        std::vector<Error> refused;
+        std::vector<std::string> said;
+        capture.onError = [&](const Error& e) { refused.push_back(e); };
+        capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+        captureFromCrossfade(f, capture, byPane, false);
+        const std::uint64_t before = f.app->head().version;
+        REQUIRE(f.app->launchCapture());
+        CHECK_FALSE(f.app->launchCapture()->holdsPerformance);
+        CHECK(f.app->launchCapture()->held == 0);
+        CHECK_FALSE(f.app->captureUncommitted());
+        for (int pass = 0; pass < 2; ++pass) capture.service();
+        // Nothing said committed, nothing written; no kept take for the
+        // cell, the question before another project, or what it would lose.
+        CHECK(said.empty());
+        CHECK(refused.empty());
+        CHECK(f.app->head().version == before);
+        CHECK_FALSE(capture.kept());
+        CHECK(capture.keptLine().empty());
+        CHECK(capture.takeKey().empty());
+        CHECK(capture.lostLine(true).empty());
+        CHECK_FALSE(capture.lit());
+        CHECK(f.errors.empty());
+    }
+}
+
+TEST_CASE(
+    "launcher: a capture with one launch beside a crossfade's entries says 1 launch (round 221 "
+    "F1)") {
+    for (const bool byPane : {true, false}) {
+        INFO((byPane ? "armed by the pane" : "an agent's launch.capture"));
+        LauncherFixture f;
+        f.song();
+        gui::CaptureControl capture(*f.app, *f.dispatcher);
+        std::vector<Error> refused;
+        std::vector<std::string> said;
+        capture.onError = [&](const Error& e) { refused.push_back(e); };
+        capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+        captureFromCrossfade(f, capture, byPane, true);
+        const std::uint64_t before = f.app->head().version;
+        REQUIRE(f.app->launchCapture());
+        CHECK(f.app->launchCapture()->held == 1);
+        CHECK(f.app->captureUncommitted());
+        if (byPane) {
+            // The pane armed it: its next pass commits it and says so.
+            capture.service();
+            CHECK(refused.empty());
+            CHECK(f.app->head().version == before + 1);
+            REQUIRE(said.size() == 1);
+            INFO(said[0]);
+            CHECK(said[0].rfind("The engine stopped during the capture: its take (bar", 0) == 0);
+            CHECK(said[0].find(", 1 launch) is committed.") != std::string::npos);
+        } else {
+            // An agent's: kept, shown in the cell, counted as the app does.
+            CHECK(capture.kept());
+            const std::string line = capture.keptLine();
+            INFO(line);
+            CHECK(line.rfind("A take is kept, not committed: bar", 0) == 0);
+            CHECK(line.find(", 1 launch.") != std::string::npos);
+            CHECK_FALSE(capture.takeKey().empty());
+            CHECK(said.empty());
+            CHECK(f.app->head().version == before);
+        }
+        CHECK(f.errors.empty());
+    }
+}
+
 TEST_CASE(
     "launcher: a refused take kept across Stop audio shows kept; a click commits it, then arms") {
     // The refused take outlives the engine. The cell shows it kept, with the

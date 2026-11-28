@@ -826,13 +826,22 @@ class EngineApp : public cmd::Host {
         // Kept while the engine has a newer capture armed: that one replaces
         // it once it hears a frame (launch.capture's warning).
         bool replacedOnBegin = false;
+        // What it lays down (heldLaunches): the launches the warnings count,
+        // never what a crossfade at its start faded from (round 219 F1).
+        std::size_t held = 0;
+        // It began, heard a frame and holds a performance (a clip or a stop
+        // among those, holdsLaunches): the test captureUncommitted and
+        // launch.commit share, so a client never counts launches itself
+        // (round 221 F1).
+        bool holdsPerformance = false;
     };
     // The engine's once it has begun (or when none is kept), else the kept
     // one; what launch.commit and launch.state read (the GUI's Capture
     // commits whichever is uncommitted, and words its line from the view).
     std::optional<CaptureView> launchCapture();
-    // A capture with launches that launch.commit has not written, or whose
-    // commit an undo took back (the head no longer descends from it).
+    // A capture holding a performance (CaptureView::holdsPerformance) that
+    // launch.commit has not written, or whose commit an undo took back (the
+    // head no longer descends from it).
     bool captureUncommitted();
     // launch.commit wrote launchCapture()'s, in `version` (its transaction's):
     // marked once that transaction commits, with the version pinned so that

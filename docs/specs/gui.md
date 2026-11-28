@@ -3479,9 +3479,16 @@ same heights, scroll and colours.
   3–18, 2 launches) is committed." ("The audio device restarted during the
   capture" for a device restart). Nothing arms by itself after an engine
   stop: the cell goes dark. What is uncommitted is the app's answer
-  (`captureUncommitted`, the view's `commit`), not the pane's copy, so a
+  (`captureUncommitted`: the view's `holdsPerformance` and `commit`), not
+  the pane's copy, so a
   click after a restart commits the kept take, never the new engine's empty
-  capture, and a click never arms over an uncommitted take.
+  capture, and a click never arms over an uncommitted take. The launches
+  the pane counts are the app's too (the view's `held`, what
+  `launch.commit` lays down): a capture begun inside a crossfade does not
+  count what the crossfade faded from, and one holding only a return's
+  crossfade has nothing to commit, so the pane shows no kept take, says no
+  commit at an engine stop and asks nothing before another project opens
+  (round 221 F1).
 - **A kept take shows.** While a take is kept uncommitted (its commit
   refused, or one an agent's capture left), the cell is dark with its dot
   drawn in outline in `armed` (`ArrangeView::setCaptureKept`,

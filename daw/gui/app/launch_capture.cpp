@@ -32,11 +32,13 @@ using CaptureView = engine::EngineApp::CaptureView;
 using CaptureCommit = engine::EngineApp::CaptureCommit;
 using CaptureEnd = engine::EngineApp::CaptureEnd;
 
-// A take kept for the pane: uncommitted, with something to write, and not
-// declined (an undo took its commit back).
+// A take kept for the pane: uncommitted as the app judges it
+// (captureUncommitted: a performance to write, holdsPerformance), and not
+// declined (an undo took its commit back). Never the pane's own count: a
+// capture holding only a return's crossfade has nothing to commit (round
+// 221 F1).
 bool pending(const std::optional<CaptureView>& v) {
-    return v && v->capture.placed && v->capture.frames > 0 && !v->capture.launches.empty() &&
-           v->commit == CaptureCommit::None;
+    return v && v->holdsPerformance && v->commit == CaptureCommit::None;
 }
 }  // namespace
 
@@ -46,7 +48,9 @@ std::string CaptureControl::takeWords(const CaptureView& v) {
     // The end is where the next bar would start: its last bar is the one
     // holding the frame before it.
     const int last = s.timeMap->barBeat(std::max(v.startBeat, v.endBeat - 1e-6)).bar;
-    const std::size_t n = v.capture.launches.size();
+    // What it lays down (the app's count, as its warnings say it), never
+    // what a crossfade at its start faded from.
+    const std::size_t n = v.held;
     return (first == last ? "bar " + std::to_string(first)
                           : "bars " + std::to_string(first) + "\u2013" + std::to_string(last)) +
            ", " + std::to_string(n) + (n == 1 ? " launch" : " launches");
