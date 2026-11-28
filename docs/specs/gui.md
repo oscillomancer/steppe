@@ -1670,7 +1670,17 @@ device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's
 menu (MIDI learn… and Remove MIDI learn, Show or Hide lane, Reset to its
-default, `racks::knobMenu`, shared with the rack window). The
+default, `racks::knobMenu`, shared with the rack window). A refusal of
+any of these (`racks::kKnobCommands`: `module.set`, `module.learn.set`,
+`module.learn.remove`, `env.add`, `env.set`) is said in the status line in
+the GUI's words, from the command, the code and the argument
+(`racks::knobRefusalWords`; a modulation cycle by the Modulation words,
+§2): what was being done, then why ("The knob's lane could not be shown:
+the knob already has a lane."), never the engine's message, its hint, a
+command's name or an id. Each code the commands declare or answer for the
+GUI's arguments has its words, a test walks them; a code with none (one
+the GUI's arguments never meet) says what was being done and the code:
+"The knob could not be set (schema.type)." The
 knobs follow their Macro's telemetry, so automation moves them as it
 plays: the window reads the shown Macros' telemetry every 33 ms
 (`FxWindow::nextDeadline`) and watches only those modules. Telemetry

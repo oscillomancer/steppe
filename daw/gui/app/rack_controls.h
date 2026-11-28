@@ -6,14 +6,17 @@
 // telemetry subscriptions several views share.
 #pragma once
 
+#include <array>
 #include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "learn_dialog.h"
 #include "rack_engine.h"
+#include "supple/base/result.h"
 #include "supple/engine/app.h"
 #include "supple/rack/module_type.h"
 #include "supple/ui/popup.h"
@@ -76,6 +79,20 @@ std::vector<ui::MenuItem> knobMenu(const model::Session& s, model::Id module,
 LearnRequest knobLearn(const model::Session& s, model::Id module, const std::string& moduleTitle,
                        const sd::ParamModel& param,
                        std::function<void(const std::string& command, json::Value args)> exec);
+
+// The commands a rack knob outside the rack window issues: a drag, Reset
+// or a choice (module.set), MIDI learn (module.learn.set, .remove) and its
+// lane (env.add, env.set).
+inline constexpr std::array<std::string_view, 5> kKnobCommands{
+    "module.set", "module.learn.set", "module.learn.remove", "env.add", "env.set"};
+// The status line's words for `e`, one of kKnobCommands' refusals (gui.md
+// §4.5, "Rack devices"): what was being done, then why, from the command,
+// the code and the argument it is refused at (a modulation cycle by
+// views::modulationRefusalWords), never the engine's message, its hint, a
+// command's name or an id. A code with no words here says what was being
+// done and the code: "The knob could not be set (schema.type)." `s` is the
+// session the command was refused on.
+std::string knobRefusalWords(const model::Session& s, std::string_view command, const Error& e);
 
 // Telemetry subscriptions (rack::Instance::watch) that several views share:
 // each view says which modules it reads now, and a module is watched while

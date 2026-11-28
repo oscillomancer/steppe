@@ -28,6 +28,7 @@
 #include "mod_source.h"
 #include "plugin_browser.h"
 #include "plugin_drag.h"
+#include "rack_controls.h"
 #include "render_dialog.h"
 #include "side_browser.h"
 #include "side_panel.h"
@@ -5580,6 +5581,123 @@ TEST_CASE(
     CHECK(automated);
 }
 
+TEST_CASE("a Rack device's refusals are in the GUI's words, never the engine's") {
+    Fixture f;
+    if (!f.ok) return;
+    f.fx = std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel,
+                                           gui::FxWindow::Hooks{},
+                                           gui::Favourites::defaultFile(gui::test::slug()));
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    json::Value made = exec("rack.add", R"({"name":"Lead"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    const std::string filter =
+        exec("module.add",
+             R"({"rack":")" + rack + R"(","type":"filter","label":"Filter"})")["module"]
+            .asString();
+    const std::string macro =
+        exec("module.add",
+             R"({"rack":")" + rack + R"(","type":"macro","label":"Performance"})")["module"]
+            .asString();
+    exec("cable.add", R"({"from":")" + macro + R"(.out_1","to":")" + filter + R"(.cutoff"})");
+    exec("module.learn.set",
+         R"({"module":")" + macro +
+             R"(","param":"macro_1","midi":{"kind":"cc","channel":1,"number":21}})");
+    REQUIRE(f.fx->open(*model::Id::parse(track)));
+    f.frame();
+    // The knob's menu, then `row` run after another client (an agent) has
+    // done what it does: the engine refuses, and the status line says so.
+    const auto runAfter = [&](const std::string& row, const char* command,
+                              const std::string& args) {
+        auto devices = f.fx->rackDevices();
+        REQUIRE(devices.size() == 1);
+        const auto knob = devices.front()->knobAt("Filter cutoff");
+        REQUIRE(knob);
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, *knob, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, *knob, 3});
+        f.frame();
+        const ui::Node* menu = f.root->popupOpen() ? f.root->find("fx.rack.menu")
+                                                   : f.panel->root().find("fx.rack.menu");
+        REQUIRE(menu);
+        std::function<void()> run;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == row) run = item.run;
+        REQUIRE(run);
+        f.panel->root().closePopups();
+        f.root->closePopups();
+        exec(command, args);
+        run();
+        return f.fxStatus();
+    };
+    // Show lane, the knob's lane made meanwhile (env.exists).
+    std::string said = runAfter(
+        "Show lane", "env.add",
+        R"({"module":")" + macro + R"(","param":"macro_1","points":[{"beat":0,"value":10}]})");
+    CHECK(said == "The knob's lane could not be shown: the knob already has a lane.");
+    CHECK(said.find("automates") == std::string::npos);  // the engine's message
+    CHECK(said.find("env.") == std::string::npos);
+    // Remove MIDI learn, removed meanwhile (module.learn_unknown).
+    f.frame();
+    said = runAfter("Remove MIDI learn", "module.learn.remove",
+                    R"({"module":")" + macro + R"(","param":"macro_1"})");
+    CHECK(said ==
+          "The knob's MIDI learn could not be removed: the knob has no MIDI controller now.");
+    CHECK(said.find("macro_1") == std::string::npos);
+    CHECK(said.find("module.") == std::string::npos);
+}
+
+TEST_CASE("every refusal a rack knob's commands declare or answer has the GUI's words") {
+    Fixture f;
+    if (!f.ok) return;
+    const model::Session& s = f.app->head();
+    const std::string text = "the engine's message", hint = "the engine's hint";
+    // What their runs answer for the arguments the GUI gives (a module or
+    // a lane gone, a type gone, a value, a binding or a lane changed by
+    // another client, a frozen channel), beside what the registry declares.
+    const std::set<std::string> answered{
+        "module.unknown",       "mo.unknown", "rack.unknown_module", "en.unknown",
+        "rack.unknown_type",    "rack.param", "params.out_of_range", "env.value",
+        "module.learn_unknown", "env.exists", "env.param",           "track.frozen"};
+    std::size_t walked = 0, declared = 0;
+    for (std::string_view name : gui::racks::kKnobCommands) {
+        const cmd::CommandInfo* command = f.registry.find(name);
+        REQUIRE_MESSAGE(command, std::string(name));
+        ++walked;
+        std::set<std::string> codes = answered;
+        for (const cmd::ErrorSpec& e : command->errors) {
+            codes.insert(e.code);
+            ++declared;
+        }
+        for (const std::string& code : codes)
+            for (const char* path : {"", "/args/module", "/args/param", "/args/params/macro_1",
+                                     "/args/env", "/args/visible", "/args/source"}) {
+                INFO(name << " " << code << " at " << path);
+                const std::string words =
+                    gui::racks::knobRefusalWords(s, name, Error(code, text, path, hint));
+                CHECK_FALSE(words.empty());
+                CHECK(words.find(text) == std::string::npos);
+                CHECK(words.find(hint) == std::string::npos);
+                CHECK(words.find(code) == std::string::npos);  // worded, not the last resort
+                for (std::string_view other : gui::racks::kKnobCommands)
+                    CHECK(words.find(other) == std::string::npos);
+                CHECK(words.find("/args") == std::string::npos);
+                CHECK(words.ends_with("."));
+            }
+    }
+    CHECK(walked == 5);
+    CHECK(declared >= 1);  // module.set's modulation.cycle (its Notes source)
+    // A code with no words of its own (one the GUI's arguments never meet)
+    // says what was being done and the code, never the engine's message.
+    const std::string last =
+        gui::racks::knobRefusalWords(s, "module.set", Error("schema.type", text, "/args", hint));
+    CHECK(last == "The knob could not be set (schema.type).");
+    CHECK(gui::racks::knobRefusalWords(s, "env.set", Error("made.up", text, "", hint)) ==
+          "The knob's lane could not be shown or hidden (made.up).");
+}
+
 TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs follow playback") {
     Fixture f;
     if (!f.ok) return;
@@ -5975,7 +6093,8 @@ TEST_CASE("modulation words: each M5 code a command the GUI runs declares has th
         {"file_actions.cpp", "item.add of a media file, which copies no route"},
         {"render_dialog.cpp", "item.add of a rendered file, which copies no route"},
         {"tcp.cpp", "Shell::commit (a reorder) and the shell's addSend refusal"},
-        {"rack_device.cpp", "its exec hook, which the FX window words (its knobs' params only)"},
+        {"rack_device.cpp", "its exec hook, which the FX window words (racks::knobRefusalWords)"},
+        {"rack_controls.h", "racks::kKnobCommands, which racks::knobRefusalWords words (its .cpp)"},
     };
     // Where a command listed as not run may be named.
     const std::map<std::string, std::set<std::string>> notRunAt{

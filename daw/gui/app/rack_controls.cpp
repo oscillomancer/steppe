@@ -9,6 +9,7 @@
 
 #include "rack_scene.h"
 #include "supple/engine/midi_control.h"
+#include "supple/views/modulation_words.h"
 
 namespace supple::gui::racks {
 namespace {
@@ -212,6 +213,48 @@ LearnRequest knobLearn(const model::Session& s, model::Id module, const std::str
         exec("module.learn.remove", std::move(args));
     };
     return request;
+}
+
+namespace {
+
+// What a knob command was doing, as the start of a sentence.
+std::string knobAction(std::string_view command) {
+    if (command == "module.set") return "The knob could not be set";
+    if (command == "module.learn.set") return "The knob's MIDI controller could not be set";
+    if (command == "module.learn.remove") return "The knob's MIDI learn could not be removed";
+    if (command == "env.add") return "The knob's lane could not be shown";
+    if (command == "env.set") return "The knob's lane could not be shown or hidden";
+    return "The knob could not be changed";
+}
+
+// Why, by code (each of kKnobCommands' declared codes, and those its run
+// answers for arguments the GUI gives); nullopt for a code the GUI's
+// arguments never meet (a schema or command code, a take's or a clip's).
+std::optional<std::string> knobCause(std::string_view code) {
+    if (code == "module.unknown" || code == "mo.unknown" || code == "rack.unknown_module")
+        return "its module is no longer in the rack";
+    if (code == "en.unknown") return "its lane is gone";
+    if (code == "rack.unknown_type") return "its module's type is not installed";
+    if (code == "rack.param")
+        return "its module no longer has that knob, or its type is not installed";
+    if (code == "params.out_of_range" || code == "env.value")
+        return "the value is outside the knob's range";
+    if (code == "module.learn_unknown") return "the knob has no MIDI controller now";
+    if (code == "env.exists") return "the knob already has a lane";
+    if (code == "env.param") return "the knob cannot be automated";
+    if (code == "track.frozen") return "the rack's channel is frozen. Unfreeze it first";
+    if (code == "modulation.cycle")
+        return "the rack would hear what it modulates, so the modulation would loop. Remove the "
+               "modulation first (Remove modulation in the plug-in parameter's menu)";
+    return std::nullopt;
+}
+
+}  // namespace
+
+std::string knobRefusalWords(const model::Session& s, std::string_view command, const Error& e) {
+    if (auto words = views::modulationRefusalWords(s, command, e)) return *words;
+    if (auto cause = knobCause(e.code)) return knobAction(command) + ": " + *cause + ".";
+    return knobAction(command) + " (" + e.code + ").";
 }
 
 // --- shared watches ----------------------------------------------------------------
