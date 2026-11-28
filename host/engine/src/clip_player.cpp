@@ -6,6 +6,7 @@
 // position and its anchor, so both executors and the offline replay play
 // the same samples.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 
@@ -1894,6 +1895,19 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
     window(fold, frames, true);
 }
 
+namespace {
+
+// A sustain pedal (CC 64) event: its channel, and down (64 or more).
+bool sustainEvent(const host::Event& e, int& channel, bool& down) {
+    if (e.kind != host::Event::Kind::Midi || (e.midi[0] & 0xf0) != 0xb0 || e.midi[1] != 64)
+        return false;
+    channel = e.midi[0] & 0x0f;
+    down = e.midi[2] >= 64;
+    return true;
+}
+
+}  // namespace
+
 bool clipNoteSounding(const Plan& p, const ClipPlayer& pl, std::int64_t anchorSample,
                       double anchorBeat, bool unanchored, std::int64_t song) {
     if (!pl.midi || pl.muted || pl.events.empty() || !(pl.periodBeats > 0)) return false;
@@ -1905,37 +1919,97 @@ bool clipNoteSounding(const Plan& p, const ClipPlayer& pl, std::int64_t anchorSa
     const double beat = tm.beatAt(double(song + origin) / p.rate);
     const auto k = static_cast<std::int64_t>(std::floor((beat - anchorBeat) / pl.periodBeats));
     const bool before = unanchored && !pl.once;  // as clipMidi
+    const auto played = [&](std::int64_t pass) {
+        return (pass >= 0 || before) && !(pl.once && pass > 0);
+    };
+    // The pedal over its pass and the one before, from where the pass before
+    // them left it (a period's end: the clip's last CC 64 on each channel).
+    struct Pedal {
+        std::int64_t at;
+        int channel;
+        bool down;
+    };
+    std::vector<Pedal> pedals;
+    std::array<bool, 16> from{};
+    if (played(k - 2))
+        for (const ClipEvent& e : pl.events) {
+            int channel = 0;
+            bool down = false;
+            if (sustainEvent(e.event, channel, down)) from[std::size_t(channel)] = down;
+        }
+    for (std::int64_t pass = k - 1; pass <= k; ++pass) {
+        if (!played(pass)) continue;
+        const double base = anchorBeat + double(pass) * pl.periodBeats;
+        for (const ClipEvent& e : pl.events) {
+            int channel = 0;
+            bool down = false;
+            if (!sustainEvent(e.event, channel, down)) continue;
+            const std::int64_t at = sampleOf(base + e.beat);
+            if (before || at >= anchorSample) pedals.push_back({at, channel, down});
+        }
+    }
+    // Held by the pedal from its note-off to `song`: down before the off
+    // (a pedal event at the off's frame comes after it), and not let up
+    // from the off to `song`.
+    const auto heldThrough = [&](int channel, std::int64_t off) {
+        bool down = from[std::size_t(channel & 15)];
+        for (const Pedal& x : pedals) {
+            if (x.channel != (channel & 15)) continue;
+            if (x.at < off)
+                down = x.down;
+            else if (x.at <= song && !x.down)
+                return false;
+        }
+        return down;
+    };
     // Its pass and the one before (a note-off may sit at the period's end).
     for (std::int64_t pass = k - 1; pass <= k; ++pass) {
-        if ((pass < 0 && !before) || (pl.once && pass > 0)) continue;
+        if (!played(pass)) continue;
         const double base = anchorBeat + double(pass) * pl.periodBeats;
         for (const ClipEvent& e : pl.events) {
             if (e.event.kind != host::Event::Kind::NoteOff) continue;
             const std::int64_t on = sampleOf(base + e.start), off = sampleOf(base + e.beat);
             if (!before && on < anchorSample) continue;  // never played (clipMidi)
-            if (on < song && off > song) return true;
+            if (on < song && (off > song || heldThrough(e.event.channel, off))) return true;
         }
     }
     return false;
 }
 
 bool arrangementNoteSounding(const Node& n, std::int64_t song) {
-    // Its events are on the node's timeline (timelineShift later), sorted.
+    // Its events are on the node's timeline (timelineShift later), sorted
+    // (at one frame: note-offs, then controls, then note-ons).
     const std::int64_t at = song + n.timelineShift;
     std::vector<std::pair<std::int32_t, std::int32_t>> open;  // (noteId, channel·128 + key)
+    std::vector<int> held;  // the channels of notes ended under the sustain pedal
+    std::array<bool, 16> pedal{};
     for (const TimedEvent& t : n.events) {
         const host::Event& e = t.event;
+        if (t.sample > at) break;
+        int channel = 0;
+        bool down = false;
         if (e.kind == host::Event::Kind::NoteOn) {
             if (t.sample >= at) break;  // one starting there is started there
             open.emplace_back(e.noteId, e.channel * 128 + e.key);
         } else if (e.kind == host::Event::Kind::NoteOff || e.kind == host::Event::Kind::NoteChoke) {
-            if (t.sample > at) continue;
             const std::pair<std::int32_t, std::int32_t> key{e.noteId, e.channel * 128 + e.key};
-            if (const auto it = std::find(open.begin(), open.end(), key); it != open.end())
+            if (const auto it = std::find(open.begin(), open.end(), key); it != open.end()) {
                 open.erase(it);
+                // Ended while the pedal is down: it sounds on until the pedal
+                // is let up (a choke ends it all the same).
+                if (e.kind == host::Event::Kind::NoteOff && pedal[std::size_t(e.channel & 15)])
+                    held.push_back(e.channel & 15);
+            }
+        } else if (sustainEvent(e, channel, down)) {
+            if (down && t.sample < at) {
+                pedal[std::size_t(channel)] = true;
+            } else if (!down) {
+                pedal[std::size_t(channel)] = false;
+                std::erase(held, channel);
+            }
         }
     }
-    return !open.empty();
+    return !open.empty() || !held.empty();
 }
 
 bool clipChainTicks(const Plan& p, const Node& n, int player, double song,

@@ -746,6 +746,15 @@ class Engine {
     // Bounded by awaitSeconds() unless a bound is passed.
     bool awaitRendered(std::int64_t frames) { return awaitRendered(frames, awaitSeconds()); }
     bool awaitRendered(std::int64_t frames, double timeoutSeconds);
+    // Anticipative, main thread: the frames of the current transport epoch
+    // rendered past what the callback has played (0 before the renderer has
+    // relocated there; with no anticipation, no limit). A manual backend's
+    // caller runs no more cycles than this covers, and at least one (which
+    // plays a pre-roll, or drops older epochs' chunks so the renderer has
+    // room): what it plays then never depends on when the renderer's thread
+    // runs (awaitRendered also answers for a renderer that can do nothing
+    // more until the callback runs).
+    std::int64_t renderedAhead() const;
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
     // (anticipative; immediately true otherwise, where the next cycle does).
@@ -1510,6 +1519,11 @@ class Engine {
     bool launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
                            std::int64_t end) SUPPLE_RT;
     std::atomic<bool> rendererLaunchHeld_{false};  // holding so (awaitRendered: as full)
+    // The callback's newest epoch entry (heardEndsEntered_) as the renderer
+    // decided that hold: an entry since records the end the hold waits for,
+    // so the hold is no longer known until the renderer looks again (round
+    // 219 F3).
+    std::atomic<std::uint64_t> rendererHeldEntered_{0};
     // A launch placed at a play start that was missed all the same, by the
     // path that missed it: [0] publishing (a horizon past it), [1] an
     // executor passing it undecided, [2] an executor passing it committed,
@@ -1752,10 +1766,16 @@ class Engine {
         CaptureFacts facts;
         std::uint64_t misses = 0, bridgeLate = 0, xruns = 0, errors = 0;
         bool closed = false;
+        bool inNoteJudged = false;  // began_in_note decided (judgeCaptureInNote)
     };
     CaptureState capture_;
     CaptureFacts captureFacts() const;  // the running capture's so far, or the ended one's
-    void closeCapture();                // it ended: fixes its facts
+    // began_in_note, judged once with the plan playing then: as it is placed,
+    // or once every launch due before its start is in the log (`now`: at
+    // its end, with what is known).
+    void judgeCaptureInNote(bool now);
+    bool captureBeganInNote() const;
+    void closeCapture();  // it ended: fixes its facts
     // A load while a capture runs: what the edit changed (Engine::load).
     void captureEdit(const model::Session& before, const model::Session& after);
     void placeCapture();       // a pending start, once the clock reads

@@ -1039,6 +1039,74 @@ TEST_CASE("a capture begun while playing inside a sounding note says began_in_no
             CHECK(reasons(p) == expected);
         }
     }
+    SUBCASE("fixed as the capture began: removing the notes after it changes nothing") {
+        // round 220 F2: the fact was judged from the newest plan at each read.
+        Project p;
+        twoTracks(p);
+        AppLive live(p, kInCallback, kBlock, 48000 * 9);
+        REQUIRE(p.app->transport("play"));
+        live.until(48000);
+        p.run("launch.capture", R"({"on": true})");
+        live.until(48000 + 9600);
+        p.run("launch.capture", R"({"on": false})");
+        live.until(48000 + 9600 + 1280);
+        CHECK(reasons(p) == Reasons{"began_mid_run", "began_in_note"});
+        const model::Session now = p.app->head();
+        for (const auto& item : now.items)
+            if (item.value->track == id("tr_1")) {
+                json::Value args = json::Value::object();
+                args["item"] = item.id.str();
+                p.run("item.remove", json::writeCompact(args));
+            }
+        live.until(48000 + 9600 + 1280 * 3);
+        const auto view = p.app->launchCapture();
+        REQUIRE(view);
+        CHECK(view->capture.facts.beganInNote);
+        CHECK(reasons(p) == Reasons{"began_mid_run", "began_in_note"});
+    }
+    SUBCASE("a note the sustain pedal holds past its off, arrangement and clip") {
+        // round 220 F3: G3 ends at beat 3 of bar 1 (48000) with the pedal
+        // (CC 64) down to bar 2 beat 3 (144000): on an instrument that
+        // honours it the note sounds on. The clip (launched on bar 2,
+        // 96000) holds its G3 (to 120000) with the pedal to its beat 4
+        // (168000). Past the pedal, nothing; without it, nothing.
+        struct Case {
+            const char* what;
+            bool clip, pedal;
+            std::int64_t at;
+            bool inNote;
+        };
+        const Case cases[] = {
+            {"arrangement, pedal down past the off", false, true, 72000, true},
+            {"arrangement, after the pedal is let up", false, true, 150016, false},
+            {"arrangement, no pedal", false, false, 72000, false},
+            {"clip, pedal down past the off", true, true, 144000, true},
+            {"clip, after the pedal is let up", true, true, 180000, false},
+            {"clip, no pedal", true, false, 144000, false}};
+        for (const Case& k : cases) {
+            INFO(k.what);
+            Project p;
+            p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+            const std::string lane = k.pedal ? "\nlane cc sustain ch 1\n1.1 127; 2.3 0" : "";
+            const std::string clipLane = k.pedal ? "\nlane cc sustain ch 1\n1.1 127; 1.4 0" : "";
+            json::Value item = j(R"({"track": "tr_1", "bar": 1})");
+            item["notation"] = k.clip ? std::string("voice bass; 1: r:w | r:w | r:w")
+                                      : "voice bass; 1: G3:h r:h | r:w | r:w" + lane;
+            p.runArgs("item.add", item);
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1"})");
+            clip["notation"] = "voice bass; 1: G3:q r:q r:h" + clipLane;
+            p.runArgs("clip.add", clip);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * kBlock);
+            if (k.clip) p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            live.until(k.at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(k.at + 4800);
+            CHECK(reasons(p) == (k.inNote ? Reasons{"began_mid_run", "began_in_note"}
+                                          : Reasons{"began_mid_run"}));
+        }
+    }
     SUBCASE("from a play start inside an arrangement note: as heard") {
         Project p;
         twoTracks(p);

@@ -39,6 +39,19 @@ schema::Schema<CapturedPerformance> capturedPerformanceSchema();
 // (launch.commit and a render's "captured").
 CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate);
 
+// What `perf` lays down: of a track's launches at one frame the last given
+// (a later one there takes it over), in track then frame order, less the
+// arrangement a track begins in (a return at frame 0). A capture begun inside
+// a crossfade lists what it fades from, then the switch, at frame 0 (fault
+// B): only the switch is laid.
+std::vector<const CapturedLaunch*> heldLaunches(const CapturedPerformance& perf);
+// Whether `perf` holds anything launch.commit writes: a clip or a stop held
+// on some track. The one test of whether a capture holds a performance: the
+// uncommitted check (the project-switch prompt, the kept and replace
+// warnings) asks it, and launch.commit lays out only the tracks it holds on
+// (round 219 F2).
+bool holdsLaunches(const CapturedPerformance& perf);
+
 // A section written for a scene launched in the performance: every clip of the
 // scene started on one frame, held until one of its tracks was launched again.
 struct CommittedSection {

@@ -1055,9 +1055,20 @@ the same.*
   included (round 176 F3). What each track played as a capture
   began is its newest entry before the start, a return included (an
   entry at the start is a switch at its frame 0, crossfading from it);
-  for a capture begun while playing inside a switch's crossfade, what the
+  for a capture begun while playing inside a switch's crossfade (in the
+  switch's own pass: as far after it on the song's running count as in
+  the song, no loop wrap between, round 220 F1), what the
   switch faded from comes first and the switch after it, so the replay
-  crossfades as live did (fault B). So removing
+  crossfades as live did (fault B). That first entry is no launch at the
+  start: it carries no scene (a scene's section counts its launches at a
+  frame), and what a capture lays down (`heldLaunches`) is, for each track
+  and frame, the last entry, less a return at frame 0 (the arrangement it
+  begins in). A capture holds a performance only when one of those is a
+  clip or a stop (`holdsLaunches`): the one test the uncommitted check
+  (the project-switch prompt, the kept and replace warnings, whose count of
+  launches is of those entries) and `launch.commit` share, so a capture
+  holding only a return's crossfade is neither uncommitted nor written
+  (round 219 F1, F2). So removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip
@@ -2314,7 +2325,13 @@ When driving a manual dummy backend, wait for `Engine::awaitPlan()` after
 publishing a plan before counting its output-settling callbacks. This wait
 ends after the renderer has adopted the plan and queued it for the callback.
 `awaitRendered()` waits for audio in the transport epoch, not for the latest
-plan; while stopped it can return immediately. Fast manual callbacks do not
+plan; while stopped it can return immediately. A renderer holding for its
+leave (round 209) counts as rendered only until the callback enters an epoch
+after the renderer decided to hold: that entry records the end it waits for,
+so the wait lasts until the renderer has looked again, settled and rendered
+or held anew (round 219 F3; taking the older hold for full, a test played its
+pre-roll through and found a launch placed for the play start not yet
+logged). Fast manual callbacks do not
 pace the renderer like a device clock does. Both waits belong on the
 test/model thread. Each is bounded by `awaitSeconds()`, 10 s unless a call
 passes its own bound: tests raise it to 60 s, as they do the transport's wait
@@ -2688,7 +2705,12 @@ whole song sample too, so the two switch on the same stream frame. The capture's
 by the engine (`Engine::CaptureFacts`: from the play start, begun
 inside a sounding note, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
-the capture ends.
+the capture ends; whether it began inside a sounding note is judged once,
+from the plan playing then, as it is placed or, when a launch due before
+its start has yet to switch on all its targets (a shifted channel switches
+later in the stream), once it has (at the latest as the capture ends), so
+no later edit changes it (round 220 F2). Only `launch_unsettled` moves after that, from not known
+to known, as the verdicts it waits for come in.
 
 **Heard.** A frame is heard when the executors hand it to the device
 callback, not the output latency later (§1.4.2, "A launch applied but not
@@ -2748,7 +2770,7 @@ refused. `tail_s`, `trim`,
 | Reason | When |
 | --- | --- |
 | `began_mid_run` | the capture did not begin at a play start |
-| `began_in_note` | it began while playing inside a note a track's clip or arrangement was sounding (a rack's Notes feed included): live holds the note, its replay, starting inside it, never starts it; always after `began_mid_run` (an exact replay needs pre-roll, an open item) |
+| `began_in_note` | it began while playing inside a note a track's clip or arrangement was sounding (a rack's Notes feed included), a note its sustain pedal (CC 64) holds past its off included: live holds the note, its replay, starting inside it, never starts it; always after `began_mid_run` (an exact replay needs pre-roll, an open item) |
 | `edited_during` | a plan compiled during it for anything but launches (any session edit) |
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |

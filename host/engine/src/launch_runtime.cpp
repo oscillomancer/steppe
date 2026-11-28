@@ -1886,6 +1886,7 @@ std::int64_t Engine::captureHeard() const {
 }
 
 void Engine::placeCapture() {
+    judgeCaptureInNote(false);  // placed already: once what was due before it has switched
     if (!capture_.on || !capture_.pending) return;
     LaunchClock clock;
     if (!launchClock(clock)) return;   // relocating: the next service
@@ -1924,6 +1925,8 @@ void Engine::placeCapture() {
     capture_.facts.liveInput = plan && plan->anyLive;
     capture_.facts.pluginFailed = pluginFailedNow();  // failed before it began (U1)
     capture_.facts.launchUnlogged = launchAcksLost_;
+    capture_.inNoteJudged = false;
+    judgeCaptureInNote(false);
     // A guessed return still ahead: where it really was is not known.
     if (returnGuessEpoch_ == clock.epoch && returnGuessSong_ > song) capture_.facts.edited = true;
     capture_.misses = misses_.load(std::memory_order_relaxed);
@@ -1931,6 +1934,76 @@ void Engine::placeCapture() {
     capture_.xruns = backend_ ? backend_->status().xruns : 0;
     capture_.errors = processErrors_.load(std::memory_order_relaxed);
     capture_.closed = false;
+}
+
+void Engine::judgeCaptureInNote(bool now) {
+    if (!capture_.placed || capture_.pending || capture_.inNoteJudged) return;
+    // Judged once every launch due before its start has switched on all its
+    // targets and so is in the log: a shifted channel switches its target's
+    // frame later in the stream, after the capture may have been placed
+    // (seed 8, round 220). Its end judges it with what is known.
+    if (capture_.startStream != 0 && !now)
+        for (const LaunchSlot& s : *launchSlots_) {
+            const std::uint64_t st = status(s.state.load(std::memory_order_acquire));
+            if (s.epoch.load(std::memory_order_relaxed) != capture_.epoch ||
+                s.songFrame.load(std::memory_order_relaxed) >= capture_.startSong)
+                continue;
+            const std::uint8_t required = s.required.load(std::memory_order_relaxed);
+            if (st == LaunchSlot::kPending || st == LaunchSlot::kCommitted ||
+                (st == LaunchSlot::kApplied &&
+                 (s.done.load(std::memory_order_acquire) & required) != required))
+                return;
+        }
+    (void)readLaunchAcks();
+    capture_.facts.beganInNote = captureBeganInNote();
+    capture_.inNoteJudged = true;
+}
+
+bool Engine::captureBeganInNote() const {
+    // Begun while playing inside a note a track's clip or arrangement was
+    // sounding (D): live holds it, its replay never starts it. (From a play
+    // start or a relocation live starts afresh: no note sounds on.) Judged
+    // once, as it is placed, with the plan playing then: a capture's facts
+    // are what was true when it was taken (round 220 F2).
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (capture_.startStream == 0 || !plan) return false;
+    const std::int64_t start = capture_.startSong, song = capture_.startSample;
+    std::map<model::Id, std::size_t> before;  // each track's newest entry before it
+    for (std::size_t i = 0; i < launchLog_.size(); ++i) {
+        const LaunchLogEntry& e = launchLog_[i];
+        if (e.epoch < capture_.epoch || (e.epoch == capture_.epoch && e.songFrame < start))
+            before[e.track] = i;
+    }
+    const auto sounding = [&](model::Id track, auto&& clipNote, auto&& arrangementNote) {
+        const auto it = before.find(track);
+        if (it == before.end() ||
+            launchLog_[it->second].action == LaunchLogEntry::Action::Arrangement)
+            return arrangementNote();
+        const LaunchLogEntry& e = launchLog_[it->second];
+        return e.action == LaunchLogEntry::Action::Clip && clipNote(e);
+    };
+    for (const detail::Node& n : plan->nodes) {
+        const auto clipNote = [&](const LaunchLogEntry& e) {
+            const int k = detail::playerOf(n, e.clip);
+            return k >= 0 && detail::clipNoteSounding(*plan, n.players[static_cast<std::size_t>(k)],
+                                                      e.anchorSample, e.anchorBeat,
+                                                      e.anchorSample > song, song);
+        };
+        if (sounding(n.id, clipNote, [&] { return detail::arrangementNoteSounding(n, song); }))
+            return true;
+        if (n.rack)  // a rack's Notes feeds play their source track's clips
+            for (const detail::NotesFeed& feed : n.rack->notes) {
+                if (!feed.follows || !feed.source) continue;
+                const auto feedNote = [&](const LaunchLogEntry& e) {
+                    const int k = detail::playerOf(feed, e.clip);
+                    return k >= 0 && detail::clipNoteSounding(
+                                         *plan, feed.players[static_cast<std::size_t>(k)],
+                                         e.anchorSample, e.anchorBeat, e.anchorSample > song, song);
+                };
+                if (sounding(*feed.source, feedNote, [] { return false; })) return true;
+            }
+    }
+    return false;
 }
 
 Engine::CaptureFacts Engine::captureFacts() const {
@@ -1964,6 +2037,7 @@ bool Engine::pluginFailedNow() const {
 
 void Engine::closeCapture() {
     if (capture_.pending || capture_.closed || !capture_.placed) return;
+    judgeCaptureInNote(true);
     capture_.facts = captureFacts();
     capture_.closed = true;
 }
@@ -2156,47 +2230,17 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     const std::int64_t song = capture_.startSample;  // where in the song it began
     const auto fading = [&](const LaunchLogEntry& e) {
         if (capture_.startStream == 0 || e.epoch != capture_.epoch || !plan) return false;
+        // How far it began after the switch, on the song's running count;
+        // a loop wrap between ends the crossfade (§1.4.2), so the song moved
+        // from the switch's position (its anchor) as far as the count did.
+        // (The folded position alone matched a later pass's frames; the
+        // running count alone, a crossfade a wrap had cut: round 220 F1.)
+        const std::int64_t since = start - e.songFrame;
+        if (song - e.anchorSample != since) return false;
         for (const detail::Node& n : plan->nodes)
-            if (n.id == e.track)
-                return e.anchorSample + n.launchFadeFrames + n.timelineShift > song;
+            if (n.id == e.track) return since < n.launchFadeFrames + n.timelineShift;
         return false;
     };
-    // Begun while playing inside a note a track's clip or arrangement was
-    // sounding (D): live holds it, its replay never starts it. (From a play
-    // start or a relocation live starts afresh: no note sounds on.)
-    if (capture_.startStream != 0 && plan) {
-        const auto sounding = [&](model::Id track, auto&& clipNote, auto&& arrangementNote) {
-            const auto it = before.find(track);
-            if (it == before.end() ||
-                launchLog_[it->second].action == LaunchLogEntry::Action::Arrangement)
-                return arrangementNote();
-            const LaunchLogEntry& e = launchLog_[it->second];
-            return e.action == LaunchLogEntry::Action::Clip && clipNote(e);
-        };
-        for (const detail::Node& n : plan->nodes) {
-            const auto clipNote = [&](const LaunchLogEntry& e) {
-                const int k = detail::playerOf(n, e.clip);
-                return k >= 0 && detail::clipNoteSounding(
-                                     *plan, n.players[static_cast<std::size_t>(k)], e.anchorSample,
-                                     e.anchorBeat, e.anchorSample > song, song);
-            };
-            if (sounding(n.id, clipNote, [&] { return detail::arrangementNoteSounding(n, song); }))
-                out.facts.beganInNote = true;
-            if (n.rack)  // a rack's Notes feeds play their source track's clips
-                for (const detail::NotesFeed& feed : n.rack->notes) {
-                    if (!feed.follows || !feed.source) continue;
-                    const auto feedNote = [&](const LaunchLogEntry& e) {
-                        const int k = detail::playerOf(feed, e.clip);
-                        return k >= 0 &&
-                               detail::clipNoteSounding(
-                                   *plan, feed.players[static_cast<std::size_t>(k)], e.anchorSample,
-                                   e.anchorBeat, e.anchorSample > song, song);
-                    };
-                    if (sounding(*feed.source, feedNote, [] { return false; }))
-                        out.facts.beganInNote = true;
-                }
-        }
-    }
     for (const auto& [track, i] : before) {
         LaunchLogEntry first = launchLog_[i];
         first.runningFrame = 0;
@@ -2212,6 +2256,10 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
                 }
             from.runningFrame = 0;
             from.epoch = capture_.epoch;
+            // Only what the crossfade fades from, no launch at the start: no
+            // scene's (launch.commit counts a scene's launches at a frame to
+            // write its section; round 219 F1).
+            from.scene.reset();
             out.launches.push_back(from);
             out.launches.push_back(first);
             continue;

@@ -107,16 +107,43 @@ inline double maxDiff(const std::vector<float>& a, std::size_t aFrom, const std:
 
 const EngineOptions kInCallback{.anticipative = false, .workers = 0};
 
+// Runs a manual backend for what is rendered ahead of `cycles` (at most
+// 4096 frames) and returns how many cycles it ran: called once awaitRendered
+// has returned, so that no cycle's audio depends on when the renderer's
+// thread runs (round 219: a seed's repeat differed by a cycle at play
+// starts under load).
+// - It plays only frames already rendered: past them the renderer races it.
+// - With nothing of the epoch rendered while playing (awaitRendered also
+//   returns for a renderer that can do nothing until the callback runs:
+//   its rings full of an older epoch's chunks, which the callback drops, or
+//   holding for the end the callback's next cycle records), one cycle,
+//   with the renderer held: a pre-roll on every run. Unheld, the renderer,
+//   woken in that cycle, rendered the block its pre-roll waits for before
+//   the cycle looked, or after, as the load had it.
+inline std::int64_t runRendered(Engine& engine, DummyBackend& backend, std::int64_t cycles,
+                                std::uint32_t block) {
+    const std::int64_t ahead = engine.renderedAhead();
+    if (ahead == 0 && engine.transport().playing) {
+        engine.holdRenderer(true);
+        while (!engine.awaitRendererHeld()) {
+        }
+        backend.run(1);
+        engine.holdRenderer(false);
+        return 1;
+    }
+    const std::int64_t n = std::min<std::int64_t>(
+        cycles, std::max<std::int64_t>(1, std::min<std::int64_t>(ahead, 4096) / block));
+    backend.run(n);
+    return n;
+}
+
 // Anticipative: drive a manual backend `cycles` times, letting the renderer
 // keep ahead (a device's callbacks would be paced by its clock).
 inline void runAhead(Engine& engine, DummyBackend& backend, std::int64_t cycles,
                      std::uint32_t block) {
     while (cycles > 0) {
         REQUIRE(engine.awaitRendered(4096));
-        const std::int64_t n =
-            std::min<std::int64_t>(cycles, std::max<std::int64_t>(1, 4096 / block));
-        backend.run(n);
-        cycles -= n;
+        cycles -= runRendered(engine, backend, cycles, block);
     }
 }
 
@@ -129,10 +156,7 @@ inline void runAheadOnState(Engine& engine, DummyBackend& backend, std::int64_t 
     while (cycles > 0) {
         while (!engine.awaitRendered(4096)) {
         }
-        const std::int64_t n =
-            std::min<std::int64_t>(cycles, std::max<std::int64_t>(1, 4096 / block));
-        backend.run(n);
-        cycles -= n;
+        cycles -= runRendered(engine, backend, cycles, block);
     }
 }
 

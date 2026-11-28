@@ -15,7 +15,12 @@
 // seed (no clock decides them), and the anticipative renderer is let run
 // until it can hold no more before every step's actions, so a run repeats
 // from its seed on both executors (checked); a failure prints the seed and
-// the step.
+// the step. No check here may decide by thread timing: the anticipative
+// engine's cycles play only what the renderer has rendered, a cycle with
+// nothing rendered while playing runs with the renderer held (one pre-roll
+// cycle on every run), and the late-leave hook, released, is waited on
+// before the next cycle (runRendered; round 219: under load a seed's repeat
+// once differed by a cycle at play starts, the logs equal).
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -236,12 +241,17 @@ struct Sequence {
                     EngineTestAccess::rendererLeaveLate(engine, false);
                     lateLeave = false;
                     note("late settles");
+                    // Released, it settles and renders, or holds again until
+                    // the callback's next cycle: waited for before that cycle
+                    // runs, never raced (round 219).
+                    while (!engine.awaitRendered(4096)) {
+                    }
                 }
                 // A play start the renderer held for: the callback waits for
                 // its pre-roll, so the epoch is heard a cycle later.
                 const bool fresh = playing && !segments.empty() && segments.back().end < 0 &&
                                    done + i == epochCycle;
-                backend.run(1);
+                (void)runRendered(engine, backend, 1, kBlock);
                 if (fresh && EngineTestAccess::playedStream(engine) == 0) {
                     ++epochCycle;
                     segments.back().out += kBlock;
@@ -975,13 +985,15 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             const std::int64_t sample = std::int64_t(pick(12 * 128)) * 375;
             // The launch after a cycle, before any (fault E), or inside the
             // cycle that takes the seek (the in-callback executor's hook;
-            // round 216 F-C1: the anticipative one launches before it). With
-            // a late leave held, after a cycle (it stays unsettled through
-            // it: the hook): before one, the renderer thread's leave races
-            // the launch, and the frames it renders before settling (never
-            // as heard) differ from run to run.
-            const auto picked = pick(3);
-            const auto timing = b.lateLeave ? 0 : picked;
+            // round 216 F-C1: the anticipative one launches before it), a
+            // late leave held or not. (Before any cycle with one held, the
+            // renderer holds before the launch, released holds again, and
+            // the callback's first cycle records the end it waits for:
+            // awaitRendered took the hold decided before that for full, so
+            // the play ran its pre-roll through, the launch not yet logged
+            // and the audio a cycle or more late, as the machine's load
+            // decided; round 219 F3.)
+            const auto timing = pick(3);
             each([&](Sequence& q) { q.seek(sample); });
             std::vector<Engine::LaunchRequest> requests;
             if (const auto scene = pick(3); scene < 2) {
@@ -1065,6 +1077,11 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             run(1);
         }
         if (late && !longPlay && r >= 26 && r < 52) {  // the late leave settles from here
+            // Where the renderer settles (and what it rendered before, still
+            // holding an unheard switch) is where it stands when released:
+            // as far ahead as it goes on every run, not wherever its thread
+            // had got after the step's cycles (round 219).
+            b.settle();
             late = b.lateLeave = false;
             EngineTestAccess::rendererLeaveLate(b.engine, false);
         }
@@ -1093,6 +1110,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
         }
         each([](Sequence& q) { q.noteLate(); });
     }
+    b.settle();  // (as above)
     EngineTestAccess::rendererLeaveLate(b.engine, false);
     b.lateLeave = false;
     each([](Sequence& q) {
