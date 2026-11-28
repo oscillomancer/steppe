@@ -856,3 +856,94 @@ TEST_CASE("a lost return ack leaves the track on the arrangement and the capture
     INFO(why);
     CHECK(why.find("\"edited_during\"") != std::string::npos);
 }
+
+TEST_CASE(
+    "a capture begun inside a scene launch's crossfade commits the scene's section (round "
+    "219 F1)" *
+    doctest::description("rt")) {
+    // Switched on 128 frames after sc_1's switch (bar 2), the capture lists
+    // each track's arrangement, what the crossfade fades from, then its clip
+    // at frame 0 (fault B). That first entry is no launch of the scene: the
+    // section is written (it counted the scene's launches twice), the
+    // recorded performance tags no arrangement with the scene, and the
+    // capture's line counts the two clips launched.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO((options.anticipative ? "anticipative" : "in-callback"));
+        Project p;
+        twoTracks(p);  // tr_1 cl_1 and tr_2 cl_2 in sc_1
+        AppLive live(p, options, kBlock, 48000 * 4);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * kBlock);
+        p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2 (96000)
+        live.until(96000 + 128);
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 48000);
+        p.run("launch.capture", R"({"on": false})");
+        const auto view = p.app->launchCapture();
+        REQUIRE(view);
+        INFO("launches:" << describe(view->capture.launches));
+        REQUIRE(view->capture.launches.size() == 4);  // each track's arrangement, then its clip
+        for (const LaunchLogEntry& e : view->capture.launches) {
+            CHECK(e.runningFrame == 0);
+            CHECK(e.scene.has_value() == (e.action == LaunchLogEntry::Action::Clip));
+        }
+        CHECK(p.app->captureUncommitted());
+        const auto line = p.app->captureReplaceWarning();
+        REQUIRE(line);
+        CHECK(line->find("(2 launches,") != std::string::npos);
+        json::Value done = p.run("launch.commit", "{}");
+        REQUIRE(done["sections"].size() == 1);
+        CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");
+        CHECK(done["tracks"].size() == 2);
+        json::Value history = p.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        const json::Value* launches = last.find("args")->find("performance")->find("launches");
+        REQUIRE(launches);
+        for (const json::Value& e : launches->asArray())
+            CHECK((e.find("scene") == nullptr || e.find("action")->asString() == "clip"));
+        CHECK_FALSE(p.app->captureUncommitted());
+        live.stop();
+    }
+}
+
+TEST_CASE("a capture holding only a return's crossfade holds no performance (round 219 F2)" *
+          doctest::description("rt")) {
+    // Both tracks back to the arrangement at bar 3, the capture switched on
+    // 128 frames after: it lists each track's clip, then its return, at
+    // frame 0, nothing to lay down. Not uncommitted (no project-switch
+    // prompt, no replace warning) and launch.commit writes nothing: one test
+    // (holdsLaunches) for both. A launch inside the same capture makes it
+    // hold one.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const bool launched : {false, true}) {
+            INFO((options.anticipative ? "anticipative" : "in-callback")
+                 << (launched ? ", cl_1 launched inside" : ""));
+            Project p;
+            twoTracks(p);
+            AppLive live(p, options, kBlock, 48000 * 8);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * kBlock);
+            p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+            live.until(96000 + 4000);
+            p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3
+            p.run("launch.arrangement", R"({"track": "tr_2"})");
+            live.until(192000 + 128);
+            p.run("launch.capture", R"({"on": true})");
+            if (launched) p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 4
+            live.until(launched ? 288000 + 48000 : 192000 + 48000);
+            p.run("launch.capture", R"({"on": false})");
+            const auto view = p.app->launchCapture();
+            REQUIRE(view);
+            INFO("launches:" << describe(view->capture.launches));
+            CHECK(view->capture.launches.size() == (launched ? 5u : 4u));
+            CHECK(p.app->captureUncommitted() == launched);
+            const auto line = p.app->captureReplaceWarning();
+            CHECK(line.has_value() == launched);
+            if (line) CHECK(line->find("(1 launch,") != std::string::npos);
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["tracks"].size() == (launched ? 1u : 0u));
+            CHECK(done["sections"].size() == 0);
+            CHECK_FALSE(p.app->captureUncommitted());
+            live.stop();
+        }
+}

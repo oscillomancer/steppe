@@ -746,6 +746,15 @@ class Engine {
     // Bounded by awaitSeconds() unless a bound is passed.
     bool awaitRendered(std::int64_t frames) { return awaitRendered(frames, awaitSeconds()); }
     bool awaitRendered(std::int64_t frames, double timeoutSeconds);
+    // Anticipative, main thread: the frames of the current transport epoch
+    // rendered past what the callback has played (0 before the renderer has
+    // relocated there; with no anticipation, no limit). A manual backend's
+    // caller runs no more cycles than this covers, and at least one (which
+    // plays a pre-roll, or drops older epochs' chunks so the renderer has
+    // room): what it plays then never depends on when the renderer's thread
+    // runs (awaitRendered also answers for a renderer that can do nothing
+    // more until the callback runs).
+    std::int64_t renderedAhead() const;
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
     // (anticipative; immediately true otherwise, where the next cycle does).
@@ -929,11 +938,15 @@ class Engine {
     // (engine.md §3.1): recorded while it runs, fixed when it ends.
     struct CaptureFacts {
         bool fromPlayStart = false;  // it began where playing began (stream 0)
-        bool edited = false;         // the session changed apart from the playrate
-        bool rateChanged = false;    // the playrate's controls, or a sync chase's scale
-        bool liveInput = false;      // a plan monitoring live input played during it
-        bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
-        bool pluginFailed = false;   // a processing error (processErrors)
+        // Begun while playing (not from a play start) inside a sounding
+        // note, which live holds and its replay, starting inside the note,
+        // never starts: an exact replay needs pre-roll (began_in_note).
+        bool beganInNote = false;
+        bool edited = false;        // the session changed apart from the playrate
+        bool rateChanged = false;   // the playrate's controls, or a sync chase's scale
+        bool liveInput = false;     // a plan monitoring live input played during it
+        bool dropout = false;       // an anticipation miss, a late bridge cycle, an xrun
+        bool pluginFailed = false;  // a processing error (processErrors)
         // A launch ack lost to a full ring while it ran, or at any time
         // before it began: the log misses a launch that was heard.
         bool launchUnlogged = false;
@@ -1179,6 +1192,8 @@ class Engine {
     // The anticipative executors' position in `epoch`, also before the
     // renderer has relocated for it: then what relocate() will take.
     std::int64_t anticipativePosition(std::uint64_t epoch) const;
+    // The callback's executor's, also before its next cycle has taken it.
+    std::int64_t callbackPosition(std::uint64_t epoch) const;
     // Frames the callback has played in `epoch` (0 before its first).
     // The epoch with its seek target and loop, read under xportSeq_: the
     // audio thread gives up after `tries` (a write in progress) and keeps
@@ -1301,6 +1316,11 @@ class Engine {
     // the slots and deciding them, as a main thread preempted there.
     void (*launchCommitForTests_)(void*) = nullptr;
     void* launchCommitContext_ = nullptr;
+    // Tests only (EngineTestAccess): runs in the in-callback executor's cycle
+    // right after it takes a new epoch, as a main thread acting during that
+    // cycle (the hook disables RealtimeSanitizer itself).
+    void (*epochTakenForTests_)(void*) = nullptr;
+    void* epochTakenContext_ = nullptr;
     // Tests only (EngineTestAccess): this many of the next prepareRatePlan
     // attempts are late, as if the renderer had passed their hand, so they
     // prepare again (the third fails, and a recovery seek follows).
@@ -1499,6 +1519,11 @@ class Engine {
     bool launchHeldByLeave(detail::Plan& p, std::uint64_t epoch, std::int64_t stream,
                            std::int64_t end) SUPPLE_RT;
     std::atomic<bool> rendererLaunchHeld_{false};  // holding so (awaitRendered: as full)
+    // The callback's newest epoch entry (heardEndsEntered_) as the renderer
+    // decided that hold: an entry since records the end the hold waits for,
+    // so the hold is no longer known until the renderer looks again (round
+    // 219 F3).
+    std::atomic<std::uint64_t> rendererHeldEntered_{0};
     // A launch placed at a play start that was missed all the same, by the
     // path that missed it: [0] publishing (a horizon past it), [1] an
     // executor passing it undecided, [2] an executor passing it committed,
@@ -1741,10 +1766,16 @@ class Engine {
         CaptureFacts facts;
         std::uint64_t misses = 0, bridgeLate = 0, xruns = 0, errors = 0;
         bool closed = false;
+        bool inNoteJudged = false;  // began_in_note decided (judgeCaptureInNote)
     };
     CaptureState capture_;
     CaptureFacts captureFacts() const;  // the running capture's so far, or the ended one's
-    void closeCapture();                // it ended: fixes its facts
+    // began_in_note, judged once with the plan playing then: as it is placed,
+    // or once every launch due before its start is in the log (`now`: at
+    // its end, with what is known).
+    void judgeCaptureInNote(bool now);
+    bool captureBeganInNote() const;
+    void closeCapture();  // it ended: fixes its facts
     // A load while a capture runs: what the edit changed (Engine::load).
     void captureEdit(const model::Session& before, const model::Session& after);
     void placeCapture();       // a pending start, once the clock reads

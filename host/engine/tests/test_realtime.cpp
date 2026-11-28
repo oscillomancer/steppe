@@ -955,6 +955,38 @@ TEST_CASE("a seek off the block grid never grows event storage on the audio thre
     }
 }
 
+TEST_CASE("in-callback, a pause resets each plug-in once (round 217)" *
+          doctest::description("rt")) {
+    // A pause is a new epoch, which starts the plug-ins afresh (round 215
+    // F-B1); the stop it also is reset them again in the same cycle, a
+    // second round trip to a bridged plug-in. Also a seek and a pause in
+    // one cycle. (Stopping alone, as with no new epoch, still resets.)
+    for (const bool seekToo : {false, true}) {
+        INFO("a seek in the same cycle " << seekToo);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        const model::Session s = synthSession(0.0, "com.suppleaudio.test.gain");
+        Id gain;
+        for (const auto& e : s.fx)
+            if (e.value->plugin.id == "com.suppleaudio.test.gain") gain = e.id;
+        REQUIRE(engine.load(s));
+        engine.play();
+        backend.run(10);
+        REQUIRE(pool.find(gain));
+        const std::uint32_t before = pool.find(gain)->resets();
+        if (seekToo) engine.seek(0.5);
+        engine.pause();
+        backend.run(1);
+        CHECK(pool.find(gain)->resets() - before == 1);
+        backend.run(2);
+        CHECK(pool.find(gain)->resets() - before == 1);
+        engine.stop();
+    }
+}
+
 TEST_CASE("a plugin that refuses to start is passed through, not processed") {
     for (const EngineOptions& options : {kInCallback, EngineOptions{}}) {
         auto pool = makePool();

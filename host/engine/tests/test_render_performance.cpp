@@ -377,7 +377,8 @@ json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
 TEST_CASE("a removal undone before the executors took it is not a return (round 172 K1)") {
     // The executor went from the plan with cl_1 to the one with it again:
     // it never returned tr_1, and acked nothing. launch.state says cl_1,
-    // and a later capture with no edit of its own lacks only a play start.
+    // and a later capture with no edit of its own lacks only a play start
+    // (and begins inside a note).
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 5);
@@ -389,13 +390,15 @@ TEST_CASE("a removal undone before the executors took it is not a return (round 
     CHECK(EngineTestAccess::launchReturns(*p.app->engine()).empty());
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why == R"(["began_mid_run"])");
+    // (And began_in_note: it begins inside cl_1's E3, beat 0.8 of bar 2.)
+    CHECK(why == R"(["began_mid_run","began_in_note"])");
 }
 
 TEST_CASE("a removal the executors took, then its undo, is a return (round 174)") {
     // The executor returned tr_1 at the removal's next block; the undo brings
     // cl_1 back to the plan, not to the track: launch.state says the
-    // arrangement, and a capture after both lacks only a play start.
+    // arrangement, and a capture after both lacks only a play start (and
+    // begins inside a note).
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 4);
@@ -410,7 +413,8 @@ TEST_CASE("a removal the executors took, then its undo, is a return (round 174)"
     CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock) - 64);  // tr_1's timeline
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why == R"(["began_mid_run"])");
+    // (And began_in_note: it begins inside the arrangement's A3, bar 2.)
+    CHECK(why == R"(["began_mid_run","began_in_note"])");
 }
 
 TEST_CASE("a plug-in that failed before the capture leaves it not as heard (round 174 U1)") {
@@ -897,4 +901,220 @@ TEST_CASE("each render.* command declares every code its sources answer (round 1
     for (const std::string& u : undeclared) list += u + "\n";
     INFO("undeclared:\n" << list);
     CHECK(undeclared.empty());
+}
+
+namespace {
+// tr_1 (fadingClips) before its fader, rendered from song sample `start`,
+// replaying `log`: an offline render, as a performance's or a capture's.
+std::vector<float> tr1From(Project& p, std::int64_t start, std::size_t frames,
+                           std::vector<LaunchLogEntry> log) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.startSeconds = double(start) / 48000;
+    settings.endSeconds = settings.startSeconds + double(frames) / 48000 + 0.05;
+    settings.blockSize = 64;
+    settings.projectDir = p.app->projectDir();
+    settings.track = id("tr_1");
+    settings.tap = model::Tap::PreFader;
+    settings.launches = std::move(log);
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    REQUIRE(r->audio.channels[0].size() >= frames);
+    return r->audio.channels[0];
+}
+LaunchLogEntry tr1Clip(const char* clip, std::int64_t anchor, std::int64_t frame = 0) {
+    LaunchLogEntry e;
+    e.track = id("tr_1");
+    e.action = LaunchLogEntry::Action::Clip;
+    e.clip = id(clip);
+    e.anchorSample = anchor;
+    e.anchorBeat = double(anchor) / 24000;  // 120 BPM
+    e.runningFrame = frame;
+    return e;
+}
+// The first frame in [from, to) where `out` is not `expected(i)`, or -1.
+template <class F>
+std::int64_t firstWrong(const std::vector<float>& out, std::int64_t from, std::int64_t to,
+                        F&& expected) {
+    for (std::int64_t i = from; i < to; ++i)
+        if (out[std::size_t(i)] != expected(i)) return i;
+    return -1;
+}
+}  // namespace
+
+TEST_CASE(
+    "a render begins as a relocation: a track's first entry anchored off its start plays by its "
+    "phase with no crossfade; one anchored at it crossfades (faults A and B; round 218)" *
+    doctest::description("rt")) {
+    // fadingClips: tr_1's ramps, each frame its source position; cl_2 a
+    // 48000-frame loop, cl_3 a one-shot here. A render from 100000.
+    Project p;
+    fadingClips(p);
+    p.run("clip.set", R"({"clip": "cl_3", "mode": "once"})");
+    constexpr std::int64_t kStart = 100000, kN = 120000;
+    const auto loopAt = [](std::int64_t anchor) {
+        return [anchor](std::int64_t i) {
+            return rampAt(((kStart + i - anchor) % 48000 + 48000) % 48000);
+        };
+    };
+    SUBCASE("a loop clip anchored after the start (a seek back carried it): by its phase") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart + 30000)});
+        CHECK(firstWrong(out, 0, kN, loopAt(kStart + 30000)) == -1);
+    }
+    SUBCASE("a loop clip anchored inside its crossfade before the start: by its phase, faded") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart - 100)});
+        CHECK(firstWrong(out, 0, kN, loopAt(kStart - 100)) == -1);
+    }
+    SUBCASE("a one-shot anchored after the start: silent until its anchor, no crossfade there") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_3", kStart + 30000)});
+        CHECK(firstWrong(out, 0, 30000, [](std::int64_t) { return 0.f; }) == -1);
+        CHECK(firstWrong(out, 30000, 30000 + 48000,
+                         [](std::int64_t i) { return rampAt(i - 30000); }) == -1);
+        CHECK(firstWrong(out, 30000 + 48000, kN, [](std::int64_t) { return 0.f; }) == -1);
+    }
+    SUBCASE("a launch anchored at the start crossfades in, as live launches there") {
+        const auto out = tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart)});
+        CHECK(out[0] < rampAt(0));
+        CHECK(out[200] < rampAt(200));
+        CHECK(firstWrong(out, 240, kN, loopAt(kStart)) == -1);
+    }
+    SUBCASE("a switch at the first frame after a carried entry crossfades from it") {
+        const auto out =
+            tr1From(p, kStart, kN, {tr1Clip("cl_2", kStart - 5000), tr1Clip("cl_3", kStart)});
+        // Both at frame 120, half way: cl_2 at its phase 5120, cl_3 at 120.
+        CHECK(out[120] != rampAt(5120));
+        CHECK(out[120] != rampAt(120));
+        CHECK(out[120] > 0.f);
+        CHECK(firstWrong(out, 240, 48000, [](std::int64_t i) { return rampAt(i); }) == -1);
+    }
+}
+
+TEST_CASE("a capture begun while playing inside a sounding note says began_in_note (fault D)") {
+    // twoTracks: tr_1's sine plays the arrangement's whole notes over bars
+    // 1-3 (to 288000) and cl_1 (C3:e E3:e G3:q r:h, a bar). Live holds a
+    // note sounding where a capture switched on while playing begins; its
+    // replay, starting inside the note, never starts it: not as heard for
+    // that too (after began_mid_run). From a play start live starts
+    // afresh: no note sounds on, nothing to say.
+    const auto reasons = [](Project& p) {
+        json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+        INFO("starts at " << dry["performance"]["start"].asInt());
+        std::vector<std::string> out;
+        if (const json::Value* why = dry.find("not_heard_because"))
+            for (const json::Value& r : why->asArray()) out.push_back(r.asString());
+        return out;
+    };
+    using Reasons = std::vector<std::string>;
+    SUBCASE("inside an arrangement note, and past the last one") {
+        for (const std::int64_t at : {48000, 300032}) {
+            INFO("switched on at " << at);
+            Project p;
+            twoTracks(p);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(at + 9600);
+            const Reasons expected =
+                at < 288000 ? Reasons{"began_mid_run", "began_in_note"} : Reasons{"began_mid_run"};
+            CHECK(reasons(p) == expected);
+        }
+    }
+    SUBCASE("inside a note of the clip the track plays, and in its rest over the arrangement") {
+        // cl_1 from bar 2 (96000): its G3 over beats 1-2 (120000-144000);
+        // over beats 2-4 a rest, where the arrangement's A3 would sound.
+        for (const std::int64_t at : {132000, 168000}) {
+            INFO("switched on at " << at);
+            Project p;
+            twoTracks(p);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * kBlock);
+            p.run("launch.clip", R"({"clip": "cl_1"})");
+            live.until(at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(at + 4800);
+            const Reasons expected =
+                at < 144000 ? Reasons{"began_mid_run", "began_in_note"} : Reasons{"began_mid_run"};
+            CHECK(reasons(p) == expected);
+        }
+    }
+    SUBCASE("fixed as the capture began: removing the notes after it changes nothing") {
+        // round 220 F2: the fact was judged from the newest plan at each read.
+        Project p;
+        twoTracks(p);
+        AppLive live(p, kInCallback, kBlock, 48000 * 9);
+        REQUIRE(p.app->transport("play"));
+        live.until(48000);
+        p.run("launch.capture", R"({"on": true})");
+        live.until(48000 + 9600);
+        p.run("launch.capture", R"({"on": false})");
+        live.until(48000 + 9600 + 1280);
+        CHECK(reasons(p) == Reasons{"began_mid_run", "began_in_note"});
+        const model::Session now = p.app->head();
+        for (const auto& item : now.items)
+            if (item.value->track == id("tr_1")) {
+                json::Value args = json::Value::object();
+                args["item"] = item.id.str();
+                p.run("item.remove", json::writeCompact(args));
+            }
+        live.until(48000 + 9600 + 1280 * 3);
+        const auto view = p.app->launchCapture();
+        REQUIRE(view);
+        CHECK(view->capture.facts.beganInNote);
+        CHECK(reasons(p) == Reasons{"began_mid_run", "began_in_note"});
+    }
+    SUBCASE("a note the sustain pedal holds past its off, arrangement and clip") {
+        // round 220 F3: G3 ends at beat 3 of bar 1 (48000) with the pedal
+        // (CC 64) down to bar 2 beat 3 (144000): on an instrument that
+        // honours it the note sounds on. The clip (launched on bar 2,
+        // 96000) holds its G3 (to 120000) with the pedal to its beat 4
+        // (168000). Past the pedal, nothing; without it, nothing.
+        struct Case {
+            const char* what;
+            bool clip, pedal;
+            std::int64_t at;
+            bool inNote;
+        };
+        const Case cases[] = {
+            {"arrangement, pedal down past the off", false, true, 72000, true},
+            {"arrangement, after the pedal is let up", false, true, 150016, false},
+            {"arrangement, no pedal", false, false, 72000, false},
+            {"clip, pedal down past the off", true, true, 144000, true},
+            {"clip, after the pedal is let up", true, true, 180000, false},
+            {"clip, no pedal", true, false, 144000, false}};
+        for (const Case& k : cases) {
+            INFO(k.what);
+            Project p;
+            p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+            const std::string lane = k.pedal ? "\nlane cc sustain ch 1\n1.1 127; 2.3 0" : "";
+            const std::string clipLane = k.pedal ? "\nlane cc sustain ch 1\n1.1 127; 1.4 0" : "";
+            json::Value item = j(R"({"track": "tr_1", "bar": 1})");
+            item["notation"] = k.clip ? std::string("voice bass; 1: r:w | r:w | r:w")
+                                      : "voice bass; 1: G3:h r:h | r:w | r:w" + lane;
+            p.runArgs("item.add", item);
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1"})");
+            clip["notation"] = "voice bass; 1: G3:q r:q r:h" + clipLane;
+            p.runArgs("clip.add", clip);
+            AppLive live(p, kInCallback, kBlock, 48000 * 9);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * kBlock);
+            if (k.clip) p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            live.until(k.at);
+            p.run("launch.capture", R"({"on": true})");
+            live.until(k.at + 4800);
+            CHECK(reasons(p) == (k.inNote ? Reasons{"began_mid_run", "began_in_note"}
+                                          : Reasons{"began_mid_run"}));
+        }
+    }
+    SUBCASE("from a play start inside an arrangement note: as heard") {
+        Project p;
+        twoTracks(p);
+        AppLive live(p, kInCallback, kBlock, 48000 * 9);
+        p.run("transport.seek", R"({"seconds": 1})");
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(9600);
+        CHECK(reasons(p).empty());
+    }
 }

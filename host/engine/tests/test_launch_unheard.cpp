@@ -1206,10 +1206,6 @@ TEST_CASE(
                 e.engine.pause();
                 e.engine.seek(0.0);  // the stop's return to the play start
                 e.engine.seek(0.0);  // and the journey's seek to beat 0
-                // (In-callback, a launch made before the callback has seen a
-                // stopped seek takes the old position's anchor: fault E, fixed
-                // on the capture start state branch. Here it sees it first.)
-                if (!ahead) e.run(e.done + 1);
                 if (service == Before) e.engine.service();
                 REQUIRE(e.engine.captureLaunches(true));
                 const auto r = request("tr_1", "cl_1");
@@ -1252,6 +1248,191 @@ TEST_CASE(
                 e.engine.stop();
             }
         }
+    }
+}
+
+TEST_CASE(
+    "in-callback, a launch and a capture made inside the cycle that takes a stopped seek begin "
+    "where the seek goes (round 216 F-C1)" *
+    doctest::description("rt")) {
+    // Played to 2 s, paused, a seek to 5 s; the callback's next cycle takes
+    // the seek, and inside it (the hook, after the take) a capture is
+    // switched on and cl_1 launched while stopped. Both begin at 5 s, and
+    // cl_1 plays from the play start. (The callback published the epoch at
+    // the cycle's start but its position only at the end, so they took
+    // 2 s: the reviewer's journey variant J, 7 of 240 in-callback.)
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    constexpr std::int64_t kTo = 48000 * 5;
+    Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 12);
+    e.engine.play();
+    e.run(3000);
+    e.engine.service();
+    e.engine.pause();
+    e.run(e.done + 5);
+    e.engine.service();
+    struct Inside {
+        Engine* engine;
+        int calls = 0;
+        std::optional<Engine::LaunchPlaced> placed;
+        std::string error;
+    } inside;
+    inside.engine = &e.engine;
+    EngineTestAccess::afterEpochTaken(
+        e.engine,
+        [](void* c) {
+            [[maybe_unused]] const rt::ScopedRtsanDisabler off;  // main-thread work, in the cycle
+            auto& in = *static_cast<Inside*>(c);
+            if (in.calls++ > 0) return;
+            if (!in.engine->captureLaunches(true)) in.error = "capture";
+            const auto r = request("tr_1", "cl_1");
+            const auto placed = in.engine->launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+            if (placed)
+                in.placed = *placed;
+            else
+                in.error = placed.error().toString();
+        },
+        &inside);
+    e.engine.seek(double(kTo) / 48000);
+    e.run(e.done + 1);  // takes the seek, the hook inside
+    EngineTestAccess::afterEpochTaken(e.engine, nullptr, nullptr);
+    REQUIRE(inside.calls == 1);
+    REQUIRE_MESSAGE(inside.placed, inside.error);
+    CHECK(inside.placed->anchorSample == kTo);
+    e.engine.service();
+    e.engine.play();
+    e.run(e.done + 2400);
+    e.engine.service();
+    const auto capture = e.engine.launchCapture();
+    REQUIRE(capture);
+    CHECK(capture->startSample == kTo);
+    const auto log = e.engine.launchLog();
+    INFO("log:" << describe(log));
+    int cl1 = 0;
+    for (const LaunchLogEntry& le : log)
+        if (le.clip == id("cl_1")) {
+            ++cl1;
+            CHECK(le.anchorSample == kTo);
+        }
+    CHECK(cl1 == 1);
+    CHECK(e.node() == "clip cl_1");
+    e.engine.stop();
+}
+
+TEST_CASE(
+    "a capture begun while playing inside a switch's crossfade replays the crossfade from what "
+    "was going out (fault B)" *
+    doctest::description("rt")) {
+    // In-callback (the anticipative executor places a capture at a later
+    // service, past a 5 ms crossfade): cl_1 on bar 2, cl_2 on bar 3
+    // (192000); the capture switched on 96 frames into the switch begins
+    // there. Its replay begins in cl_2 as the relocation would, by its
+    // phase, its crossfade over, unless it lists what was going out: cl_1,
+    // then cl_2 at frame 0 crossfading from it on the switch's clock. It
+    // sounds as live (tr_1 audio only: no history begins with it); also on a
+    // shifted channel, whose switch is 64 frames behind its target.
+    for (const bool shifted : {false, true}) {
+        INFO("shifted channel " << shifted);
+        Project p;
+        twoAudioClips(p, 300000);
+        if (shifted) shiftedChannel(p);
+        const model::Session s = p.app->head();
+        Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 8);
+        e.engine.play();
+        e.run(100);
+        CHECK(e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar) == 96000);
+        e.run(3500);
+        CHECK(e.place(request("tr_1", "cl_2"), model::LaunchQuantize::Bar) == 192000);
+        e.run((192000 + 96) / 32);
+        e.engine.service();
+        REQUIRE(e.engine.captureLaunches(true));
+        e.run(e.done + 1000);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        INFO("capture from " << capture->startSample << ":" << describe(capture->launches));
+        REQUIRE(capture->startSample > 192000);
+        REQUIRE(capture->startSample < 192000 + 240);
+        CHECK(capture->launches.size() == 2);
+        if (capture->launches.size() == 2) {
+            CHECK(capture->launches[0].clip == id("cl_1"));
+            CHECK(capture->launches[1].clip == id("cl_2"));
+            CHECK(capture->launches[1].runningFrame == 0);
+        }
+        constexpr std::size_t kN = 9600;
+        const auto offline = replay(s, p.app->projectDir(), capture->launches, kN,
+                                    double(capture->startSample) / 48000);
+        const std::uint32_t latency = e.engine.outputLatency();
+        e.engine.stop();
+        const auto& out = e.backend.capture().channels[0];
+        const std::size_t at = latency + std::size_t(capture->startSample);
+        INFO(differences(out, at, offline, kN));
+        CHECK(maxDiff(out, at, offline, kN) == 0.0);
+    }
+}
+
+TEST_CASE(
+    "under the loop, a capture lists what a switch fades from only inside that switch's own "
+    "crossfade, not at its song position a pass later (round 220 F1)" *
+    doctest::description("rt")) {
+    // In-callback (as above), the loop over bars 2-3 (96000-288000): cl_1
+    // on bar 2, cl_2 on song 192000, the capture switched on 96 frames past
+    // song 192000. In the switch's own pass it lists cl_1, then cl_2 at
+    // frame 0; a pass later the crossfade is long over: cl_2 alone. A switch
+    // made after a wrap (running 384000), the capture in that pass: cl_1,
+    // then cl_2. Each replays as live sounded (the folded position alone
+    // listed cl_1 a pass later; the anchor against the running count missed
+    // it after a wrap: 144 frames off either way).
+    struct Case {
+        const char* what;
+        bool afterWrap;       // cl_2 launched only after the first wrap
+        std::int64_t passes;  // passes from the switch's to the capture's
+        bool listsFrom;
+    };
+    const Case cases[] = {{"in the switch's pass", false, 0, true},
+                          {"one pass later", false, 1, false},
+                          {"two passes later", false, 2, false},
+                          {"a switch made after a wrap, in its pass", true, 0, true}};
+    for (const Case& k : cases) {
+        INFO(k.what);
+        Project p;
+        twoAudioClips(p, 300000);
+        const model::Session s = p.app->head();
+        Manual e(s, p.app->projectDir(), kInCallback, 32, 48000 * 16);
+        e.engine.setLoop(2.0, 6.0, true);  // 96000-288000
+        e.engine.play();
+        e.run(100);
+        CHECK(e.place(request("tr_1", "cl_1"), model::LaunchQuantize::Bar) == 96000);
+        e.run(k.afterWrap ? (288000 + 4000) / 32 : 3500);
+        const std::int64_t switched = e.place(request("tr_1", "cl_2"), model::LaunchQuantize::Bar);
+        const std::int64_t switchRunning = k.afterWrap ? 384000 : 192000;
+        CHECK(switched == switchRunning);
+        const std::int64_t running = switchRunning + k.passes * 192000;  // song 192000
+        e.run((running + 96) / 32);
+        e.engine.service();
+        REQUIRE(e.engine.captureLaunches(true));
+        e.run(e.done + 1000);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        INFO("capture from " << capture->startSample << ":" << describe(capture->launches));
+        REQUIRE(capture->startSample > 192000);
+        REQUIRE(capture->startSample < 192000 + 240);
+        REQUIRE(capture->launches.size() == (k.listsFrom ? 2u : 1u));
+        CHECK(capture->launches.back().clip == id("cl_2"));
+        CHECK(capture->launches.back().runningFrame == 0);
+        if (k.listsFrom) CHECK(capture->launches[0].clip == id("cl_1"));
+        constexpr std::size_t kN = 9600;  // before the next wrap
+        const auto offline = replay(s, p.app->projectDir(), capture->launches, kN,
+                                    double(capture->startSample) / 48000);
+        const std::uint32_t latency = e.engine.outputLatency();
+        e.engine.stop();
+        const auto& out = e.backend.capture().channels[0];
+        const std::size_t at =
+            latency + std::size_t(running - 192000 + capture->startSample);  // its output frame
+        INFO(differences(out, at, offline, kN));
+        CHECK(maxDiff(out, at, offline, kN) == 0.0);
     }
 }
 
@@ -1350,6 +1531,73 @@ TEST_CASE(
         const auto capture = e.engine.launchCapture();
         REQUIRE(capture);
         CHECK_FALSE(capture->facts.launchUnsettled);
+        e.engine.stop();
+    }
+}
+
+TEST_CASE(
+    "a launch or capture made at a play start before the first cycle begins where the transport "
+    "is, after a seek while stopped, in both executors (fault E)" *
+    doctest::description("rt")) {
+    // Played to 2 s, paused, a seek to 5 s that each executor has taken
+    // while stopped (the callback's cycles ran), then play and, before the
+    // first cycle plays, a capture switched on and cl_1 launched
+    // unquantized: both begin at 5 s, or after it where the anticipative
+    // executor places them later. (In-callback they began where it last
+    // played, 2 s: its launch clock read the position it stores only while
+    // playing; the sequence test's seeds 3 and 4.)
+    Project p;
+    twoAudioClips(p);
+    const model::Session s = p.app->head();
+    constexpr std::int64_t kTo = 48000 * 5;
+    for (const bool ahead : {false, true}) {
+        INFO(std::string(ahead ? "anticipative" : "in-callback"));
+        Manual e(s, p.app->projectDir(), ahead ? EngineOptions{.workers = 0} : kInCallback, 32,
+                 48000 * 12);
+        e.engine.play();
+        e.run(3000);  // 2 s
+        e.engine.service();
+        e.engine.pause();
+        e.run(e.done + 5);
+        e.engine.seek(double(kTo) / 48000);
+        e.run(e.done + 5);
+        e.engine.service();
+        e.engine.play();
+        REQUIRE(e.engine.captureLaunches(true));
+        const auto r = request("tr_1", "cl_1");
+        auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        // (The anticipative clock waits for the renderer's first block of
+        // the epoch: launch.later, then placed after a cycle.)
+        for (int again = 0; ahead && !placed && placed.error().code == "launch.later" && again < 8;
+             ++again) {
+            e.run(e.done + 1);
+            placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        }
+        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+        CHECK(placed->anchorSample >= kTo);
+        CHECK(placed->anchorSample < kTo + 48000);
+        e.run(e.done + 400);
+        e.engine.service();
+        e.run(e.done + 2000);
+        e.engine.service();
+        const auto capture = e.engine.launchCapture();
+        REQUIRE(capture);
+        // (The anticipative one is placed at the service after the
+        // renderer's first block, and begins where that service hears.)
+        if (ahead)
+            CHECK((capture->startSample >= kTo && capture->startSample < kTo + 48000));
+        else
+            CHECK(capture->startSample == kTo);
+        const auto log = e.engine.launchLog();
+        INFO("log:" << describe(log));
+        int cl1 = 0;
+        for (const LaunchLogEntry& le : log)
+            if (le.clip == id("cl_1")) {
+                ++cl1;
+                CHECK(le.anchorSample == placed->anchorSample);
+            }
+        CHECK(cl1 == 1);
+        CHECK(e.node() == "clip cl_1");
         e.engine.stop();
     }
 }
@@ -1503,4 +1751,108 @@ TEST_CASE(
         CHECK(e.node() == e.plays());
         e.engine.stop();
     }
+}
+
+TEST_CASE(
+    "anticipative, with a live track, a capture switched on just after a seek while playing "
+    "begins at its song position (F5)" *
+    doctest::description("rt")) {
+    // tr_1 live (liveTrack): the callback renders it and publishes the heard
+    // clock, whose count is the epoch's start plus its stream frame. The
+    // start was set only by the consumed first chunk of the epoch, after
+    // the live render's publish: a capture placed in between began at the
+    // previous epoch's count (here the play from 0: its stream frame).
+    // Switched on 0 to 4 cycles after the seek to 2.5 s, it begins there.
+    constexpr std::int64_t kTo = 120000;
+    for (int k = 0; k <= 4; ++k) {
+        INFO("switched on " << k << " cycles after the seek");
+        Project p;
+        const model::Session s = liveTrack(p);
+        Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 8);
+        e.engine.play();
+        e.run(300);
+        e.engine.service();
+        REQUIRE(tr1Live(e.engine));
+        e.engine.seek(double(kTo) / 48000);
+        e.run(e.done + k);
+        REQUIRE(e.engine.captureLaunches(true));
+        std::optional<Engine::LaunchCapture> capture = e.engine.launchCapture();
+        for (int again = 0; again < 64 && !(capture && capture->placed); ++again) {
+            e.run(e.done + 1);
+            e.engine.service();
+            capture = e.engine.launchCapture();
+        }
+        REQUIRE(capture);
+        REQUIRE(capture->placed);
+        CHECK(capture->startSample >= kTo);
+        CHECK(capture->startSample < kTo + 48000);
+        e.engine.stop();
+    }
+}
+
+TEST_CASE(
+    "anticipative, a renderer holding for its leave counts as rendered only until the callback "
+    "enters an epoch after it held (round 219 F3)" *
+    doctest::description("rt")) {
+    // Playing with a launch heard, the renderer's leave held late (the test
+    // hook: as a timed-out wait leaves it), pause, a seek off the bar, an
+    // unquantized launch for the play start at once, play: the renderer
+    // holds before the launch. Released before the callback's first cycle,
+    // it holds again: the end it waits for is not recorded yet. The
+    // callback's first cycle records it, while the renderer is kept from
+    // looking (holdRenderer): the hold decided before that entry is not
+    // known any more, so awaitRendered does not take it for full (it did,
+    // and a test played its pre-roll through, the launch not yet logged).
+    // Then the launch is logged once at the play start, anchored at the
+    // seek.
+    Project p;
+    twoAudioClips(p, 300000);
+    const model::Session s = p.app->head();
+    Manual e(s, p.app->projectDir(), EngineOptions{.workers = 0}, 32, 48000 * 4);
+    e.engine.play();
+    e.run(40);
+    (void)e.place(request("tr_1", "cl_2"), model::LaunchQuantize::None);
+    e.run(340);
+    e.engine.service();
+    EngineTestAccess::rendererLeaveLate(e.engine, true);
+    e.engine.pause();
+    const std::int64_t to = 37500 + 375 * 7;  // off the bar
+    e.engine.seek(double(to) / 48000);
+    const Engine::LaunchRequest r = request("tr_1", "cl_1");
+    const auto placed = e.engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+    REQUIRE(placed);
+    e.engine.play();
+    // Held for the launch (awaitRendered says so), then released, and held
+    // again: no cycle has run since the pause.
+    REQUIRE(e.engine.awaitRendered(4096));
+    REQUIRE(EngineTestAccess::rendererLaunchHeld(e.engine));
+    EngineTestAccess::rendererLeaveLate(e.engine, false);
+    REQUIRE(e.engine.awaitRendered(4096));
+    REQUIRE(EngineTestAccess::rendererLaunchHeld(e.engine));
+    CHECK(EngineTestAccess::playedStream(e.engine) == 0);
+    // Kept from looking again, the renderer cannot settle or render: the
+    // callback's cycle records the end, and the hold is no longer known.
+    e.engine.holdRenderer(true);
+    REQUIRE(e.engine.awaitRendererHeld());
+    e.backend.run(1);
+    ++e.done;
+    CHECK(EngineTestAccess::playedStream(e.engine) == 0);  // its pre-roll
+    // (Decided by state: the renderer renders nothing while held, so no
+    // bound makes this true.)
+    CHECK_FALSE(e.engine.awaitRendered(4096, 0.2));
+    e.engine.holdRenderer(false);
+    e.run(e.done + 200);
+    e.engine.service();
+    int entries = 0;
+    for (const LaunchLogEntry& le : e.engine.launchLog())
+        if (le.epoch == placed->epoch && le.clip == r.clip) {
+            ++entries;
+            CHECK(le.runningFrame == placed->stream);
+            CHECK(le.anchorSample == to);
+        }
+    CHECK(entries == 1);
+    CHECK(EngineTestAccess::playedStream(e.engine) > 0);
+    CHECK(EngineTestAccess::passedPending(e.engine) == 0);
+    CHECK(EngineTestAccess::playStartMissed(e.engine) == 0);
+    e.engine.stop();
 }

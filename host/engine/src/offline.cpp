@@ -1324,13 +1324,26 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             bool early = false;  // its clip chains' input side (Node::launchLead)
             bool warm = false;   // its converter's warm-up (Node::launchWarm, S3 step D)
             bool enter = false;  // a modulated clip chain's entry (ADR-0096 M5, G1)
+            bool state = false;  // what its track begins in (below)
         };
         std::vector<Switch> switches;
         // The log's anchors are timeline samples (the live plan counts from
         // 0); this plan counts from the render's start (round 74 F1). Beats
         // are absolute in both.
         const std::int64_t launchOrigin = time::samplesAt(opt.startSeconds, p.rate);
-        for (const LaunchLogEntry& e : launches)
+        // Its start is a relocation (engine.md §1.4.2, "Phase"): each track's
+        // first entry, at its running frame 0 and anchored off the start, is
+        // what was carried there and plays as live relocated it: by its phase
+        // (a loop clip a seek back carried before its anchor too), no
+        // crossfade (fault A; fault B: one carried inside a crossfade once
+        // faded in from silence, where live had ended it). An entry anchored
+        // at the start is a launch there, and a later entry at frame 0 a
+        // switch: each crossfades from what came before. (By track, not node:
+        // a modulated clip chain's node holds only its own clip's entries.)
+        std::set<Id> begun;
+        for (const LaunchLogEntry& e : launches) {
+            const bool state = begun.insert(e.track).second && e.runningFrame <= 0 &&
+                               e.anchorSample != launchOrigin;
             for (std::size_t k = 0; k < p.nodes.size(); ++k) {
                 detail::Node& node = p.nodes[k];
                 if (node.rack)
@@ -1349,6 +1362,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                              : detail::LaunchState::Kind::Arrangement;
                         sw.action.anchorSample = e.anchorSample - launchOrigin;
                         sw.action.anchorBeat = e.anchorBeat;
+                        sw.state = state;
                         switches.push_back(sw);
                     }
                 if (node.id != e.track || node.players.empty()) continue;
@@ -1364,6 +1378,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     if (a.player < 0) continue;
                 }
                 switches.push_back({e.runningFrame + node.timelineShift, k, a, -1, {}});
+                switches.back().state = state;
                 if (node.launchLead > 0)
                     switches.push_back({e.runningFrame + node.timelineShift - node.launchLead,
                                         k,
@@ -1393,6 +1408,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                          false,
                          true});
             }
+        }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
         std::size_t nextSwitch = 0;
@@ -1407,19 +1423,30 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                      ++nextSwitch) {
                     const Switch& sw = switches[nextSwitch];
                     detail::Node& node = p.nodes[sw.node];
-                    if (sw.feed >= 0)
-                        detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
-                                                sw.action.kind, sw.clip, sw.action.anchorSample,
-                                                sw.action.anchorBeat);
-                    else if (sw.enter)
+                    const bool state = sw.state;  // what its track began in (above)
+                    if (sw.feed >= 0) {
+                        auto& feed = node.rack->notes[static_cast<std::size_t>(sw.feed)];
+                        detail::applyFeedLaunch(feed, sw.action.kind, sw.clip,
+                                                sw.action.anchorSample, sw.action.anchorBeat);
+                        if (state && sw.action.anchorSample > 0) {  // carried before its anchor
+                            feed.launch.unanchored = true;
+                            feed.launchFresh = false;
+                        }
+                    } else if (sw.enter)
                         detail::preenter(node, sw.action);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else if (sw.warm)  // its running frame, a launchWarm later, unshifted
                         detail::prewarm(node, sw.action,
                                         sw.at + node.launchWarm - node.timelineShift);
-                    else
+                    else {
                         detail::applyLaunch(node, sw.action);
+                        if (state) {
+                            if (sw.action.anchorSample > 0) node.launch.unanchored = true;
+                            node.launch.fadeFrom = -2;
+                            node.launchFresh = false;
+                        }
+                    }
                 }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
