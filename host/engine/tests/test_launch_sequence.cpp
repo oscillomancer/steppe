@@ -13,14 +13,23 @@
 // replays, and as the other executor's where their logs agree; a capture
 // that is as heard sounds as its own replay. The steps come from a fixed
 // seed (no clock decides them), and the anticipative renderer is let run
-// until it can hold no more before every step's actions, so a run repeats
-// from its seed on both executors (checked); a failure prints the seed and
-// the step. No check here may decide by thread timing: the anticipative
-// engine's cycles play only what the renderer has rendered, a cycle with
-// nothing rendered while playing runs with the renderer held (one pre-roll
-// cycle on every run), and the late-leave hook, released, is waited on
-// before the next cycle (runRendered; round 219: under load a seed's repeat
-// once differed by a cycle at play starts, the logs equal).
+// until it can hold no more before every step's actions and every service,
+// so a run repeats from its seed on both executors (checked, a live seed
+// too); a failure prints the seed and the step. No check here may decide by
+// thread timing: the anticipative engine's cycles play only what the
+// renderer has rendered, a cycle with nothing rendered while playing runs
+// with the renderer held (one pre-roll cycle on every run), and the
+// late-leave hook, released, is waited on before the next cycle
+// (runRendered; round 219: under load a seed's repeat once differed by a
+// cycle at play starts, the logs equal). A service places a launch taken
+// back unheard again at the renderer's horizon, so it too waits for the
+// renderer to settle (round 222: one run straight after a step's cycles
+// placed it a render block early or late, as the renderer's thread had
+// got). The timings a device gives that this rules out are driven by hook
+// instead, from a second generator of the seed (so the steps stay those of
+// the seed): a late leave released with the renderer held part of the way
+// ahead, and cycles run after a release before the renderer settles
+// (round 222).
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -203,12 +212,19 @@ struct Sequence {
     // then the callback's next cycle, which records the end, settles it, as
     // without the hook (round 209: never longer).
     bool lateLeave = false;
+    // The hook-driven timings (round 222), from their own generator, and
+    // how often each was reached: releases with the renderer held part of
+    // the way ahead, and cycles run after a release before it settled.
+    std::mt19937_64 timing;
+    int partialReleases = 0, heldCycles = 0;
+    std::uint64_t pickTiming(std::uint64_t n) { return timing() % n; }
 
     Sequence(const model::Session& s, const fs::path& dir, const EngineOptions& o, std::uint64_t sd)
         : backend({.mode = DummyBackend::Mode::Manual, .captureFrames = kFrames + 48000}),
           engine(pool, media, o),
           anticipative(o.anticipative),
-          seed(sd) {
+          seed(sd),
+          timing(sd * 2654435761u + 222) {
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
         REQUIRE(engine.load(s, dir));
         for (const char* track : kTracks) newest[track] = "arrangement";
@@ -224,8 +240,11 @@ struct Sequence {
     }
     // The renderer relocated for the transport as it stands and, playing, as
     // far ahead as it goes, where it stays until more is played (by
-    // condition, no clock): what a main-thread action finds is then the same
-    // on every run, under load too.
+    // condition, no clock): the first render block's end at or past the
+    // render-ahead span from what was played, a fixed horizon for a given
+    // play position, so what a main-thread action finds is the same on every
+    // run, under load too (round 222: where it differed, a service had run
+    // before it settled).
     void settle() {
         if (!anticipative) return;
         while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max()))
@@ -238,12 +257,21 @@ struct Sequence {
                 while (!engine.awaitRendered(4096)) {
                 }
                 if (lateLeave && EngineTestAccess::rendererLaunchHeld(engine)) {
-                    EngineTestAccess::rendererLeaveLate(engine, false);
-                    lateLeave = false;
-                    note("late settles");
                     // Released, it settles and renders, or holds again until
                     // the callback's next cycle: waited for before that cycle
-                    // runs, never raced (round 219).
+                    // runs, never raced (round 219). Or (round 222) the
+                    // callback runs first, as a device's would: up to three
+                    // cycles with the renderer kept from settling, each over
+                    // frames already rendered or a pre-roll cycle before the
+                    // epoch is heard.
+                    if (const auto k = pickTiming(6); k < 3) {
+                        i += releaseHeld(std::min<std::int64_t>(int(k) + 1, cycles - i), i);
+                        if (i >= cycles) break;
+                    } else {
+                        EngineTestAccess::rendererLeaveLate(engine, false);
+                        lateLeave = false;
+                        note("late settles");
+                    }
                     while (!engine.awaitRendered(4096)) {
                     }
                 }
@@ -264,6 +292,74 @@ struct Sequence {
             backend.run(cycles);
         }
         done += cycles;
+    }
+    // The late hook released and cycles run straight after, before the
+    // renderer settles: up to `most` (no more than the run has left), while
+    // each plays frames already rendered or is a pre-roll cycle (the epoch
+    // not yet heard, which the callback waits through); returns how many
+    // ran. The renderer is held (acknowledged) before the release, so it
+    // neither settles nor renders until they have run. `at`: the cycles of
+    // the current run() already run.
+    std::int64_t releaseHeld(std::int64_t most, std::int64_t at) {
+        engine.holdRenderer(true);
+        while (!engine.awaitRendererHeld()) {
+        }
+        EngineTestAccess::rendererLeaveLate(engine, false);
+        lateLeave = false;
+        note("late settles");
+        std::int64_t ran = 0;
+        for (; ran < most; ++ran) {
+            const bool preRoll = playing && EngineTestAccess::played(engine) == 0;
+            if (!preRoll && engine.renderedAhead() < kBlock) break;
+            const bool fresh = playing && !segments.empty() && segments.back().end < 0 &&
+                               done + at + ran == epochCycle;
+            backend.run(1);
+            ++heldCycles;
+            if (fresh && EngineTestAccess::playedStream(engine) == 0) {
+                ++epochCycle;
+                segments.back().out += kBlock;
+                quietSince = std::max(quietSince, epochCycle);
+            }
+        }
+        engine.holdRenderer(false);
+        if (ran > 0) note("held" + std::to_string(ran));
+        return ran;
+    }
+    // The step that releases a late leave, `cycles` long: released as far
+    // ahead as the renderer goes after them, or (round 222) part of the way,
+    // the renderer kept at the end it had reached and released once the
+    // callback has played to a seeded distance from it (a device's
+    // callback comes whenever it comes, however far the renderer has got,
+    // as just after a play start). Where it settles, and what it rendered
+    // before still holding the unheard switch, is that distance.
+    void releaseStep(std::int64_t cycles) {
+        settle();
+        const std::int64_t ahead = anticipative && playing ? engine.renderedAhead() : 0;
+        const auto choice = pickTiming(2);
+        if (!lateLeave || choice == 0 || ahead < 3 * std::int64_t(kBlock)) {
+            run(cycles);
+            if (lateLeave) {
+                settle();
+                lateLeave = false;
+                EngineTestAccess::rendererLeaveLate(engine, false);
+            }
+            return;
+        }
+        const std::int64_t blocks = ahead / kBlock;
+        const std::int64_t distance = kBlock * (1 + std::int64_t(pickTiming(blocks - 2)));
+        const std::int64_t first = std::min(cycles, (ahead - distance) / kBlock);
+        engine.holdRendererFrom(EngineTestAccess::played(engine) + ahead);
+        run(first);
+        if (lateLeave) {
+            settle();
+            ++partialReleases;
+            note("late settles " + std::to_string(engine.renderedAhead()) + " ahead");
+            lateLeave = false;
+            EngineTestAccess::rendererLeaveLate(engine, false);
+        }
+        engine.holdRendererFrom(std::numeric_limits<std::int64_t>::max());
+        settle();
+        run(cycles - first);
     }
     std::int64_t position() const {
         return playing ? wrapped(loop, song, (done - epochCycle) * kBlock) : song;
@@ -366,6 +462,7 @@ struct Sequence {
         endedUnread = false;
     }
     void captureOn() {
+        settle();
         if (endedUnread) {
             engine.service();
             readCapture();
@@ -377,12 +474,14 @@ struct Sequence {
         captureOut = playing ? done * kBlock : -1;
     }
     void captureOff() {
+        settle();
         (void)engine.captureLaunches(false);
         capturing = false;
         engine.service();
         readCapture();
     }
     void service() {
+        settle();
         engine.service();
         if (endedUnread) readCapture();
     }
@@ -867,6 +966,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
     each([](Sequence& q) {
         q.play();
         q.run(20);
+        q.settle();
         q.engine.service();
     });
     bool late = false;
@@ -891,7 +991,12 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             const std::int64_t n =
                 pick(3) == 0 ? 1 + std::int64_t(pick(8)) : 1 + std::int64_t(pick(400));
             note("run" + std::to_string(n));
-            run(n);
+            if (late && !longPlay) {  // the late leave settles in this step
+                a.run(n);
+                b.releaseStep(n);
+            } else {
+                run(n);
+            }
         } else if (r < 60) {
             note(a.playing ? "pause" : "play");
             each([](Sequence& q) { q.playing ? q.pause() : q.play(); });
@@ -1076,15 +1181,7 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
             note("run1");
             run(1);
         }
-        if (late && !longPlay && r >= 26 && r < 52) {  // the late leave settles from here
-            // Where the renderer settles (and what it rendered before, still
-            // holding an unheard switch) is where it stands when released:
-            // as far ahead as it goes on every run, not wherever its thread
-            // had got after the step's cycles (round 219).
-            b.settle();
-            late = b.lateLeave = false;
-            EngineTestAccess::rendererLeaveLate(b.engine, false);
-        }
+        late = b.lateLeave;
         if (pick(100) < 85) {
             each([](Sequence& q) {
                 q.settle();
@@ -1131,17 +1228,18 @@ std::pair<std::string, std::vector<float>> runSequence(const model::Session& s,
     const int executors = compareExecutors(a, b);
     for (Sequence* q : both) {
         const Counts n = judge(*q, s, dir);
+        std::string faults;
+        for (const auto& [k, v] : n.faults)
+            faults += (faults.empty() ? "" : ", ") + k + " " + std::to_string(v);
         MESSAGE("seed " << seed << std::string(q->anticipative ? " anticipative" : " in-callback")
                         << ": " << step << " steps, " << n.epochs << " epochs (" << n.comparedEpochs
                         << " against the replay, " << executors << " against the other executor), "
                         << n.captures << " captures read (" << n.comparedCaptures << " compared, "
                         << n.markedCaptures << " not as heard), " << q->engine.launchLog().size()
-                        << " launches logged; not compared (faults): " << [&] {
-                               std::string f;
-                               for (const auto& [k, v] : n.faults)
-                                   f += (f.empty() ? "" : ", ") + k + " " + std::to_string(v);
-                               return f.empty() ? std::string("none") : f;
-                           }());
+                        << " launches logged, " << q->partialReleases
+                        << " late leaves released part of the way ahead, " << q->heldCycles
+                        << " cycles before a released renderer settled; not compared (faults): "
+                        << (faults.empty() ? std::string("none") : faults));
     }
     return {describe(b.engine.launchLog()), b.backend.capture().channels[0]};
 }
@@ -1153,8 +1251,8 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
     // 8 seeds of 400 steps on the project with a Notes feed (seed 8 catches a
     // launch that does not free its track's waiting launches), 4 with a live
     // one (seed 12 found the late-leave fault: round 209 F2), a long play of
-    // 1200, and one seed run twice for 200, each on both executors in
-    // lockstep; fewer under ThreadSanitizer,
+    // 1200, and one seed of each project run twice for 200, each on both
+    // executors in lockstep; fewer under ThreadSanitizer,
     // where the same steps run several times slower.
 #if defined(__SANITIZE_THREAD__)
     constexpr bool kTsan = true;
@@ -1199,6 +1297,13 @@ TEST_CASE("seeded sequences of launches, stops, seeks and captures keep the laun
         } else {
             for (std::uint64_t seed = 9; seed <= (kTsan ? 9u : 12u); ++seed)
                 (void)runSequence(s, edited, dir, seed, 400, false, true);
+            // A live seed repeats too (round 222: seed 10's anticipative log
+            // once differed by run, a launch placed again by a service that
+            // did not wait for the renderer to settle).
+            const auto first = runSequence(s, edited, dir, 10, kTsan ? 100 : 200, false, true);
+            const auto again = runSequence(s, edited, dir, 10, kTsan ? 100 : 200, false, true);
+            CHECK(first.first == again.first);
+            CHECK((first.second == again.second));
         }
     }
 }
